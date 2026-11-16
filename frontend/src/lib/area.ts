@@ -1,0 +1,546 @@
+/**
+ * 지역 시뮬레이션 화면의 순수 함수와 응답 형식.
+ * 숫자는 모두 서버 계산 엔진(/api/areas/analyze)이 만든 값이며, 여기서는 표시용으로 고르거나 묶기만 한다.
+ * JSON은 연도 키를 문자열로 바꾸므로("2025") 조회는 항상 at()으로 한다.
+ */
+import { TOKENS } from '../theme/palette';
+import type { SgisGridSummary } from '../types';
+
+export type AreaMode = 'admin' | 'circle' | 'polygon' | 'zone' | 'grid';
+export type ZoneCategory = 'RESIDENTIAL' | 'COMMERCIAL' | 'INDUSTRIAL' | 'GREEN' | 'OTHER';
+
+export interface AreaSpec {
+  type: AreaMode;
+  code?: string;
+  grid_id?: string;
+  lon?: number;
+  lat?: number;
+  radius_m?: number;
+  category?: string;
+  geometry?: { type: 'Polygon'; coordinates: number[][][] };
+  label?: string;
+}
+
+export interface AreaOptions {
+  admin: Array<{ code: string; name: string }>;
+  admin_geojson: GeoJSON.FeatureCollection;
+  admin_year: number | null;
+  zones: Array<{ category: string; label: string; grids: number }>;
+  energy_years: number[];
+  default_grid: string | null;
+  region?: { code: string; name: string; short_name: string; center: [number, number] | null; bbox: [number, number, number, number] | null };
+}
+
+export interface CarrierYear {
+  kwh: number | null;
+  observed_parcels: number;
+  complete_parcels: number;
+  partial_parcels: number;
+  months_max: number;
+  by_cohort: Record<string, number>;
+  intensity_kwh_per_m2: number | null;
+  intensity_area_m2: number | null;
+  kwh_per_household: number | null;
+  households: number | null;
+}
+
+export interface EnergyYear {
+  year: number;
+  electricity: CarrierYear;
+  gas: CarrierYear;
+  electricity_carbon_kgco2eq: number | null;
+  estimated?: { kwh: number | null; carbon_kgco2eq: number | null; basis: string; data_class: string } | null;
+}
+
+export interface EventYear { year: number; complexes: number; households: number; gfa_m2: number; names: string[] }
+export interface StockYear { year: number; complexes: number; households: number; gfa_m2: number; gfa_excluded: number; unknown_approval: number }
+export interface WeatherYear { year: number; months: number; complete: boolean; hdd: number | null; cdd: number | null; mean_temperature: number | null; sources: string[] }
+export interface PopulationYear { year: number; population: number | null; households: number | null; dongs: number; basis: string }
+
+export interface AreaComplex {
+  kapt_code: string;
+  name: string;
+  approval_year: number | null;
+  approval_date: string | null;
+  households: number | null;
+  gfa: number | null;
+  floor_area_ok: boolean;
+  lon: number | null;
+  lat: number | null;
+  grid_id: string | null;
+  heating_type?: string | null;
+}
+
+type YearTable<T> = Record<string, T>;
+
+export interface AreaHistory {
+  years: number[];
+  /** '전주' for the original region, else the region's short name (used in 'x 관측 원단위'). */
+  region_label?: string;
+  area: {
+    type: AreaMode;
+    label: string;
+    method: string;
+    geometry: GeoJSON.Geometry | null;
+    grid_ids: string[];
+    complex_codes: string[];
+    admin_codes: string[];
+    admin_exact: boolean;
+    admin_names: string[];
+    admin_labels?: string[];
+  };
+  energy: YearTable<EnergyYear>;
+  weather: YearTable<WeatherYear>;
+  population: YearTable<PopulationYear>;
+  events: YearTable<EventYear>;
+  stock: YearTable<StockYear>;
+  factor: { electricity?: number | null };
+  factor_basis: string;
+  complexes: AreaComplex[];
+  city_intensity: { year: number; kwh_per_m2: number; area_m2: number; parcels: number } | null;
+  coverage: { energy_years: number[]; weather_years: number[]; population_years: number[]; grid_count: number; complex_count: number; register_buildings?: number };
+  register?: RegisterHistory;
+  sgis_grid?: AreaSgisGrid | null;
+  building_energy?: AreaBuildingEnergy;
+  /** 선도소프트 탄소공간지도 100m 건물 전기 배출 (받은 지역·연도만, 공개 주소에서는 빠짐). */
+  kcsm?: AreaKcsm | null;
+  /** 빈 자료 보정·추정 (DATA_STANDARD 4.1): 관측과 따로, 더하지 않는다. */
+  estimates?: AreaEstimates | null;
+  /** 업계·정부 기준과 대조 (참고 위치, 판정 아님). */
+  industry?: AreaIndustry | null;
+}
+
+export interface AreaEstimateBuildingYear {
+  year: number;
+  /** true: 건축HUB 미제공 연도(2015~2019) 되돌림 추정, false: 계측 달 + 빈 달 채움 */
+  backcast: boolean;
+  /** false: 그해 건축HUB를 아직 다 받지 않음(보정 합계도 잠정) */
+  complete?: boolean;
+  electricity_kwh: number | null;
+  gas_kwh: number | null;
+  electricity_observed_kwh: number | null;
+  electricity_filled_kwh?: number;
+  electricity_filled_months?: number;
+  electricity_filled_parcels?: number;
+  provider_gap?: boolean;
+  same_index?: number | null;
+  exist_share?: number | null;
+}
+
+export interface AreaEstimateApartmentYear {
+  year: number;
+  observed_kwh: number | null;
+  observed_complexes: number;
+  estimated_kwh: number;
+  estimated_complexes: number;
+  total_kwh: number;
+  peer_median_complexes: number;
+}
+
+export interface AreaEstimates {
+  available: boolean;
+  rule_version?: string | null;
+  created_at?: string | null;
+  buildings?: YearTable<AreaEstimateBuildingYear>;
+  apartments?: YearTable<AreaEstimateApartmentYear>;
+  population?: YearTable<{ year: number; population: number; households: number | null; adm_codes: number; trend_years?: number[] }>;
+  methods?: Record<string, string>;
+}
+
+export interface AreaIndustry {
+  available: boolean;
+  zone: string;
+  table: Array<{ label: string; value: string; reference: string; source: string }>;
+  notes: string[];
+}
+
+export interface AreaKcsmYear {
+  year: number;
+  /** 구역 경계(행정동·다각형·반경) 안에 중심점이 있는 100m 칸의 합, tCO2eq. */
+  boundary_t: number | null;
+  /** 구역 500m 격자 안 100m 칸의 합 (이 화면의 다른 값과 같은 범위), tCO2eq. */
+  grid_t: number | null;
+  cells: number; value_cells: number; zero_cells: number; grid_cells: number;
+  monthly: Array<number | null>;
+  drop_cells: number; drop_from_t: number | null; drop_now_t: number | null;
+  tool?: { kwh: number; factor: number; t: number; parcels: number | null; complete: boolean; share_pct: number | null };
+  register_gfa_m2?: number | null; register_buildings?: number;
+  change_pct?: number | null; change_from?: number;
+}
+
+export interface AreaKcsm {
+  available: boolean;
+  reason?: string;
+  source: string;
+  unit?: string;
+  years: Record<string, AreaKcsmYear>;
+  boundary_basis?: string;
+  grid_basis?: string;
+  note?: string;
+}
+
+/** 건축HUB 법정동 단위 전 지번 (전주 2020-, 수원·완주 2024-): 구역 격자 안 계측 건물 전체. */
+export interface AreaBuildingEnergy {
+  available: boolean;
+  basis: string;
+  years: YearTable<{ year: number; parcels: number; electricity_complete: number; electricity_kwh: number | null; gas_complete: number; gas_kwh: number | null; area_m2: number | null; kwh_per_m2: number | null; electricity_carbon_kgco2eq: number | null; complete?: boolean; provider_gap?: string | null }>;
+  /** 비교 가능한 첫 해와 최근 해: 두 해 모두 12개월 계측된 같은 지번의 변화, 한 해에만 계측된 지번은 따로. */
+  trend?: BuildingEnergyTrend | null;
+}
+
+export interface BuildingEnergyTrend {
+  from: number; to: number; same_parcels: number; same_from_kwh: number; same_to_kwh: number; same_change_pct: number | null;
+  new_parcels: number; new_kwh: number; gone_parcels: number; gone_kwh: number;
+}
+
+/** SGIS 1km 격자 통계 (구역이 걸친 1km 격자 전체 합계 = 관측, 면적 비례 값 = 추정). */
+export interface AreaSgisGrid {
+  year: number;
+  cells: number;
+  cells_with_stats: number;
+  coverage_pct: number | null;
+  overlap: SgisGridSummary | null;
+  estimated: { population: number | null; households: number | null; data_class: 'ESTIMATED'; basis: string };
+  source: string;
+}
+
+/** 건축물대장 사용승인 (모든 용도, 격자 기준). */
+export interface RegisterHistory {
+  available: boolean;
+  linked_in_area: number;
+  unknown_year: number;
+  basis: string;
+  years: YearTable<{ year: number; buildings: number; gfa_m2: number; gfa_missing: number; by_use: Record<string, number> }>;
+}
+
+export const REGISTER_GROUPS = ['주거', '상업·업무', '공공·교육·의료', '공업·창고·물류', '기타·미상'] as const;
+
+export interface CarrierComparison {
+  before_total_kwh: number | null;
+  after_total_kwh: number | null;
+  total_change_kwh: number | null;
+  total_change_pct: number | null;
+  existing_before_kwh: number | null;
+  existing_after_kwh: number | null;
+  existing_change_pct: number | null;
+  /** Existing complexes reported in every before and after year (the change is computed on these only). */
+  existing_complexes?: number;
+  new_development_kwh: number | null;
+  new_share_pct: number | null;
+}
+
+export interface BeforeAfter {
+  available: boolean;
+  reason?: string;
+  event_year?: number;
+  window?: number;
+  before_years?: number[];
+  after_years?: number[];
+  event?: EventYear;
+  metrics?: {
+    electricity: CarrierComparison;
+    gas: CarrierComparison;
+    electricity_carbon: Record<string, number | null>;
+    estimated?: {
+      before_kwh: number | null; after_kwh: number | null; change_kwh: number | null; change_pct: number | null;
+      added_gfa_m2: number | null; data_class: string; event_added_kwh?: number | null; event_change_pct?: number | null; prior_gfa_m2?: number | null;
+    } | null;
+  };
+  weather?: { before_hdd: number | null; after_hdd: number | null; before_cdd: number | null; after_cdd: number | null };
+  population?: { before: number | null; after: number | null; basis: string };
+  gaps?: string[];
+  /** 전후 기간에 실제로 12개월 관측이 있는 연도와 관측 단지 수. 개발 전 관측 단지가 적으면 comparable=false. */
+  coverage?: { observed_before_years: number[]; observed_after_years: number[]; before_parcels_mean: number | null; after_existing_parcels_mean: number | null; comparable: boolean };
+}
+
+/** 감축 노력의 기준 건물: 공동주택(K-apt), 구역 건물 전체(건축HUB, 상가·업무 포함), 건물 전체(탄소공간지도 100m, 선도소프트 제공). */
+export type EffortBasis = 'apartments' | 'buildings' | 'kcsm';
+export const EFFORT_BASIS_LABEL: Record<EffortBasis, string> = { apartments: '공동주택 (K-apt)', buildings: '건물 전체 (건축HUB)', kcsm: '건물 전체 (탄소공간지도 100m)' };
+export const BASELINE_MODE_LABEL: Record<string, string> = { OBSERVED: '관측', ESTIMATED: '추정', PROVIDED: '제공 값' };
+
+export interface PvYield {
+  kwh_per_kw: number;
+  basis: 'USER' | 'ESTIMATED';
+  label: string;
+  year?: number;
+  source?: string;
+  source_type?: string;
+  irradiation_kwh_m2?: number;
+  performance_ratio?: number;
+}
+
+/** What the PV capacity figure is based on, in one line. */
+export function pvNote(pv: PvYield | null | undefined, capacity: number | null | undefined): string {
+  if (capacity == null || !pv) return '지역 일사량 자료가 없어 발전량을 넣으면 계산';
+  if (pv.basis === 'USER') return `입력한 발전량 ${pv.kwh_per_kw.toLocaleString('ko-KR')} kWh/kW 기준`;
+  return `추정: ${pv.label} = ${pv.kwh_per_kw.toLocaleString('ko-KR')} kWh/kW·년`;
+}
+
+export interface EffortResult {
+  available: boolean;
+  reason?: string;
+  basis?: EffortBasis;
+  basis_label?: string;
+  baseline_year?: number;
+  target_pct?: number;
+  /** OBSERVED 관측, ESTIMATED 추정, PROVIDED 제공기관 값(탄소공간지도 100m). */
+  baseline_mode?: 'OBSERVED' | 'ESTIMATED' | 'PROVIDED';
+  /** kcsm 기준: 신축 부하 원단위(탄소공간지도 배출 ÷ 건축물대장 연면적), kgCO2eq/m²·년. */
+  intensity_kgco2eq_per_m2?: number;
+  baseline_source?: string;
+  /** kcsm 기준: 경계 안 100m 칸의 제공 값(tCO2eq)과 그것을 전력량으로 되돌린 계수(그해 승인 계수, 추정). */
+  provider_t?: number;
+  provider_factor?: number;
+  baseline_cells?: number;
+  baseline_drop_cells?: number;
+  data_class?: string;
+  intensity_kwh_per_m2?: number;
+  intensity_area_m2?: number;
+  added_floor_area_m2?: number;
+  removed_floor_area_m2?: number;
+  baseline_kwh?: number;
+  baseline_kgco2eq?: number;
+  new_load_kwh?: number;
+  bau_kwh?: number;
+  bau_kgco2eq?: number;
+  target_kgco2eq?: number;
+  required_reduction_kgco2eq?: number;
+  already_met?: boolean;
+  feasible_with_new_only?: boolean;
+  options?: {
+    new_only_efficiency_pct: number | null;
+    all_buildings_efficiency_pct: number | null;
+    offset_kwh_per_year: number | null;
+    pv_capacity_kw: number | null;
+    new_building_intensity_target: number | null;
+  };
+  curve?: Array<{ target_pct: number; all_buildings_efficiency_pct: number | null; new_only_efficiency_pct: number | null }>;
+  /** kWh one kW of panels makes per year: the user's number, or the region's irradiation estimate (DATA_STANDARD 5.13). */
+  pv_yield?: PvYield | null;
+  factor_kgco2eq_per_kwh?: number;
+  scope?: string;
+  assumptions?: string[];
+  /** 요청한 기준(공동주택/건물 전체)에 근거가 없어 다른 기준으로 계산했을 때 원래 요청한 기준. */
+  fallback_from?: EffortBasis;
+  fallback_reason?: string;
+  /** 감축 수단 조합(도시·군기본계획의 수단별 감축량 합산 방식): 요청에 measures가 있을 때만. */
+  mix?: MeasureMix;
+  /** 구체적 감축 방안(자동, 기준 문서 5.15): 신축 11.3% → 기존 4.8% → 남는 양 태양광(10 kW 단위). 사용자 조합과 따로. */
+  recommended?: RecommendedMix | null;
+}
+
+export interface RecommendedMix extends MeasureMix {
+  kind: 'RECOMMENDED';
+  steps: Array<{ key: 'new' | 'existing' | 'pv'; title: string; detail: string; kwh: number; kgco2eq: number }>;
+  roof_m2: number | null;
+  offset_kwh: number | null;
+}
+
+export interface MeasuresState { new_efficiency_pct: number; existing_efficiency_pct: number; pv_kw: number }
+export const NO_MEASURES: MeasuresState = { new_efficiency_pct: 0, existing_efficiency_pct: 0, pv_kw: 0 };
+
+export interface MeasureMix extends MeasuresState {
+  new_kwh: number; existing_kwh: number; pv_kwh: number | null; pv_counted: boolean;
+  total_kwh: number; total_kgco2eq: number; required_kgco2eq: number; gap_kgco2eq: number; met: boolean; share_pct: number | null; basis: string;
+}
+
+/** The request field: null while every measure is 0 (the engine then answers exactly as before). */
+export function measuresBody(m: MeasuresState): MeasuresState | null {
+  return m.new_efficiency_pct > 0 || m.existing_efficiency_pct > 0 || m.pv_kw > 0 ? m : null;
+}
+
+/** 같은 시·군·구 행정동의 관측 전력 원단위 분포 (/api/areas/benchmark). */
+export interface Benchmark {
+  basis: EffortBasis; basis_label: string; years: [number, number]; reference_year: number | null; count: number; admin_total: number;
+  median: number | null; quintiles: number[] | null; min: number | null; max: number | null; note: string;
+  items: Array<{ code: string; name: string; year: number | null; kwh_per_m2: number | null; area_m2: number | null }>;
+}
+
+/** Rank (1 = lowest kWh/m²) of one intensity among the 행정동 of the same year — the server's benchmark_position. */
+export function benchmarkPosition(bench: Benchmark | null | undefined, year: number | null | undefined, value: number | null | undefined) {
+  if (!bench || value == null || year == null || year !== bench.reference_year || !bench.count) return null;
+  const mine = Math.round(value * 100) / 100;
+  const values = bench.items.filter((i) => i.year === bench.reference_year && i.kwh_per_m2 !== null).map((i) => i.kwh_per_m2 as number);
+  const lower = values.filter((v) => v < mine).length;
+  const quintile = bench.quintiles ? 1 + bench.quintiles.filter((q) => mine > q).length : null;
+  return { rank: lower + 1, count: values.length, lowerPct: Math.round((lower / values.length) * 1000) / 10, quintile };
+}
+
+/** kgCO2eq → tCO2eq, kept null when the engine gave nothing. */
+export const toTonnes = (kg: number | null | undefined) => (kg === null || kg === undefined ? null : kg / 1000);
+
+export interface AreaFact { id: string; text: string; numbers?: number[] }
+
+export interface AreaAnalysis {
+  history: AreaHistory;
+  before_after: BeforeAfter;
+  effort: EffortResult | null;
+  grid_features: GeoJSON.FeatureCollection;
+  facts: AreaFact[];
+  admin_year: number | null;
+}
+
+export interface AreaReport {
+  id: string;
+  title: string;
+  created_at: string;
+  area: AreaHistory['area'];
+  facts: AreaFact[];
+  evidence_hash: string;
+  summary: { mode: 'TEMPLATE' | 'LOCAL_SLM_NARRATIVE' | 'TEMPLATE_FALLBACK'; model: string | null; paragraphs: string[]; validation: string; violations: string[]; reason?: string; rejected?: string };
+}
+
+export interface PlanState {
+  method: 'area' | 'massing';
+  added_floor_area_m2: number;
+  floors: number;
+  building_count: number;
+  footprint_per_building: number;
+  removed_floor_area_m2: number;
+}
+
+/** Year-keyed lookup that accepts the string keys JSON gives back. */
+export function at<T>(table: Record<string, T> | undefined, year: number): T | undefined {
+  if (!table) return undefined;
+  return table[String(year)] ?? (table as Record<number, T>)[year];
+}
+
+export const MODE_LABEL: Record<AreaMode, string> = { admin: '행정동', circle: '반경(지도 클릭)', polygon: '직접 그리기', zone: '용도지역', grid: '기준 격자' };
+
+/** Request body for the chosen area. Returns an error message instead when the input is incomplete. */
+export function buildSpec(mode: AreaMode, input: { code?: string; category?: string; grid?: string | null; center?: [number, number] | null; radius?: number; vertices?: Array<[number, number]> }): AreaSpec | string {
+  switch (mode) {
+    case 'admin': return input.code ? { type: 'admin', code: input.code } : '행정동을 고르거나 지도에서 동을 누르세요.';
+    case 'zone': return input.category ? { type: 'zone', category: input.category } : '용도지역을 고르세요.';
+    case 'grid': return input.grid ? { type: 'grid', grid_id: input.grid } : '기준 격자가 없습니다.';
+    case 'circle': {
+      if (!input.center) return '지도에서 중심점을 누르세요.';
+      const radius = Number(input.radius);
+      if (!Number.isFinite(radius) || radius < 100 || radius > 5000) return '반경은 100~5,000m 입니다.';
+      return { type: 'circle', lon: round6(input.center[0]), lat: round6(input.center[1]), radius_m: radius };
+    }
+    case 'polygon': {
+      const points = input.vertices ?? [];
+      if (points.length < 3) return '지도에서 꼭짓점을 3개 이상 찍으세요.';
+      const ring = points.map(([x, y]) => [round6(x), round6(y)]);
+      ring.push([...ring[0]]);
+      return { type: 'polygon', geometry: { type: 'Polygon', coordinates: [ring] }, label: `직접 그린 구역 (${points.length}각형)` };
+    }
+  }
+}
+
+const round6 = (v: number) => Math.round(v * 1e6) / 1e6;
+
+export function planBody(plan: PlanState): Record<string, number> {
+  const body: Record<string, number> = plan.method === 'massing'
+    ? { floors: plan.floors, building_count: plan.building_count, footprint_per_building: plan.footprint_per_building }
+    : { added_floor_area_m2: plan.added_floor_area_m2 };
+  if (plan.removed_floor_area_m2 > 0) body.removed_floor_area_m2 = plan.removed_floor_area_m2;
+  return body;
+}
+
+export function plannedArea(plan: PlanState): number {
+  return plan.method === 'massing' ? plan.floors * plan.building_count * plan.footprint_per_building : plan.added_floor_area_m2;
+}
+
+/** Cohort of a complex relative to the development year being compared. */
+export type Cohort = 'before' | 'event' | 'after' | 'unknown';
+export const COHORT_LABEL: Record<Cohort, string> = { before: '기존 단지', event: '개발 연도 단지', after: '이후 단지', unknown: '승인일 미상' };
+/** 기존 = 중립 회색(배경 재고), 개발 연도 = plan-b, 이후 = 보라. 검증: CVD ΔE 28.8, 호박색은 3:1 미만이라 범례·표로 보조. */
+export const COHORT_COLOR: Record<Cohort, string> = { before: TOKENS['ink-3'], event: TOKENS['plan-b'], after: '#5E4BA0', unknown: TOKENS.hatch };
+
+export function cohortOf(approvalYear: number | null | undefined, eventYear: number | null | undefined): Cohort {
+  if (!approvalYear) return 'unknown';
+  if (!eventYear) return 'before';
+  return approvalYear < eventYear ? 'before' : approvalYear === eventYear ? 'event' : 'after';
+}
+
+/** Map state of a complex at the slider year: not built yet, or built with its cohort. */
+export function complexState(approvalYear: number | null | undefined, sliderYear: number, eventYear: number | null | undefined): Cohort | 'future' {
+  if (approvalYear && approvalYear > sliderYear) return 'future';
+  return cohortOf(approvalYear, eventYear);
+}
+
+/** GeoJSON points for the complexes, with the state for the slider year in `state`. */
+export function complexFeatures(complexes: AreaComplex[], sliderYear: number, eventYear: number | null | undefined): GeoJSON.FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: complexes.filter((c) => typeof c.lon === 'number' && typeof c.lat === 'number').map((c) => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [c.lon as number, c.lat as number] },
+      properties: { code: c.kapt_code, name: c.name, households: c.households ?? 0, approval_year: c.approval_year, state: complexState(c.approval_year, sliderYear, eventYear), just_built: c.approval_year === sliderYear },
+    })),
+  };
+}
+
+/**
+ * Observed electricity (12-month complete parcels only) per year, split by cohort relative to the event year.
+ * A year without any complete parcel stays null in every series (drawn as "자료 없음", never zero).
+ */
+export function cohortSeries(history: AreaHistory, eventYear: number | null | undefined) {
+  const out: Record<Cohort, Array<number | null>> = { before: [], event: [], after: [], unknown: [] };
+  const estimated: Array<number | null> = [];
+  for (const year of history.years) {
+    const e = at(history.energy, year);
+    const kwh = e?.electricity.kwh;
+    estimated.push(e?.estimated?.kwh ?? null);
+    if (kwh === null || kwh === undefined) { (Object.keys(out) as Cohort[]).forEach((k) => out[k].push(null)); continue; }
+    const sums: Record<Cohort, number> = { before: 0, event: 0, after: 0, unknown: 0 };
+    for (const [key, value] of Object.entries(e?.electricity.by_cohort ?? {})) {
+      const cohort = cohortOf(/^\d{4}$/.test(key) ? Number(key) : null, eventYear);
+      sums[cohort] += value;
+    }
+    (Object.keys(out) as Cohort[]).forEach((k) => out[k].push(sums[k]));
+  }
+  return { ...out, estimated };
+}
+
+/**
+ * 관측 단지가 적어 막대가 실제보다 낮게 보이는 해(F12): 12개월 완전 관측 단지 수 ÷ 그해 준공 단지 수(없으면 단지 수 그대로)가
+ * 가장 잘 관측된 해의 절반이 안 되는 해. 이런 해의 막대가 낮은 것은 사용량이 준 것이 아니라 받은 단지가 적은 것이다.
+ */
+export function partialYears(history: AreaHistory): number[] {
+  const rows = history.years.map((y) => {
+    const e = at(history.energy, y)?.electricity;
+    if (!e || e.kwh === null || e.kwh === undefined) return { y, r: null };
+    const stock = at(history.stock, y)?.complexes ?? 0;
+    return { y, r: stock > 0 ? e.complete_parcels / stock : e.complete_parcels };
+  });
+  const best = Math.max(0, ...rows.map((row) => row.r ?? 0));
+  return best > 0 ? rows.filter((row) => row.r !== null && row.r < best * 0.5).map((row) => row.y) : [];
+}
+
+/** Years that have an approval event (candidates for the before/after comparison). */
+export function eventYears(history: AreaHistory): number[] {
+  return history.years.filter((y) => (at(history.events, y)?.households ?? 0) > 0 || (at(history.events, y)?.complexes ?? 0) > 0);
+}
+
+/** One-line reading of the effort result for the headline (numbers straight from the engine). */
+export function effortHeadline(effort: EffortResult | null | undefined): { tone: 'good' | 'warn' | 'bad'; text: string } | null {
+  if (!effort) return null;
+  if (!effort.available) return { tone: 'warn', text: effort.reason ?? '감축 노력을 계산할 근거가 없습니다.' };
+  if (effort.already_met) return { tone: 'good', text: `계획을 반영해도 목표 ${effort.target_pct}% 감축선 아래입니다. 추가 감축이 필요하지 않습니다.` };
+  const o = effort.options;
+  if (effort.feasible_with_new_only && o?.new_only_efficiency_pct !== null && o?.new_only_efficiency_pct !== undefined) {
+    return { tone: 'warn', text: `신축 건물만으로 달성하려면 신축 부하를 ${o.new_only_efficiency_pct}% 줄여야 합니다.` };
+  }
+  return { tone: 'bad', text: `신축만으로는 달성할 수 없습니다. 지역 전체 건물의 전력 사용을 ${o?.all_buildings_efficiency_pct ?? '—'}% 줄이거나 연 ${formatInt(o?.offset_kwh_per_year)} kWh를 재생에너지로 상쇄해야 합니다.` };
+}
+
+function formatInt(value: number | null | undefined) { return value === null || value === undefined ? '—' : new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 0 }).format(value); }
+
+export const REPORT_MODE_LABEL: Record<AreaReport['summary']['mode'], string> = {
+  TEMPLATE: '검증된 서식 문장',
+  LOCAL_SLM_NARRATIVE: '로컬 AI 문장 (숫자 검증 통과)',
+  TEMPLATE_FALLBACK: '로컬 AI 문장 불채택 → 검증된 서식',
+};
+
+/** Closed ring for drawing the polygon being edited (open line while < 3 points). */
+export function draftFeature(vertices: Array<[number, number]>): GeoJSON.FeatureCollection {
+  if (!vertices.length) return { type: 'FeatureCollection', features: [] };
+  const points: GeoJSON.Feature[] = vertices.map((v, i) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: v }, properties: { i } }));
+  const line: GeoJSON.Feature = vertices.length >= 3
+    ? { type: 'Feature', geometry: { type: 'Polygon', coordinates: [[...vertices, vertices[0]]] }, properties: {} }
+    : { type: 'Feature', geometry: { type: 'LineString', coordinates: vertices }, properties: {} };
+  return { type: 'FeatureCollection', features: [line, ...points] };
+}

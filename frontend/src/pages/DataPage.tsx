@@ -1,0 +1,277 @@
+import { AlertTriangle, ArrowRight, CheckCircle2, ChevronRight, CloudDownload, FileUp, Globe2, KeyRound, RefreshCw, BrainCircuit, Calculator, FileArchive, FileText } from 'lucide-react';
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { lastCompletedMonth, MonthRangePicker, rangeProblem } from '../components/MonthRangePicker';
+import { MissingCollection } from '../components/MissingCollection';
+import { MissingValue } from '../components/MissingValue';
+import { RegionYearProgress } from '../components/RegionYearProgress';
+import { Fold, FoldAllButton, FoldStack } from '../components/Fold';
+import { PageHeader } from '../components/PageHeader';
+import { SectionNav } from '../components/SectionNav';
+import { QualityBadge } from '../components/QualityBadge';
+import { EmptyState, ErrorState, LoadingState } from '../components/Status';
+import { useAnalysisScope } from '../hooks/useAnalysisScope';
+import { useSystemInfo } from '../hooks/useSystemInfo';
+import { api } from '../lib/api';
+import { asRows, formatDate, formatMetric, qualityTone } from '../lib/format';
+import type { CollectionJob, DataSource, LocalEngineStatus, ReadinessData, ReadinessSource } from '../types';
+
+type ListResponse<T> = T[] | { items?: T[]; data?: T[]; jobs?: T[]; sources?: T[] };
+const collectionDatasets = [
+  ['vworld_buildings', 'VWorld 건물', '도로명주소 건물 윤곽·층수·용도 · 기간 무관(수집 시점)'],
+  ['building_register', '건축물대장', '표제부: 연면적·구조·사용승인일·에너지등급 · 기간 무관(수집 시점)'],
+  ['kapt_energy', 'K-apt 에너지', '단지별 월 사용량 · 시작 월의 연도 12개월'],
+  ['energy', '건축HUB 에너지', '지번별 전력·가스 · 선택한 월 범위'],
+  ['kma_asos', 'KMA ASOS', '전주 146 일자료 → 월 · 시작 월의 연도'],
+  ['sgis', 'SGIS 인구·가구', '행정구역 통계 · 기준연도 자동 확인'],
+  ['vworld_zoning', 'VWorld 용도지역', '공식 LT_C_UQ111 · 기간 무관'],
+  ['vworld_cadastral', 'VWorld 연속지적', '공식 LP_PA_CBND_BUBUN · 기간 무관'],
+  ['weather', 'ERA5-Land 기상', '재분석 대체 자료 · 선택한 월 범위'],
+] as const;
+const YEARLY = new Set(['kapt_energy', 'kma_asos']);
+const PERIODLESS = new Set(['vworld_buildings', 'building_register', 'sgis', 'vworld_zoning', 'vworld_cadastral']);
+const SCOPES = [['smoke', '첫 검증', '최소 1건으로 연결 확인'], ['limited', '일부', '제한 범위'], ['full', '전체', '전체 범위']] as const;
+
+export function DataPage() {
+  const navigate = useNavigate();
+  const { year, region } = useAnalysisScope();
+  const system = useSystemInfo();
+  const defaultRegion = system?.default_region ?? '52110';
+  const headerRegion = region && region !== defaultRegion ? region : null;
+  const headerName = headerRegion ? (system?.region?.code === headerRegion ? system.region.short_name : system?.regions?.find((r) => r.code === headerRegion)?.short_name ?? headerRegion) : null;
+  const [sources, setSources] = useState<DataSource[]>([]);
+  const [jobs, setJobs] = useState<CollectionJob[]>([]);
+  const [readiness, setReadiness] = useState<ReadinessData | null>(null);
+  const [engine, setEngine] = useState<LocalEngineStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [form, setForm] = useState({ datasets: [] as string[], start_month: '2025-01', end_month: '2025-12', scope: 'smoke' });
+  const selectionInitialized = useRef(false);
+  const maxMonth = lastCompletedMonth();
+  useEffect(() => setForm((old) => { const end = `${year}-12` > maxMonth ? maxMonth : `${year}-12`; const start = `${year}-01` > end ? end : `${year}-01`; return { ...old, start_month: start, end_month: end }; }), [year, maxMonth]);
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const requestRef = useRef<AbortController | null>(null);
+  const load = useCallback(async (quiet = false) => {
+    requestRef.current?.abort();
+    const request = new AbortController();
+    requestRef.current = request;
+    if (!quiet) setLoading(true);
+    try {
+      const [sourceResponse, jobResponse, readinessResponse, engineResponse] = await Promise.all([api<ListResponse<DataSource>>(`/sources?year=${year}`, {signal: request.signal}), api<ListResponse<CollectionJob>>('/collections', {signal: request.signal}), api<ReadinessData>('/readiness', {signal: request.signal}), api<LocalEngineStatus>('/reports/engine', {signal: request.signal})]);
+      if (request.signal.aborted) return;
+      setSources(listFrom(sourceResponse, 'sources'));
+      setJobs(listFrom(jobResponse, 'jobs'));
+      setReadiness(readinessResponse);
+      setEngine(engineResponse);
+      setError(null);
+    } catch (reason) { if (!request.signal.aborted && !quiet) setError(reason instanceof Error ? reason.message : '데이터를 불러오지 못했습니다.'); }
+    finally { if (!request.signal.aborted && !quiet) setLoading(false); }
+  }, [year]);
+
+  useEffect(() => { void load(); return () => requestRef.current?.abort(); }, [load]);
+  // Links such as /data#collect-missing open the matching panel once the page has rendered.
+  const { hash } = useLocation();
+  useEffect(() => { if (!loading && hash) window.setTimeout(() => { const target = document.getElementById(hash.slice(1)); if (target instanceof HTMLDetailsElement) target.open = true; target?.scrollIntoView({ block: 'start' }); }, 50); }, [loading, hash]);
+  useEffect(() => {
+    if (!readiness) return;
+    const available = new Set(readiness.sources.filter((source) => source.collection_dataset && source.collectable_now).map((source) => source.collection_dataset as string));
+    const firstRun = !selectionInitialized.current;
+    selectionInitialized.current = true;
+    setForm((old) => {
+      const retained = old.datasets.filter((dataset) => available.has(dataset));
+      if (firstRun) return { ...old, datasets: retained.length ? retained : [...available].slice(0, 1) };
+      return retained.length === old.datasets.length ? old : { ...old, datasets: retained };
+    });
+  }, [readiness]);
+  // 작업이 돌아가는 동안은 작업 이력만 5초마다 다시 읽고(네 가지 모두 3초마다 읽으면 서버가 쉬지 못함), 모두 끝나면 한 번 전체를 다시 읽는다.
+  const active = jobs.some((job) => ['PENDING', 'QUEUED', 'RUNNING', 'STARTED'].includes(job.status.toUpperCase()));
+  const wasActive = useRef(false);
+  useEffect(() => {
+    if (wasActive.current && !active) void load(true);
+    wasActive.current = active;
+  }, [active, load]);
+  useEffect(() => {
+    if (!active) return;
+    let alive = true;
+    const refreshJobs = async () => {
+      try { const response = await api<ListResponse<CollectionJob>>('/collections'); if (alive) setJobs(listFrom(response, 'jobs')); }
+      catch { /* 다음 번에 다시 */ }
+    };
+    const timer = window.setInterval(() => void refreshJobs(), 5000);
+    return () => { alive = false; window.clearInterval(timer); };
+  }, [active]);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault(); setFormError(null);
+    if (!form.datasets.length) { setFormError('하나 이상의 데이터셋을 선택하세요.'); return; }
+    const periodProblem = rangeProblem({ start: form.start_month, end: form.end_month }, maxMonth);
+    if (periodProblem) { setFormError(periodProblem); return; }
+    setSubmitting(true);
+    try {
+      await api('/collections', { method: 'POST', body: JSON.stringify(form) });
+      await load(true);
+    } catch (reason) { setFormError(reason instanceof Error ? reason.message : '수집 요청에 실패했습니다.'); }
+    finally { setSubmitting(false); }
+  };
+
+  if (loading) return <div className="page"><LoadingState label="출처와 수집 이력을 불러오는 중입니다" /></div>;
+  if (error) return <div className="page"><ErrorState message={error} onRetry={() => void load()} /></div>;
+  const sourceSummary = summarizeSources(sources);
+  const readinessByDataset = new globalThis.Map(readiness?.sources.filter((source) => source.collection_dataset).map((source) => [source.collection_dataset as string, source]));
+  return <div className="page">
+    <PageHeader title="수집 데이터" description="출처별 수집 상태를 숫자로 먼저 보여 줍니다. 수동 수집, 준비 상태, 출처 목록, 파일 올리기는 접힌 구역에 있습니다." action={<div className="header-actions"><FoldAllButton /><button className="button secondary" onClick={() => void load()}><RefreshCw size={15} />새로고침</button></div>} />
+    <SectionNav items={[...(headerRegion ? [{ id: 'region-years', label: '연도별 진행' }] : []), { id: 'summary', label: '출처 요약' }, { id: 'collect-missing', label: '빠진 자료 수집' }, { id: 'collect', label: '수집 요청·작업 이력' }, { id: 'readiness', label: '수집 준비 상태' }, { id: 'sources', label: '데이터 출처' }, { id: 'manual-upload', label: '수동 업로드' }]} />
+    <section className="data-summary" id="summary">{sourceSummary.map(([label, value, tone]) => <article className={tone} key={label}><span>{label}</span><strong>{value}</strong></article>)}<article><span>마지막 수집</span><strong>{latestCollection(sources)}</strong></article></section>
+    <p className="panel-description"><b>수집 전에 <Link to="/guide#standard">공통 데이터 기준</Link>을 확인하세요</b> (결측·단위·격자·계수·공식) · <Link to="/guide#collect">이 화면 사용 방법</Link> · <a href="https://github.com/shy0401/New-dss/blob/main/docs/DATA_SETUP_GUIDE.md" target="_blank" rel="noopener noreferrer">자료별 인증키 신청 · 다운로드 · 필드 매핑 안내</a></p>
+    <p className="data-scope-note" data-testid="data-scope-note"><Globe2 size={15} aria-hidden="true" />{headerRegion
+      ? <span>머리의 분석 지역은 <b>{headerName}</b>입니다. 아래 표가 이 지역의 연도별 수집 진행이고, 이 지역 자료는 <Link to={`/regions?select=${headerRegion}`}>전국 지역</Link>에서 받습니다. 그 아래 '빠진 자료 전부 수집'과 수동 수집은 최초 연구 지역(전주시) 범위입니다.</span>
+      : <span>이 화면의 '빠진 자료 전부 수집'과 수동 수집은 최초 연구 지역(전주시) 범위입니다. 다른 시·군·구는 <Link to="/regions">전국 지역</Link>에서 지역을 골라 준비하면 그 지역 자료를 받습니다.</span>}</p>
+    {headerRegion && headerName && <RegionYearProgress code={headerRegion} name={headerName} lastYear={system?.baseline_year ?? year} />}
+    <MissingCollection onChanged={() => void load(true)} />
+    <FoldStack title="수집 작업과 출처" hint="수동 수집, 준비 상태, 출처 목록, 파일 올리기입니다. 눌러서 펼칩니다.">
+    <Fold id="collect" flat={false} title="수동 수집 요청과 작업 이력" figures={`작업 이력 ${jobs.length}건`}>
+    <div className="data-layout">
+      <form className="panel collection-form" onSubmit={submit}>
+        <div className="panel-title"><h3>데이터 수집 요청</h3></div>
+        <div className="form-step"><header><b>1</b><strong>데이터셋</strong><small>{form.datasets.length}개 선택</small></header>
+          <fieldset><legend>데이터셋</legend><div className="dataset-grid">{collectionDatasets.map(([value, label, description]) => { const source = readinessByDataset.get(value); const blocked = Boolean(source && !source.collectable_now); return <label className={`dataset-check${blocked ? ' disabled' : ''}`} key={value}><input type="checkbox" disabled={blocked} checked={form.datasets.includes(value)} onChange={(event) => setForm((old) => ({ ...old, datasets: event.target.checked ? [...old.datasets, value] : old.datasets.filter((item) => item !== value) }))} /><span><CheckCircle2 size={17} /><strong>{label}</strong><small>{blocked ? source?.blocker ?? '현재 수집할 수 없습니다.' : description}</small></span></label>; })}</div></fieldset>
+        </div>
+        <div className="form-step"><header><b>2</b><strong>수집 기간</strong><small>완료된 달만 · 최대 12개월</small></header>
+          <MonthRangePicker value={{ start: form.start_month, end: form.end_month }} maxMonth={maxMonth} onChange={(range) => setForm((old) => ({ ...old, start_month: range.start, end_month: range.end }))} />
+        </div>
+        <div className="form-step"><header><b>3</b><strong>수집 범위</strong><small>첫 검증 → 일부 → 전체 순서 권장</small></header>
+          <div className="segmented" role="radiogroup" aria-label="수집 범위">{SCOPES.map(([value, label, hint]) => <label key={value}><input type="radio" name="scope" value={value} checked={form.scope === value} onChange={() => setForm((old) => ({ ...old, scope: value }))} /><span>{label}<small>{hint}</small></span></label>)}</div>
+        </div>
+        <RequestEstimate datasets={form.datasets} scope={form.scope} start={form.start_month} end={form.end_month} readiness={readinessByDataset} />
+        {formError && <p className="form-error"><AlertTriangle size={15} />{formError}</p>}
+        <button className="button primary full" disabled={submitting}><CloudDownload size={17} />{submitting ? '요청 중…' : '수집 작업 시작'}</button>
+        <p className="form-caption">수집은 백그라운드에서 실행되고 진행률이 오른쪽 작업 이력에 표시됩니다. '전체'는 같은 출처의 '첫 검증'이 성공한 뒤에만 시작되며, 성공한 응답은 캐시되어 다시 요청하지 않습니다.</p>
+      </form>
+      <section className="panel jobs-panel"><div className="panel-title"><h3>작업 이력</h3></div>
+        {jobs.length ? <div className="job-list" tabIndex={0} role="region" aria-label="수집 작업 이력">{jobs.map((job) => <article key={job.id}><div className={`job-state ${job.resolved ? 'good' : qualityTone(job.status)}`}><span>{statusLabel(job.status)}</span>{job.resolved && <b className="resolved-badge">이후 해결</b>}<small title={String(job.id)}>작업 {String(job.id).slice(0, 8)}</small></div><div className="job-body"><strong>{datasetLabel(job.dataset) ?? job.datasets?.map((d) => datasetLabel(d)).join(', ') ?? '데이터 수집'}</strong><small>{formatDate(job.updated_at ?? job.created_at)}</small>{job.message && <p>{job.message}</p>}{job.error && <p className="error-text">{job.error}</p>}{job.resolved_datasets?.length ? <p className="resolved-text">이후 작업에서 수집 성공: {job.resolved_datasets.join(', ')}</p> : null}{job.errors?.map((item, index) => <p className={typeof item !== 'string' && item.dataset && job.resolved_datasets?.includes(item.dataset) ? 'error-text resolved' : 'error-text'} key={`${typeof item === 'string' ? 'error' : item.dataset ?? 'error'}-${index}`}><b>{typeof item !== 'string' && item.dataset ? `${item.dataset}: ` : ''}</b>{typeof item === 'string' ? item : item.message ?? '수집 오류'}</p>)}{typeof job.progress === 'number' && ['RUNNING', 'STARTED'].includes(String(job.status).toUpperCase()) && <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(job.progress)} aria-label="수집 진행률"><span style={{ width: `${Math.max(0, Math.min(100, job.progress))}%` }} /></div>}</div></article>)}</div> : <EmptyState title="수집 작업 이력이 없습니다" />}
+      </section>
+    </div>
+    </Fold>
+    {readiness && <Fold id="readiness" flat={false} title="수집 준비 상태와 활용처" figures={`지금 자동 실행 가능 ${readiness.summary.collectable_now}개`}><ReadinessOverview data={readiness} /></Fold>}
+    {engine && <Fold title="요약 모델(로컬 LLM) 상태" figures={engine.status === 'READY' ? '연결됨' : '연결 안 됨'}><LocalAiFlow engine={engine} /></Fold>}
+    <Fold id="sources" title="연결된 데이터 출처 목록" figures={`출처 ${sources.length}개`}>
+    <section className="panel source-catalog"><div className="panel-title"><h3>연결된 데이터 출처</h3></div>
+      {sources.length ? <div className="source-cards">{sources.map((source) => <button className="source-card" key={source.id} onClick={() => navigate(`/data/sources/${source.id}`)}><div className="source-card-head"><span>{source.category}</span><QualityBadge value={source.quality} /></div><h4>{source.name}</h4><p>{source.organization ?? '기관 정보 없음'}</p><dl><div><dt>수집 상태</dt><dd>{statusLabel(source.status)}</dd></div><div><dt>정규화</dt><dd>{formatMetric(source.normalized_row_count, '행')}</dd></div><div><dt>기준 기간</dt><dd>{source.reference_period ?? '기록 없음'}</dd></div><div><dt>종합 품질</dt><dd>{score(source.quality_scores?.overall)}</dd></div></dl>{source.limitation && <small className="limitation"><AlertTriangle size={13} />{source.limitation}</small>}<span className="card-action">상세 보기 <ChevronRight size={15} /></span></button>)}</div> : <EmptyState title="연결된 데이터 출처가 없습니다" description="위 수집 양식으로 실제 자료 수집을 요청해 주세요." />}
+    </section>
+    </Fold>
+    <Fold id="manual-upload" title="공식 파일 직접 올리기"><ManualUpload onImported={() => void load(true)} /></Fold>
+    </FoldStack>
+  </div>;
+}
+
+function RequestEstimate({ datasets, scope, start, end, readiness }: { datasets: string[]; scope: string; start: string; end: string; readiness: globalThis.Map<string, ReadinessSource> }) {
+  if (!datasets.length) return null;
+  const year = start.slice(0, 4);
+  const crossesYear = start.slice(0, 4) !== end.slice(0, 4);
+  return <div className="request-estimate" aria-live="polite"><strong>요청 요약</strong><ul>{datasets.map((dataset) => { const label = collectionDatasets.find(([value]) => value === dataset)?.[1] ?? dataset; const scopeText = readiness.get(dataset)?.scopes?.[scope]; const period = PERIODLESS.has(dataset) ? '기간 무관' : YEARLY.has(dataset) ? `${year}년 1~12월` : `${start.replace('-', '.')} – ${end.replace('-', '.')}`; return <li key={dataset}><b>{label}</b>: {period}{scopeText ? `, ${scopeText}` : ''}</li>; })}</ul>{crossesYear && datasets.some((d) => YEARLY.has(d)) && <p className="caveat">K-apt·ASOS는 연 단위로 수집하므로 시작 월의 연도({year}년)만 요청합니다.</p>}</div>;
+}
+
+function ReadinessOverview({ data }: { data: ReadinessData }) {
+  const summary = [
+    ['수집·연결 완료', (data.summary.states.COLLECTED ?? 0) + (data.summary.states.PARTIAL ?? 0), 'good'],
+    ['지금 자동 실행 가능', data.summary.collectable_now, 'good'],
+    ['키·승인·오류 확인', (data.summary.states.CREDENTIAL_REQUIRED ?? 0) + (data.summary.states.APPROVAL_OR_FIX_REQUIRED ?? 0), 'warn'],
+    ['공식 파일 직접 필요', data.summary.states.MANUAL_REQUIRED ?? 0, 'manual'],
+  ] as const;
+  return <>
+    <section className="panel readiness-panel">
+      <div className="panel-title"><h3>현재 수집 가능성과 차단 요인</h3></div>
+      <div className="readiness-summary">{summary.map(([label, value, tone]) => <article className={tone} key={label}><strong>{value}</strong><span>{label}</span></article>)}</div>
+      <div className="truth-rules">{data.truth_rules.map((rule) => <span key={rule}><CheckCircle2 size={14} />{rule}</span>)}</div>
+    </section>
+    <section className="panel pipeline-panel">
+      <div className="panel-title"><h3>데이터가 의사결정으로 연결되는 과정</h3></div>
+      <div className="pipeline-flow">{data.pipeline.map((step, index) => <div className="pipeline-segment" key={step.id}><article><span>{String(index + 1).padStart(2, '0')}</span><strong>{step.label}</strong><b>{formatMetric(step.value, step.id === 'spatial' || step.id === 'analyze' ? '행' : '건')}</b><small>{step.detail}</small></article>{index < data.pipeline.length - 1 && <ArrowRight aria-hidden="true" size={18} />}</div>)}</div>
+    </section>
+    <section className="panel readiness-catalog">
+      <div className="panel-title"><h3>수집 정보와 실제 활용처</h3></div>
+      <div className="readiness-source-grid">{data.sources.map((source) => <ReadinessCard key={source.id} source={source} />)}</div>
+    </section>
+  </>;
+}
+
+function ReadinessCard({ source }: { source: ReadinessSource }) {
+  const tone = readinessTone(source.state);
+  return <article className={`readiness-source ${tone}`}>
+    <header><div><span>{acquisitionLabel(source.acquisition)}</span><h4>{source.name}</h4><small>{source.organization ?? '프로젝트 내부 산출'}</small></div><b>{readinessLabel(source.state)}</b></header>
+    <div className="row-counts"><span>원본 <strong>{formatMetric(source.raw_rows, '건')}</strong></span><ArrowRight size={14} /><span>정규화 <strong>{formatMetric(source.normalized_rows, '행')}</strong></span></div>
+    {source.credentials.length > 0 && <div className="credential-list">{source.credentials.map((credential) => <span className={credential.configured && credential.format_ok !== false ? 'configured' : 'missing'} key={credential.name} title={credential.problem ?? undefined}><KeyRound size={12} />{credential.name}<b>{!credential.configured ? '필요' : credential.format_ok === false ? '형식 오류' : '설정됨'}</b></span>)}</div>}
+    <div className="source-use-flow"><div><small>수집 정보</small>{source.products.length ? source.products.map((item) => <span key={item}>{item}</span>) : <span>카탈로그 정보</span>}</div><ArrowRight size={17} /><div><small>활용 화면·분석</small>{source.uses.length ? source.uses.map((item) => <span key={item}>{item}</span>) : <span>출처 현황 표시</span>}</div></div>
+    {source.scopes.smoke && <p className="scope-line"><strong>첫 검증</strong>{source.scopes.smoke}</p>}
+    {source.blocker && <p className="source-blocker"><AlertTriangle size={13} />{source.blocker}</p>}
+  </article>;
+}
+
+function LocalAiFlow({ engine }: { engine: LocalEngineStatus }) {
+  const steps = [
+    { icon: FileArchive, label: '검증된 DB·원본', detail: '출처와 계산 결과 고정' },
+    { icon: Calculator, label: '결정론적 계산', detail: '탄소·시나리오 수치 생성' },
+    { icon: BrainCircuit, label: '로컬 Ollama', detail: '허용된 근거 ID만 선택' },
+    { icon: FileText, label: '한국어 보고서', detail: '근거 해시와 출처 보존' },
+  ];
+  return <section className="panel ai-flow-panel">
+    <div className="panel-title"><h3>로컬 LLM 운영 구조</h3><span className={`status-tag ${engine.status === 'READY' ? 'good' : 'warn'}`}>{engine.status === 'READY' ? '사용 가능' : '설치·연결 필요'}</span></div>
+    <div className="ai-flow">{steps.map(({ icon: Icon, label, detail }, index) => <div className="ai-flow-step" key={label}><article><Icon size={20} /><strong>{label}</strong><small>{detail}</small></article>{index < steps.length - 1 && <ArrowRight size={18} />}</div>)}</div>
+    <div className="ai-contract"><span><b>모델</b>{engine.model ?? '설치 전'} ({engine.provider})</span>{engine.narrative_model && engine.narrative_model !== engine.model && <span><b>요약 문장</b>{engine.narrative_model}{engine.narrative_status === 'READY' ? ' (학습 모델)' : ' (설치 필요)'}</span>}<span><b>허용</b>{engine.allowed_tasks.join(', ')}</span><span><b>금지</b>{engine.prohibited_tasks}</span><span><b>처리 위치</b>{engine.privacy}</span></div>
+  </section>;
+}
+
+function PreviewTable({ value }: { value: unknown }) {
+  const rows = asRows(value);
+  if (!rows.length) return <EmptyState title="미리보기 자료가 없습니다" />;
+  const columns = Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).slice(0, 10);
+  return <div className="table-wrap"><table><thead><tr>{columns.map((column) => <th key={column}>{column}</th>)}</tr></thead><tbody>{rows.slice(0, 20).map((row, index) => <tr key={index}>{columns.map((column) => <td key={column}>{row[column] === null || row[column] === undefined ? <MissingValue inline /> : renderCell(row[column])}</td>)}</tr>)}</tbody></table></div>;
+}
+
+function datasetLabel(value: string | undefined): string | undefined { if (!value) return undefined; if (value === 'all_missing') return '빠진 자료 전부 수집'; return collectionDatasets.find(([key]) => key === value)?.[1] ?? value; }
+function listFrom<T>(response: ListResponse<T>, key: string): T[] { if (Array.isArray(response)) return response; const record = response as Record<string, unknown>; const value = record[key] ?? record.items ?? record.data; return Array.isArray(value) ? value as T[] : []; }
+function renderCell(value: unknown): string { if (value === null || value === undefined) return '자료 없음'; if (typeof value === 'object') return JSON.stringify(value); return String(value); }
+function statusLabel(status: string | null | undefined) { const value = status?.toUpperCase(); return ({ NOT_COLLECTED: '미수집', COLLECTED: '수집 완료', PARTIAL: '부분 수집', NEEDS_API_KEY: '인증키 필요', NEEDS_API_APPROVAL: '활용 승인 필요', MANUAL_DOWNLOAD_REQUIRED: '수동 자료 필요', COMPLETED: '완료', SUCCESS: '완료', RUNNING: '수집 중', STARTED: '수집 중', PENDING: '대기', QUEUED: '대기', WAITING: '한도 대기(자동 재개)', FAILED: '실패', ERROR: '오류', ACTIVE: '활성' } as Record<string, string>)[value ?? ''] ?? status ?? '상태 없음'; }
+function readinessLabel(state: string) { return ({ COLLECTED: '수집 완료', PARTIAL: '부분 확보', AVAILABLE: '수집 가능', RETRY_AVAILABLE: '재검증 가능', CREDENTIAL_REQUIRED: '키 설정 필요', APPROVAL_OR_FIX_REQUIRED: '승인·오류 확인', MANUAL_REQUIRED: '직접 수집 필요', REPLACED: '대체 출처 사용', NOT_COLLECTED: '미수집' } as Record<string, string>)[state] ?? state; }
+function readinessTone(state: string) { if (state === 'COLLECTED' || state === 'AVAILABLE' || state === 'RETRY_AVAILABLE') return 'ready'; if (state === 'PARTIAL') return 'partial'; if (state === 'MANUAL_REQUIRED') return 'manual'; return 'blocked'; }
+function acquisitionLabel(value: string) { return ({ API_KEY: '인증 API', MANUAL_DOWNLOAD: '공식 파일', OPEN_API: '공개 API', OPEN_FILE: '공개 파일', OPEN_WEB: '공개 웹', DERIVED: '프로젝트 파생', CATALOG: '카탈로그' } as Record<string, string>)[value] ?? value; }
+
+interface UploadPreview { id: string; columns: string[]; rows: Array<Record<string, unknown>>; detected_crs?: string | null; encoding?: string | null; required_fields?: string[]; suggested_mapping?: Record<string, string>; warnings?: string[]; filename?: string; }
+
+function ManualUpload({ onImported }: { onImported: () => void }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [datasetType, setDatasetType] = useState('building_register');
+  const [preview, setPreview] = useState<UploadPreview | null>(null);
+  const [mapping, setMapping] = useState<Record<string, string>>({});
+  const [meta, setMeta] = useState({ provider: '', source_url: '', reference_period: '', source_crs: '' });
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const makePreview = async (event: FormEvent) => {
+    event.preventDefault(); if (!file) { setMessage('업로드할 파일을 선택하세요.'); return; }
+    setBusy(true); setMessage(null);
+    const body = new FormData(); body.append('file', file); body.append('dataset_type', datasetType);
+    try { const result = await api<UploadPreview>('/uploads/preview', { method: 'POST', body }); setPreview(result); setMapping(result.suggested_mapping ?? {}); setMeta((old) => ({ ...old, source_crs: result.detected_crs ?? old.source_crs })); }
+    catch (reason) { setMessage(reason instanceof Error ? reason.message : '파일 분석에 실패했습니다.'); }
+    finally { setBusy(false); }
+  };
+  const importFile = async () => {
+    if (!preview) return;
+    const missing = (preview.required_fields ?? []).filter((field) => !mapping[field]);
+    if (missing.length) { setMessage(`필수 매핑을 선택하세요: ${missing.join(', ')}`); return; }
+    if (!meta.provider || !meta.reference_period) { setMessage('제공기관과 기준기간을 입력하세요.'); return; }
+    setBusy(true); setMessage(null);
+    try { await api(`/uploads/${preview.id}/import`, { method: 'POST', body: JSON.stringify({ mapping, ...meta }) }); setMessage('가져오기 작업이 시작되었습니다.'); setPreview(null); setFile(null); onImported(); }
+    catch (reason) { setMessage(reason instanceof Error ? reason.message : '가져오기에 실패했습니다.'); }
+    finally { setBusy(false); }
+  };
+  return <section className="panel upload-panel"><div className="panel-title"><h3>수동 파일 업로드</h3></div><p className="panel-description">자동 접근이 어려운 공식 CSV, XLSX, GeoJSON, SHP ZIP을 먼저 분석한 뒤 열 매핑을 확인합니다.</p>
+    {!preview ? <form className="upload-start" onSubmit={makePreview}><select aria-label="업로드할 자료 종류" value={datasetType} onChange={(event) => setDatasetType(event.target.value)}><option value="building_register">건축물대장</option><option value="building_geometry">건물 공간정보</option><option value="zoning">용도지역</option><option value="population_grid">인구 통계격자</option><option value="energy">에너지</option></select><input type="file" aria-label="업로드할 파일" accept=".csv,.xlsx,.geojson,.json,.zip" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /><button className="button secondary" disabled={busy}><FileUp size={15} />{busy ? '분석 중…' : '파일 분석'}</button></form> : <div className="mapping-preview"><div className="detected-meta"><span>인코딩 <strong>{preview.encoding ?? '감지 안 됨'}</strong></span><span>좌표계 <strong>{preview.detected_crs ?? '감지 안 됨'}</strong></span><span>열 <strong>{preview.columns.length}개</strong></span></div>{preview.warnings?.map((warning) => <p className="form-error" key={warning}><AlertTriangle size={15} />{warning}</p>)}<div className="mapping-grid">{(preview.required_fields ?? Object.keys(preview.suggested_mapping ?? {})).map((field) => <label key={field}><span>{field}</span><select value={mapping[field] ?? ''} onChange={(event) => setMapping((old) => ({ ...old, [field]: event.target.value }))}><option value="">매핑 선택</option>{preview.columns.map((column) => <option key={column}>{column}</option>)}</select></label>)}</div><div className="mapping-grid metadata"><label><span>제공기관 *</span><input value={meta.provider} onChange={(event) => setMeta((old) => ({ ...old, provider: event.target.value }))} /></label><label><span>공식 URL</span><input value={meta.source_url} onChange={(event) => setMeta((old) => ({ ...old, source_url: event.target.value }))} /></label><label><span>기준기간 *</span><input placeholder="예: 2025" value={meta.reference_period} onChange={(event) => setMeta((old) => ({ ...old, reference_period: event.target.value }))} /></label><label><span>원본 좌표계</span><input placeholder="예: EPSG:5179" value={meta.source_crs} onChange={(event) => setMeta((old) => ({ ...old, source_crs: event.target.value }))} /></label></div><PreviewTable value={preview.rows} /><div className="form-actions"><button className="button ghost" onClick={() => setPreview(null)}>취소</button><button className="button primary" onClick={() => void importFile()} disabled={busy}>{busy ? '가져오는 중…' : '매핑 확인 및 가져오기'}</button></div></div>}
+    {message && <p className="upload-message">{message}</p>}
+  </section>;
+}
+
+function summarizeSources(sources: DataSource[]): Array<[string, number, string]> { const status = (s: DataSource) => s.status.toUpperCase(); return [['연결된 데이터 소스', sources.length, ''], ['정상 수집', sources.filter((s) => ['COLLECTED', 'COMPLETED', 'SUCCESS'].includes(status(s))).length, 'good'], ['부분 수집', sources.filter((s) => ['PARTIAL', 'FALLBACK'].includes(status(s)) || s.quality?.toUpperCase() === 'FALLBACK').length, 'warn'], ['추가 인증 필요', sources.filter((s) => ['NEEDS_API_KEY', 'NEEDS_API_APPROVAL', 'MANUAL_DOWNLOAD_REQUIRED'].includes(status(s))).length, 'warn'], ['오류', sources.filter((s) => ['ERROR', 'FAILED'].includes(status(s))).length, 'bad']]; }
+function latestCollection(sources: DataSource[]) { const values = sources.map((source) => source.collected_at).filter(Boolean) as string[]; return values.length ? formatDate(values.sort().at(-1)) : '기록 없음'; }
+function score(value: number | null | undefined) { return value === null || value === undefined ? '미산정' : `${Math.round(value * 100)}%`; }

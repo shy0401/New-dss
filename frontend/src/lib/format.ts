@@ -1,0 +1,112 @@
+import type { Quality } from '../types';
+
+/** 숫자 + 단위. fixed면 소수 자리를 늘 같은 수로 맞춘다(같은 지표 카드끼리 '39'와 '48.5'처럼 섞이지 않게, UX 검토 F18). */
+export function formatMetric(value: number | null | undefined, unit = '', maximumFractionDigits = 0, fixed = false): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '자료 없음';
+  const number = new Intl.NumberFormat('ko-KR', { maximumFractionDigits, minimumFractionDigits: fixed ? maximumFractionDigits : 0 }).format(value);
+  return unit ? `${number} ${unit}` : number;
+}
+
+export function formatDate(value: string | null | undefined): string {
+  if (!value) return '기록 없음';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat('ko-KR', { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+}
+
+export function qualityLabel(quality: Quality | null | undefined): string {
+  const labels: Record<string, string> = {
+    OBSERVED: '관측 자료',
+    ESTIMATED: '추정 자료',
+    FALLBACK: '대체 자료',
+    MISSING: '자료 없음',
+    CALCULATED: '공공데이터 계산',
+    MODELED: '모델 결과',
+    IMPUTED: '결측 보정',
+    SCENARIO: '시나리오',
+    INSUFFICIENT_TRAINING_DATA: '학습 자료 부족',
+    VALIDATED: '공간 교차검증 완료',
+    NOT_VALIDATED: '미검증',
+    READY_FOR_SPATIAL_VALIDATION: '공간 검증 준비',
+    SPATIALLY_EVALUATED: '공간 교차검증 완료',
+    INSUFFICIENT_BASELINE_DATA: '기준 자료 부족',
+    ENERGY_OPTIMAL: '에너지 기준 후보',
+    NO_FEASIBLE_CANDIDATES: '조건을 만족하는 후보 없음',
+  };
+  return quality ? labels[quality.toUpperCase()] ?? plainScopeText(quality) : '미평가';
+}
+
+const SCOPE_WORDS: Record<string, string> = { smoke: '첫 검증', limited: '일부', full: '전체' };
+
+/** 예전 수집 기록의 개발 용어(smoke·limited·full 수집)를 화면 말로 바꾼다. 새 기록은 서버가 처음부터 한국어로 남긴다. */
+export function plainScopeText(text: string): string {
+  return text
+    .replace(/\b(smoke|limited|full) 수집/gi, (_, w: string) => `${SCOPE_WORDS[w.toLowerCase()]} 수집`)
+    .replace(/\((smoke|limited|full)\)/gi, (_, w: string) => `(${SCOPE_WORDS[w.toLowerCase()]} 수집)`);
+}
+
+export function qualityTone(quality: Quality | null | undefined): string {
+  const value = quality?.toUpperCase();
+  if (value === 'OBSERVED' || value === 'CALCULATED' || value === 'COMPLETED' || value === 'SUCCESS') return 'good';
+  if (value === 'VALIDATED') return 'good';
+  if (value === 'INSUFFICIENT_TRAINING_DATA' || value === 'NOT_VALIDATED' || value === 'INSUFFICIENT_BASELINE_DATA' || value === 'NO_FEASIBLE_CANDIDATES') return 'warn';
+  if (value === 'SPATIALLY_EVALUATED') return 'good';
+  if (value === 'ESTIMATED' || value === 'MODELED' || value === 'IMPUTED' || value === 'SCENARIO' || value === 'FALLBACK' || value === 'RUNNING' || value === 'PENDING') return 'warn';
+  if (value === 'FAILED' || value === 'ERROR' || value === 'MISSING') return 'bad';
+  return 'neutral';
+}
+
+export function asRows(value: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(value)) return value.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object');
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const candidate = record.items ?? record.rows ?? record.data;
+    if (Array.isArray(candidate)) return candidate.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object');
+    return [record];
+  }
+  return [];
+}
+
+/** Integer-ish values with a Korean compact suffix for large magnitudes (1.2만, 3.4억). */
+export function formatCompact(value: number | null | undefined, unit = ''): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '자료 없음';
+  const abs = Math.abs(value);
+  const text = abs >= 1e8 ? `${trim(value / 1e8)}억` : abs >= 1e4 ? `${trim(value / 1e4)}만` : new Intl.NumberFormat('ko-KR', { maximumFractionDigits: abs < 10 ? 2 : abs < 100 ? 1 : 0 }).format(value);
+  return unit ? `${text} ${unit}` : text;
+}
+
+function trim(value: number): string {
+  return new Intl.NumberFormat('ko-KR', { maximumFractionDigits: Math.abs(value) < 10 ? 2 : 1 }).format(value);
+}
+
+export function formatPercent(value: number | null | undefined, digits = 1): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '자료 없음';
+  return `${new Intl.NumberFormat('ko-KR', { maximumFractionDigits: digits }).format(value)}%`;
+}
+
+/** Share of a total as "x.x%" or null when the denominator is missing or zero. */
+export function share(part: number | null | undefined, total: number | null | undefined): number | null {
+  if (part === null || part === undefined || !total) return null;
+  return (part / total) * 100;
+}
+
+/** 이름 뒤 보조사: 받침이 있으면 '은', 없으면 '는' ("완주군은", "수원시는"). */
+/** 저장된 문장 속 면적(예: '318619m²')에 천 단위 쉼표를 넣는다. 연도·격자 ID 같은 다른 숫자는 그대로 둔다 (UX 검토 F18). */
+export function areaWithCommas(text: string): string {
+  return text.replace(/(\d{4,})(?=\s?m²)/g, (n) => Number(n).toLocaleString('ko-KR'));
+}
+
+/** 방향 조사 '(으)로': 받침이 없거나 ㄹ 받침이면 '로', 그 밖의 받침이면 '으로'. */
+export function withTo(name: string): string {
+  const code = name.trim().slice(-1).charCodeAt(0) - 0xac00;
+  if (code < 0 || code > 11171) return `${name}(으)로`;
+  const final = code % 28;
+  return `${name}${final === 0 || final === 8 ? '로' : '으로'}`;
+}
+
+export function withTopic(name: string): string {
+  const last = name.trim().slice(-1);
+  const code = last.charCodeAt(0) - 0xac00;
+  if (code < 0 || code > 11171) return `${name}은(는)`;
+  return `${name}${code % 28 ? '은' : '는'}`;
+}
