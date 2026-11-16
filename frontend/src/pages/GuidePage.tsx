@@ -72,7 +72,7 @@ export function GuidePage() {
   }, [hash]);
 
   return <div className="page guide-page" data-testid="guide-page">
-    <PageHeader title="사용 방법" description="이 사이트로 무엇을 할 수 있는지, 화면마다 어떻게 쓰는지, 자료를 어떻게 채우는지 순서대로 설명합니다." action={<span className="badge"><BookOpen size={13} />2026-10-08 기준</span>} />
+    <PageHeader title="사용 방법" description="이 사이트로 무엇을 할 수 있는지, 화면마다 어떻게 쓰는지, 자료를 어떻게 채우는지 순서대로 설명합니다." action={<span className="badge"><BookOpen size={13} />2026-11-16 기준</span>} />
     <div className="guide-layout">
       <nav className="guide-toc" aria-label="사용 방법 목차">
         <strong>목차</strong>
