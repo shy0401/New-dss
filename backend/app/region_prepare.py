@@ -387,7 +387,78 @@ def step_weather(db: Any, region: StudyRegion, log: Log) -> dict[str, Any]:
         db.rollback()
         log(f"일사량 받기 실패: {type(exc).__name__}")
     complete = sum(1 for r in rows if r["days_observed"] >= r["expected_days"])
-    return {"rows": len(rows), "message": f"ERA5-Land {len(rows)}개월 (완전월 {complete}개월, 일사량 {solar_months}개월, 지점 {params['latitude']}, {params['longitude']}{note})"}
+    asos = _asos_overlay(db, region, last, log)
+    return {"rows": len(rows), "asos_months": asos["months"],
+            "message": f"ERA5-Land {len(rows)}개월 (완전월 {complete}개월, 일사량 {solar_months}개월, 지점 {params['latitude']}, {params['longitude']}{note})"
+                       f" · {asos['message']}"}
+
+
+# 같은 시 · 군 안의 기상청 ASOS 관측소 (2026-11-16). 다른 도시 관측소는 쓰지 않는다: 그것도 대체이므로 그런 지역은 ERA5-Land 재분석을
+# 그대로 두고 FALLBACK으로 표시한다. 서울 · 부산은 특별 · 광역시 안의 관측소(종로구 108, 중구 159)를 구에 쓴다.
+ASOS_STATIONS: dict[str, tuple[str, str]] = {
+    "11740": ("108", "서울"), "26440": ("159", "부산"), "36110": ("239", "세종"), "41110": ("119", "수원"),
+    "52130": ("140", "군산"), "52180": ("245", "정읍"), "52190": ("247", "남원"), "52740": ("248", "장수"),
+    "52750": ("244", "임실"), "52770": ("254", "순창"), "52790": ("172", "고창"), "52800": ("243", "부안"),
+}
+
+
+def _asos_overlay(db: Any, region: StudyRegion, last: int, log: Log) -> dict[str, Any]:
+    """Replace ERA5-Land months with the region's own ASOS station where every day of the month is observed.
+
+    Months the station does not cover in full keep the ERA5-Land row (FALLBACK). The station name in the reply must
+    match the expected place, else nothing is written (a wrong station would be a silent substitution).
+    """
+    from .cache import parse_cached_response
+    from .collectors import client
+    from .kma_asos import KMA_ASOS_BASE_URL, aggregate_asos_months, parse_asos_response
+    station = ASOS_STATIONS.get(region.code)
+    if not station:
+        return {"months": 0, "message": "같은 시 · 군에 기상청 ASOS 관측소가 없어 ERA5-Land 재분석 유지"}
+    stn, place = station
+    key = os.getenv("DATA_GO_KR_SERVICE_KEY", "").strip()
+    if not key:
+        return {"months": 0, "message": f"ASOS {stn}: 공공데이터포털 키가 없어 ERA5-Land 유지"}
+    base = os.getenv("KMA_ASOS_BASE_URL", KMA_ASOS_BASE_URL).rstrip("/")
+    raw = _root() / "raw" / "kma" / "asos-regions" / stn
+    raw.mkdir(parents=True, exist_ok=True)
+    rows: list[dict[str, Any]] = []
+    names: set[str] = set()
+    for year in range(2015, last + 1):
+        page, total, got = 1, None, 0
+        while total is None or got < total:
+            params = {"serviceKey": key, "pageNo": page, "numOfRows": 999, "dataType": "JSON", "dataCd": "ASOS", "dateCd": "DAY",
+                      "startDt": f"{year}0101", "endDt": f"{year}1231", "stnIds": stn}
+            try:
+                result = client.get("KMA", f"ASOS-{stn}-{year}-{page}", f"{base}/getWthrDataList", params)
+                parsed = parse_cached_response(client, result, parse_asos_response)
+            except ExternalError as exc:
+                log(f"ASOS {stn} {year}년: {exc}")
+                break
+            (raw / f"{year}-p{page}.json").write_bytes(result["body"])
+            total = parsed["total_count"] or 0
+            got += len(parsed["rows"])
+            rows += parsed["rows"]
+            names |= {str(r["raw_record"].get("stnNm") or "") for r in parsed["rows"]}
+            if not parsed["rows"]:
+                break
+            page += 1
+    names.discard("")
+    if names and not any(place in n for n in names):
+        return {"months": 0, "message": f"ASOS {stn} 응답 지점명({', '.join(sorted(names))})이 {place}와 달라 쓰지 않음, ERA5-Land 유지"}
+    written = 0
+    for item in aggregate_asos_months(rows):
+        if not item["official_asos_complete"]:
+            continue
+        row = db.get(RegionWeatherMonthly, (region.code, item["use_ym"]))
+        if row is None:
+            continue  # keep to the months the ERA5-Land step laid out (location fields come from there)
+        row.provider, row.source_type = f"KMA ASOS {stn} {place}", "OFFICIAL"
+        row.mean_temperature, row.min_temperature, row.max_temperature = item["mean_temperature_c"], item["min_temperature_c"], item["max_temperature_c"]
+        row.precipitation, row.hdd, row.cdd = item["precipitation_sum_mm"], item["hdd"], item["cdd"]
+        row.days_observed, row.expected_days, row.collected_at = item["valid_day_count"], item["expected_day_count"], now()
+        written += 1
+    db.commit()
+    return {"months": written, "message": f"ASOS {stn}({place}) 완전월 {written}개월로 바꿈, 나머지 달은 ERA5-Land"}
 
 
 def _land_point(db: Any, region: StudyRegion) -> tuple[float, float] | None:
