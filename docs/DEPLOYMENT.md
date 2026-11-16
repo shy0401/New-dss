@@ -1,0 +1,135 @@
+# 무료 온라인 프로토타입 배포
+
+## 선택한 방식
+
+사용자가 PC를 켜 두는 무료 시연 배포를 선택했다. 기존 Docker의 PostgreSQL/PostGIS, Redis, Celery, FastAPI, React, Ollama를 유지하고 Cloudflare Quick Tunnel의 HTTPS 주소로 연결한다. 공개 접속은 Nginx의 비밀번호 인증을 통과해야 한다. 비밀번호를 받은 시연자는 수집·업로드·계산·보고서 작성을 실행할 수 있다.
+
+호스팅·도메인 구입 비용이 없는 방식이며 PC의 전기·네트워크는 사용한다. GitHub Pages는 정적 파일 호스팅이어서 이 프로젝트의 DB와 작업 서버를 실행하지 못한다. 그래서 GitHub Pages에는 **바뀌지 않는 안내 주소만** 두고, 그 페이지가 PC의 지금 터널 주소로 보낸다([GitHub Pages 고정 안내 주소](#github-pages-고정-안내-주소)). Render 무료 PostgreSQL은 30일 만료 및 무료 웹의 영속 디스크 제한이 있다.
+
+## 실행
+
+가장 간단한 실행 방법은 바탕화면의 `Carbon Urban DSS 서버 실행.cmd`를 더블클릭하는 것이다. 저장소 안에서는 다음 명령과 같다.
+
+```powershell
+scripts\start-prototype.cmd
+```
+
+새 PC나 저장소 위치를 옮긴 뒤에는 바탕화면 실행기를 다시 만든다.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/install-desktop-launcher.ps1
+```
+
+실행기는 Docker Desktop이 꺼져 있으면 직접 시작하고, 엔진을 기다린 뒤 전체 서비스·로컬 LLM·외부 터널을 준비하고 외부 상태를 확인해 브라우저를 연다. Docker Desktop이 이미 실행된 Windows에서는 프로젝트 루트에서 세부 명령을 직접 사용할 수도 있다.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/prototype.ps1 Start
+powershell -ExecutionPolicy Bypass -File scripts/prototype.ps1 Status
+powershell -ExecutionPolicy Bypass -File scripts/prototype.ps1 Stop
+```
+
+`Start`는 컨테이너를 준비하고, 요청된 시연 계정 `prototype / prototype`의 로컬 인증 파일을 생성하고, 로컬 AI 모델을 확인한 뒤 온라인 모드를 켜고 터널을 실행한다. 모델이 없으면 최초 다운로드 약 1GB가 필요하다. `Stop`은 공개 접속용 gateway/tunnel만 멈추며 운영 DB와 로컬 사이트를 보존한다. 기존 API 서비스키를 새 파일로 덮어쓰지 않는다.
+
+- 주소: `data/deployment/public-url.txt`
+- 접속 계정·비밀번호: `.secrets/prototype-access.md`
+- 로컬 사이트: http://localhost:5173/
+- 인증 gateway의 로컬 검증 주소: http://127.0.0.1:5180/
+
+주소는 터널 재생성 또는 재시작 시 변경될 수 있다. `Status`는 마지막 터널 로그의 주소를 보여주므로 현재 실제 접속도 확인한다. PC 종료·절전·네트워크 단절·Docker 중단 시 사이트가 중단된다. Docker가 다시 실행되면 `unless-stopped` 정책으로 컨테이너가 재시작하지만 Windows에서 Docker 자체의 자동 실행은 사용자 설정에 따른다. 절전이나 로그인 설정을 스크립트가 변경하지 않는다.
+
+## GitHub Pages 고정 안내 주소
+
+**https://shy0401.github.io/Carbon-Urban-DSS/** 는 바뀌지 않는다. 빠른 터널 주소는 PC 재부팅·터널 재시작 때마다 바뀌므로, 이 주소를 공유하면 된다(2026-10-17부터).
+
+- 페이지(`deploy/pages/index.html`, 같은 내용의 `404.html`)는 `gh-pages` 브랜치의 `demo.json`(`url`, `updated_at`)을 읽고, 시연 서버의 `/__ping`으로 켜져 있는지 확인한 뒤 그 주소로 옮긴다. 하위 경로와 질의도 그대로 넘긴다(예: `…/Carbon-Urban-DSS/map?view=region` → 시연 서버의 `/map?view=region`). 서버가 꺼져 있으면 안내 문구와 "다시 확인" 버튼을 보여 준다.
+- `/__ping`은 gateway(`deploy/gateway.conf`)에서 로그인 없이 빈 응답(204)만 준다. 앱·API·자료에는 닿지 않고, 브라우저 교차 출처 허용은 `https://shy0401.github.io` 하나다. 옮겨 간 뒤에는 지금처럼 시연 계정 로그인 창이 뜨고, 국토통계지도·선도소프트 100m 자료는 공개 주소에서 빠진다.
+- `demo.json`은 공개 저장소의 `gh-pages` 브랜치에 있으므로 시연 서버 주소는 누구나 볼 수 있다. 접속에는 여전히 로그인이 필요하다.
+- 2026-11-16 코드 저장소를 `shy0401/New-dss`로 옮긴 뒤에도 이 안내 페이지와 `gh-pages`는 이전 저장소(`shy0401/Carbon-Urban-DSS`)에 있다. 지킴이는 PC 작업 폴더의 `origin`으로 올리므로, `origin`을 새 저장소로 바꾸기 전에 새 저장소의 Pages를 켜고 `$PagesUrl`과 이 문서의 주소를 함께 바꾼다([GIT 작업 방식 11절](GIT_WORKFLOW.md#11-저장소-옮김-2026-11-16)).
+
+### 주소를 스스로 고치는 지킴이
+
+`scripts/demo-watch.ps1`이 Windows 작업 스케줄러 작업 **`CarbonDSS demo address watch`**로 로그온 1분 뒤 시작하고 5분마다 다시 돈다(`scripts/demo-watch.vbs`가 창 없이 실행). 한 번 돌 때:
+
+1. Docker 엔진이 꺼져 있으면 Docker Desktop을 켜고 최대 5분 기다린다(Docker Desktop 자동 시작 설정은 바꾸지 않는다). 단, **같은 로그온 동안 켜져 있던 Docker Desktop을 사람이 직접 껐으면**(작업 표시줄 Quit) 다시 켜지 않고 스스로 쉰다. 재부팅·새 로그온 뒤에는 다시 켠다(로그온은 가장 먼저 뜬 `explorer.exe` 시각으로 구분).
+2. `postgres redis api worker frontend gateway tunnel` 가운데 멈춘 것이 있으면 1분 기다린 뒤(부팅 직후 Docker가 스스로 올리는 시간) 그래도 멈춘 것만 `docker compose … up -d --no-build`로 올린다. 이미지를 새로 만들지 않고 DB 볼륨을 건드리지 않는다.
+3. 터널 컨테이너의 이번 실행 로그에서 `https://….trycloudflare.com` 주소를 읽어 `/__ping`을 묻는다. 두 번 연속 안 열리면 터널만 다시 시작한다(새 터널이 자리 잡는 10분, 다시 시작 사이 30분 간격을 둔다).
+4. 주소가 바뀌었거나 `deploy/pages`가 바뀌었으면 `data/deployment/public-url.txt`를 고치고, `data/ops/pages-site`(gh-pages 작업 폴더)에 `demo.json`을 써서 커밋·푸시한다(강제 푸시 없음). GitHub Pages 반영은 보통 1분 안팎이다.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/install-demo-watch.ps1          # 등록(관리자 권한 필요 없음)
+powershell -ExecutionPolicy Bypass -File scripts/install-demo-watch.ps1 -Remove  # 해제
+powershell -ExecutionPolicy Bypass -File scripts/demo-watch.ps1 -Publish         # 지금 바로 한 번 확인하고 다시 올리기
+```
+
+- 기록: `data/ops/demo-watch.log`(주소·계정 없이 사건만, 512KB 넘으면 뒤 2,000줄만 남김), 상태 `data/ops/demo-watch-state.json`. 둘 다 Git에 올리지 않는다.
+- 쉬게 하기: `data/deployment/demo-watch.paused`가 있으면 지킴이는 아무것도 하지 않는다(재부팅 뒤에도). 바탕화면 **[Carbon DSS 끄기]**, `scripts/prototype.ps1 Stop`, Docker Desktop 직접 종료가 이 파일을 만들고, **[Carbon DSS 켜기]**와 `prototype.ps1 Start`가 지운다.
+- 푸시는 이 PC의 Git Credential Manager에 저장된 GitHub 로그인을 쓴다. 토큰을 파일에 두지 않는다. 로그인이 만료되면 로그에 `pages: push failed`가 남으니 저장소에서 `git push`를 한 번 해 다시 로그인한다.
+- GitHub 저장소 설정: `gh-pages` 브랜치를 처음 올리자 GitHub이 Pages를 스스로 켰다(2026-10-17, 저장소 `has_pages=true`, 따로 API 호출 없음). 화면에서 확인·변경할 때는 Settings → Pages → Source **Deploy from a branch**, 브랜치 `gh-pages` / `(root)`.
+- 2026-10-17 확인(PC 작업 577·578): gateway `/__ping` 로컬·공개 204, 로그인 없는 `/`·`/api/health`는 그대로 401. 지킴이 첫 실행으로 `gh-pages` 생성·푸시, 안내 주소 200, `demo.json`의 주소 = `public-url.txt`. 작업 스케줄러 작업 등록(로그온 1분 뒤·5분마다, 반복 무기한) 후 예약 실행 결과 0. **터널만 다시 시작해 주소를 바꾸자 예약 실행된 지킴이가 243초 만에 `demo.json`을 새 주소로 고쳤고**, 브라우저(Playwright)로 안내 주소 → 새 시연 주소 이동·로그인 뒤 앱 표시, `…/map?view=region` 경로 유지와 지도 표시, 서버가 꺼진 경우의 안내 문구·다시 확인 버튼, 페이지 오류 0을 확인했다. 재부팅 자체는 해 보지 않았다(재부팅 뒤에는 로그온 트리거와 위 흐름이 같은 방식으로 돈다).
+- 한계: PC가 켜져 있고 **Windows에 로그온한 상태**여야 한다(Docker Desktop과 작업이 로그온 세션에서 돈다). 재부팅 뒤 로그온하지 않으면 안내 페이지는 "연결되지 않습니다"를 보여 준다. 절전·로그온 설정은 스크립트가 바꾸지 않는다. 주소가 바뀐 뒤 안내 주소에 반영되기까지 최대 약 5분 + Pages 반영 1분 안팎이 걸리고, 옛 주소로 열어 둔 탭은 끊긴다.
+
+### 바탕화면 켜기·끄기 버튼
+
+바탕화면의 **`Carbon DSS 켜기`**·**`Carbon DSS 끄기`**(`.cmd`)는 `scripts/dss-power.ps1 -Mode On|Off`를 부른다. 다른 PC나 저장소를 옮긴 뒤에는 `powershell -ExecutionPolicy Bypass -File scripts/install-power-buttons.ps1`로 다시 만든다.
+
+| 버튼 | 하는 일 | 걸리는 시간 |
+|---|---|---|
+| 끄기 | 지킴이 쉬게 함(`demo-watch.paused`) → `docker compose stop`(DB 안전 종료, 볼륨 그대로) → `docker desktop stop`으로 Docker Desktop 종료. 재부팅해도 자동으로 켜지지 않음 | 1~2분 |
+| 켜기 | 쉬기 표시 지움 → Docker Desktop 켜기(`docker desktop start`) → `up -d --no-build --wait`로 DB·API·화면·gateway·터널(·로컬 AI) → `demo-watch.ps1 -Publish`로 새 터널 주소를 GitHub Pages 안내 주소에 올림 | 2~4분 |
+
+- 켜기는 이미지를 새로 만들지 않는다. 처음 설치했거나 코드가 바뀌어 이미지가 없으면 기존 **`Carbon Urban DSS 서버 실행`**(빌드·로컬 AI 준비 포함)을 쓴다.
+- 끄면 공개 안내 주소는 "연결되지 않습니다"로 보이고, 실행 중이던 수집 작업도 멈춘다.
+- 상태만 보기: `powershell -ExecutionPolicy Bypass -File scripts/dss-power.ps1 -Mode Status`.
+
+## 백업·복원과 Docker 디스크 위치
+
+운영 DB 백업과 복원 검증은 `scripts\dss.cmd Backup` / `VerifyRestore`를 사용한다(상세: [TEAM_SETUP.md](TEAM_SETUP.md)). 백업은 `data/backups/<시각>-<라벨>/`에 `db.dump`, `table-counts.tsv`, `raw-manifest.csv`, `manifest.json`으로 남고 Git에 올리지 않는다. 2026-09-23부터 이 PC의 Docker 디스크 이미지는 `F:\DockerDesktop\Docker`에 있다(Docker Desktop 설정의 Disk image location). vhdx 파일을 탐색기로 직접 옮기거나 열면 `ERROR_SHARING_VIOLATION`으로 엔진이 멈출 수 있다.
+
+## 데이터와 보안 경계
+
+기존 named volume과 `data/`를 그대로 사용한다. `docker compose down -v`를 실행하지 않는다. GitHub 저장소만 새로 복제하면 기존 DB·원본·키·AI 모델이 함께 복제되는 것은 아니다. 새로운 PC는 승인된 원본의 이전 또는 재수집이 필요하다.
+
+`.env`, `.secrets`, 백업, 실제 배포 결과는 GitHub에 올리지 않는다. 현재 `prototype / prototype`은 사용자가 요청한 공개 시연용 공용 계정이며 민감 자료를 올리는 운영 계정으로 사용하지 않는다. 인증 파일은 SHA-512 crypt 해시이며 실제 값은 로컬 인계 파일에만 기록한다. 공개 요청의 인증 헤더는 내부 애플리케이션으로 전달하지 않는다. 교차 출처 브라우저 쓰기 요청을 거부한다. 개인별 권한·감사 시스템은 고정 운영 배포 전에 추가해야 한다.
+
+## 로컬 LLM만 준비하기
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/setup-local-llm.ps1
+```
+
+이 명령은 Ollama 컨테이너와 `qwen2.5:1.5b`를 준비하고 실제 설치 상태를 확인한다. 모델은 Docker 내부 네트워크에서만 접근하며 검증된 보고서 근거 선택과 한국어 요약에만 사용한다. 탄소 수치 계산, 새 사실 생성, 법적 판단은 계산 엔진과 검증 규칙의 영역이다.
+
+OSM 배경지도에는 실제 출처 헤더가 필요하다. gateway와 로컬 웹은 `Referrer-Policy: strict-origin-when-cross-origin`을 사용한다. 이를 `same-origin`/`no-referrer`로 바꾸면 외부 지도 타일이 403 또는 차단 이미지로 응답할 수 있다. 출처 표시는 지도 아래 항상 유지한다. 배경지도 토글과 장애 대체는 수집 모드와 독립적이다.
+
+DB/API/Redis/Ollama의 별도 인터넷 포트를 열지 않는다. Cloudflare는 HTTPS를 종료하고 gateway로 요청을 전달한다. 원본 제공기관의 이용 조건과 데이터 공개 범위는 유지해야 한다.
+
+## 동작과 외부 자료의 구분
+
+온라인 모드는 실제 작업 큐를 통한 수집을 허용한다. 유효한 개별 서비스키와 승인 없이 에너지·건축물대장 등 모든 자료가 확보되지는 않는다. 기존 에너지키는 미등록 오류가 확인됐으며 결측을 임의 관측으로 채우지 않는다. DB·지도·면적 시뮬레이션·보고서·로컬 AI와 실제 기상 수집 작업을 공개 주소에서 검사한다.
+
+## 검증
+
+Node와 Playwright가 있는 환경에서:
+
+```powershell
+node scripts/verify-gateway.cjs
+node scripts/e2e-public.cjs
+node scripts/verify-public-upload.cjs
+```
+
+첫 명령은 미인증·오인증 거부, 정상 인증의 DB 연결, 교차 출처 쓰기 거부를 검사한다. 두 번째는 실제 공개 주소로 지도·시나리오·보고서·AI·기상 작업 큐·모바일을 검사하고 `data/deployment/checks.json`에 저장한다. 계정 정보는 출력하지 않는다.
+
+2026-09-14 실제 검증: 공개 gateway 8개, 공개 브라우저·API 10개 통과, 브라우저 실행 오류 0건, 기상 수집 작업 `SUCCESS`. 2MB 원본 미리보기 업로드도 통과했다. 업로드 테스트는 기존 경계 JSON에 공백을 덧붙여 전송 크기를 검사하며 정규화 자료로 가져오지 않는다. API의 25MiB 파일 제한을 유지하면서 두 Nginx 계층에 multipart 여유분을 포함한 26MiB 요청 제한을 적용했다. 배포 전 DB 백업은 로컬 `data/backups/carbon-before-public-2026-09-14.dump`에 보존했다.
+
+2026-09-18 원클릭 실행기 설치 후 다시 검증했다. 외부 HTTPS 상태 응답, gateway 8개 보안 흐름, 공개 브라우저·API 10개 흐름과 기상 수집 작업 `SUCCESS`가 통과했고 브라우저 실행 오류는 0건이었다.
+
+## 무료 서비스 제한과 향후 전환
+
+Quick Tunnel은 개발·시연용이며 가용성 보장이 없고 동시 진행 요청 200개, SSE 미지원 제한이 있다. 현재 앱은 일반 HTTP와 폴링을 사용한다. 고정 주소가 필요하면 Cloudflare 계정·도메인의 관리형 터널로 전환한다. PC 없이 상시 운영하려면 서버 계정과 영속 볼륨을 갖춘 환경으로 이전해야 한다.
+
+공식 근거(2026-09-14 확인):
+
+- [Cloudflare Quick Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/)
+- [GitHub Pages](https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages)
+- [Render 무료 요금제 제한](https://render.com/docs/free)
+- [Nginx 비밀번호 인증](https://nginx.org/en/docs/http/ngx_http_auth_basic_module.html)
