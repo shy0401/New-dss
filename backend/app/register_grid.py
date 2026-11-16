@@ -1,0 +1,114 @@
+"""Per-grid building stock from the 건축물대장 표제부 (official, one row per building).
+
+The VWorld road-address building layer has outlines and floor counts but no use code, so use
+mix and floor area come from the register once it is collected and linked to grids:
+
+* gross floor area (연면적) and FAR floor area (용적률산정연면적) sums per grid;
+* grid FAR approximation = Σ 용적률산정연면적 ÷ 250,000 m² (grid area, not the legal site area);
+* use mix by 연면적 over the buildings whose main use is known;
+* share of floor area approved before 2000 (older stock, retrofit candidates);
+* energy-efficiency grade coverage.
+
+Floor areas pass ``official.register_areas`` first (typing errors such as a moved decimal point).
+
+Buildings without a linked grid are not guessed into one. A blank value stays missing (never 0).
+"""
+from __future__ import annotations
+
+from typing import Any
+
+from sqlalchemy import func, select
+
+GRID_AREA_M2 = 250_000.0
+_CACHE: dict[Any, tuple[int, dict[str, dict[str, Any]]]] = {}  # cells (None = all) -> (row count, summary)
+
+
+def summarize(rows: list[dict[str, Any]], grid_area_m2: float = GRID_AREA_M2) -> dict[str, dict[str, Any]]:
+    """rows: {grid_id, use, gfa, far_gfa, approval_year, energy_grade}."""
+    from .area import register_use_group
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        grid_id = row.get("grid_id")
+        if not grid_id:
+            continue
+        item = out.setdefault(grid_id, {"area_issues": 0, "buildings": 0, "gfa_m2": 0.0, "gfa_known": 0, "far_gfa_m2": 0.0, "far_known": 0,
+                                        "use_gfa_m2": {}, "old_gfa_m2": 0.0, "dated_gfa_m2": 0.0, "graded": 0})
+        item["buildings"] += 1
+        if row.get("area_issue"):
+            item["area_issues"] = item.get("area_issues", 0) + 1
+        gfa = row.get("gfa")
+        if isinstance(gfa, (int, float)) and gfa > 0:
+            item["gfa_m2"] += gfa
+            item["gfa_known"] += 1
+            if row.get("use"):
+                group = register_use_group(row["use"])
+                item["use_gfa_m2"][group] = item["use_gfa_m2"].get(group, 0.0) + gfa
+            year = row.get("approval_year")
+            if year:
+                item["dated_gfa_m2"] += gfa
+                if year < 2000:
+                    item["old_gfa_m2"] += gfa
+        far = row.get("far_gfa")
+        if isinstance(far, (int, float)) and far > 0:
+            item["far_gfa_m2"] += far
+            item["far_known"] += 1
+        if row.get("energy_grade"):
+            item["graded"] += 1
+    for item in out.values():
+        use = item["use_gfa_m2"]
+        known = sum(use.values())
+        item["residential_gfa_pct"] = round(use.get("주거", 0.0) / known * 100, 1) if known else None
+        item["use_gfa_pct"] = {k: round(v / known * 100, 1) for k, v in sorted(use.items(), key=lambda kv: -kv[1])} if known else {}
+        item["dominant_use"] = max(use, key=use.get) if use else None
+        item["far_pct"] = round(item["far_gfa_m2"] / grid_area_m2 * 100, 1) if item["far_known"] else None
+        item["old_gfa_pct"] = round(item["old_gfa_m2"] / item["dated_gfa_m2"] * 100, 1) if item["dated_gfa_m2"] else None
+        item["gfa_m2"] = round(item["gfa_m2"], 1) if item["gfa_known"] else None
+        item["far_gfa_m2"] = round(item["far_gfa_m2"], 1) if item["far_known"] else None
+        item["use_gfa_m2"] = {k: round(v, 1) for k, v in use.items()}
+        del item["old_gfa_m2"], item["dated_gfa_m2"]
+    return out
+
+
+def grid_register_summary(db: Any, grid_ids: Any = None) -> dict[str, dict[str, Any]]:
+    """Per-grid 건축물대장 summary for ``grid_ids`` (one region; None = every grid), cached per that scope's
+    row count (the register changes only when it is collected again; another region's collection keeps
+    this region's cache). 10/14: the whole-country summary took 15 s on the first map after a restart."""
+    try:
+        from .official import BuildingRegister, register_areas
+        key = None if grid_ids is None else frozenset(grid_ids)
+        ids = sorted(key) if key is not None else None
+        where = [BuildingRegister.grid_id.is_not(None)]
+        if ids is None:
+            count = db.scalar(select(func.count()).select_from(BuildingRegister).where(*where)) or 0
+        else:
+            count = sum(db.scalar(select(func.count()).select_from(BuildingRegister).where(BuildingRegister.grid_id.in_(ids[i:i + 2000]))) or 0
+                        for i in range(0, len(ids), 2000))
+    except Exception:  # noqa: BLE001 - table not migrated yet
+        db.rollback()
+        return {}
+    if not count:
+        return {}
+    hit = _CACHE.get(key)
+    if hit is None or hit[0] != count:
+        query = select(BuildingRegister.grid_id, BuildingRegister.attributes, BuildingRegister.approval_year)
+        chunks = [query.where(*where)] if ids is None else [query.where(BuildingRegister.grid_id.in_(ids[i:i + 2000])) for i in range(0, len(ids), 2000)]
+        rows = []
+        for chunk in chunks:
+            for grid_id, attrs, year in db.execute(chunk):
+                attrs = attrs or {}
+                gfa, far, issues = register_areas(attrs)
+                rows.append({"grid_id": grid_id, "use": attrs.get("building_use"), "gfa": gfa, "far_gfa": far,
+                             "approval_year": year, "energy_grade": attrs.get("energy_grade"), "area_issue": bool(issues)})
+        if len(_CACHE) >= 12 and key not in _CACHE:
+            _CACHE.pop(next(iter(_CACHE)))
+        _CACHE[key] = (count, summarize(rows))
+    return _CACHE[key][1]
+
+
+def map_properties(summary: dict[str, Any] | None) -> dict[str, Any]:
+    if not summary:
+        return {"reg_buildings": None, "reg_area_issues": None, "reg_gfa_m2": None, "reg_far_pct": None, "reg_residential_gfa_pct": None,
+                "reg_old_gfa_pct": None, "reg_dominant_use": None, "reg_use_gfa_pct": None}
+    return {"reg_buildings": summary["buildings"], "reg_area_issues": summary.get("area_issues", 0), "reg_gfa_m2": summary["gfa_m2"], "reg_far_pct": summary["far_pct"],
+            "reg_residential_gfa_pct": summary["residential_gfa_pct"], "reg_old_gfa_pct": summary["old_gfa_pct"],
+            "reg_dominant_use": summary["dominant_use"], "reg_use_gfa_pct": summary["use_gfa_pct"]}

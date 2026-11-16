@@ -1,0 +1,333 @@
+import json
+import pytest
+
+from app.area import (
+    area_facts, before_after, build_history, city_intensity, effort, haversine_m,
+    point_in_geometry, resolve_area,
+)
+
+
+def square(x, y, d=0.005):
+    return {'type': 'Polygon', 'coordinates': [[[x, y], [x + d, y], [x + d, y + d], [x, y + d], [x, y]]]}
+
+
+GRIDS = [{'id': 'g1', 'geometry': square(127.100, 35.800)}, {'id': 'g2', 'geometry': square(127.105, 35.800)}, {'id': 'g3', 'geometry': square(127.200, 35.900)}]
+ADMIN = [{'type': 'Feature', 'geometry': square(127.099, 35.799, 0.012), 'properties': {'adm_code': '35012650', 'adm_name': '전북특별자치도 전주시 덕진구 송천1동'}},
+         {'type': 'Feature', 'geometry': square(127.195, 35.895, 0.02), 'properties': {'adm_code': '35011999', 'adm_name': '전북특별자치도 전주시 완산구 먼동'}}]
+COMPLEXES = {
+    'OLD': {'kapt_code': 'OLD', 'name': '기존단지', 'approval_year': 2010, 'approval_date': '2010-05-01', 'households': 500, 'gfa': 50000.0, 'floor_area_ok': True, 'lon': 127.1025, 'lat': 35.8025, 'grid_id': 'g1'},
+    'NEW': {'kapt_code': 'NEW', 'name': '신규단지', 'approval_year': 2020, 'approval_date': '2020-06-30', 'households': 300, 'gfa': 30000.0, 'floor_area_ok': True, 'lon': 127.1075, 'lat': 35.8025, 'grid_id': 'g2'},
+    'FAR': {'kapt_code': 'FAR', 'name': '먼단지', 'approval_year': 2019, 'approval_date': '2019-01-01', 'households': 100, 'gfa': 99999999.0, 'floor_area_ok': False, 'lon': 127.2025, 'lat': 35.9025, 'grid_id': 'g3'},
+}
+POINTS = [{'kapt_code': c['kapt_code'], 'lon': c['lon'], 'lat': c['lat'], 'grid_id': c['grid_id']} for c in COMPLEXES.values()]
+ZONING = {'g1': {'dominant_zone': 'RESIDENTIAL'}, 'g2': {'dominant_zone': 'RESIDENTIAL'}, 'g3': {'dominant_zone': 'COMMERCIAL'}}
+YEARS = list(range(2017, 2024))
+
+
+def energy_rows():
+    # realistic magnitudes: 100,000 kWh/month for 500 households = 2,400 kWh per household-year
+    rows = []
+    for year in range(2018, 2023):
+        for month in range(1, 13):
+            rows.append({'use_ym': f'{year}{month:02d}', 'energy_type': 'ELECTRICITY', 'usage_kwh': 100000.0, 'grid_id': 'g1', 'kapt_code': 'OLD', 'parcel': 'p-old'})
+    for year in (2020, 2021, 2022):
+        for month in range(7 if year == 2020 else 1, 13):
+            rows.append({'use_ym': f'{year}{month:02d}', 'energy_type': 'ELECTRICITY', 'usage_kwh': 50000.0, 'grid_id': 'g2', 'kapt_code': 'NEW', 'parcel': 'p-new'})
+    return rows
+
+
+def inputs():
+    rows = energy_rows()
+    return {'complexes': COMPLEXES, 'energy': rows, 'weather': [], 'population': [
+        {'adm_code': '35012650', 'adm_name': '전북특별자치도 전주시 덕진구 송천1동', 'reference_year': 2019, 'value': 1000},
+        {'adm_code': '35012650', 'adm_name': '전북특별자치도 전주시 덕진구 송천1동', 'reference_year': 2021, 'value': 1500},
+        {'adm_code': '35012', 'adm_name': '덕진구', 'reference_year': 2021, 'value': 999999},
+    ], 'households': [], 'factor': {'electricity': 0.5}, 'city_intensity': city_intensity(rows, COMPLEXES, YEARS)}
+
+
+def test_geometry_helpers():
+    assert point_in_geometry(127.1025, 35.8025, square(127.1, 35.8))
+    assert not point_in_geometry(127.2, 35.8025, square(127.1, 35.8))
+    assert haversine_m(127.0, 35.0, 127.0, 35.01) == pytest.approx(1112, rel=0.01)
+
+
+def test_every_area_type_resolves_members():
+    admin = resolve_area({'type': 'admin', 'code': '35012650'}, GRIDS, POINTS, ADMIN, ZONING)
+    assert admin['grid_ids'] == ['g1', 'g2'] and admin['complex_codes'] == ['NEW', 'OLD']
+    assert admin['label'] == '덕진구 송천1동 (행정동)' and admin['admin_exact']
+    circle = resolve_area({'type': 'circle', 'lon': 127.1025, 'lat': 35.8025, 'radius_m': 200}, GRIDS, POINTS, ADMIN, ZONING)
+    assert circle['complex_codes'] == ['OLD'] and circle['admin_codes'] == ['35012650']
+    zone = resolve_area({'type': 'zone', 'category': 'COMMERCIAL'}, GRIDS, POINTS, ADMIN, ZONING)
+    assert zone['grid_ids'] == ['g3'] and zone['complex_codes'] == ['FAR']
+    grid = resolve_area({'type': 'grid', 'grid_id': 'g2'}, GRIDS, POINTS, ADMIN, ZONING)
+    assert grid['complex_codes'] == ['NEW']
+    with pytest.raises(ValueError):
+        resolve_area({'type': 'circle', 'lon': 127.1, 'lat': 35.8, 'radius_m': 50}, GRIDS, POINTS, ADMIN, ZONING)
+
+
+def test_annual_values_use_only_complete_parcels_and_never_fill_missing_years():
+    area = resolve_area({'type': 'admin', 'code': '35012650'}, GRIDS, POINTS, ADMIN, ZONING)
+    history = build_history(area, YEARS, inputs())
+    energy = history['energy']
+    assert energy[2017]['electricity']['kwh'] is None  # no observation: missing, not 0
+    assert energy[2020]['electricity']['kwh'] == 1200000.0  # NEW has 6 months only → excluded
+    assert energy[2020]['electricity']['partial_parcels'] == 1
+    assert energy[2021]['electricity']['by_cohort'] == {'2010': 1200000.0, '2020': 600000.0}
+    assert energy[2021]['electricity']['intensity_kwh_per_m2'] == pytest.approx(1800000 / 80000, abs=1e-3)
+    assert energy[2021]['electricity_carbon_kgco2eq'] == 900000.0
+    assert history['population'][2021]['population'] == 1500  # 행정동 row only, 구 합계 excluded
+    assert history['population'][2020]['population'] is None
+    assert history['stock'][2019]['gfa_m2'] == 50000.0 and history['stock'][2020]['gfa_m2'] == 80000.0
+
+
+def test_before_after_separates_existing_buildings_from_the_new_development():
+    area = resolve_area({'type': 'admin', 'code': '35012650'}, GRIDS, POINTS, ADMIN, ZONING)
+    history = build_history(area, YEARS, inputs())
+    result = before_after(history, 2020, 3)
+    m = result['metrics']['electricity']
+    assert result['before_years'] == [2017, 2018, 2019] and result['after_years'] == [2021, 2022, 2023]
+    assert m['before_total_kwh'] == 1200000.0 and m['after_total_kwh'] == 1800000.0
+    assert m['total_change_pct'] == 50.0
+    assert m['existing_change_pct'] == 0.0 and m['existing_complexes'] == 1  # OLD only: the same complex in every observed year
+    assert m['new_development_kwh'] == 600000.0 and m['new_share_pct'] == pytest.approx(33.3, abs=0.1)
+    est = result['metrics']['estimated']
+    assert est['added_gfa_m2'] == 30000.0 and est['event_change_pct'] == 60.0
+
+
+def test_effort_is_the_exact_gap_to_the_target():
+    area = resolve_area({'type': 'admin', 'code': '35012650'}, GRIDS, POINTS, ADMIN, ZONING)
+    history = build_history(area, YEARS, inputs())
+    result = effort(history, {'added_floor_area_m2': 40000}, 40)
+    intensity = 1800000 / 80000
+    base_c = 1800000 * 0.5
+    bau_c = (1800000 + intensity * 40000) * 0.5
+    need = bau_c - base_c * 0.6
+    assert result['baseline_mode'] == 'OBSERVED' and result['baseline_year'] == 2022
+    assert result['required_reduction_kgco2eq'] == pytest.approx(need, abs=0.1)
+    assert result['options']['all_buildings_efficiency_pct'] == pytest.approx(need / bau_c * 100, abs=0.1)
+    assert result['options']['offset_kwh_per_year'] == pytest.approx(need / 0.5, abs=0.1)
+    assert result['options']['pv_capacity_kw'] is None  # no yield assumption → no kW
+    with pytest.raises(ValueError):
+        effort(history, {}, 120)
+
+
+def test_effort_on_every_metered_building_uses_the_building_energy_block():
+    """A commercial area: the target is measured against the shops and offices that are there (건축HUB), not only the apartments."""
+    area = resolve_area({'type': 'admin', 'code': '35012650'}, GRIDS, POINTS, ADMIN, ZONING)
+    history = build_history(area, YEARS, inputs())
+    history['building_energy'] = {'available': True, 'years': {
+        2024: {'year': 2024, 'electricity_kwh': 5000000.0, 'electricity_complete': 40, 'kwh_per_m2': 60.0, 'area_m2': 80000.0, 'complete': True},
+        2025: {'year': 2025, 'electricity_kwh': 5200000.0, 'electricity_complete': 41, 'kwh_per_m2': 61.0, 'area_m2': 81000.0, 'complete': False}}}
+    result = effort(history, {'added_floor_area_m2': 10000}, 20, 1300, basis='buildings')
+    bau = (5000000 + 60.0 * 10000) * 0.5
+    need = bau - 5000000 * 0.5 * 0.8
+    assert result['basis'] == 'buildings' and result['baseline_year'] == 2024  # 2025 is not a complete year yet
+    assert result['baseline_kwh'] == 5000000.0 and result['intensity_kwh_per_m2'] == 60.0 and result['new_load_kwh'] == 600000.0
+    assert result['required_reduction_kgco2eq'] == pytest.approx(need, abs=0.1)
+    assert result['options']['pv_capacity_kw'] == pytest.approx(need / 0.5 / 1300, abs=0.1)
+    assert '건축HUB' in result['assumptions'][0]
+    history['building_energy'] = {'available': False, 'years': {}}
+    # no metered buildings: the apartment series answers instead, and says it was a fallback
+    missing = effort(history, {'added_floor_area_m2': 10000}, 20, basis='buildings')
+    assert missing['available'] and missing['basis'] == 'apartments' and missing['fallback_from'] == 'buildings'
+    with pytest.raises(ValueError):
+        effort(history, {}, 20, basis='shops')
+    assert effort(history, {'added_floor_area_m2': 40000}, 40)['basis'] == 'apartments'  # unchanged default
+
+
+def test_effort_estimates_the_baseline_when_the_area_has_no_observation():
+    area = resolve_area({'type': 'zone', 'category': 'COMMERCIAL'}, GRIDS, POINTS, ADMIN, ZONING)
+    history = build_history(area, YEARS, inputs())
+    result = effort(history, {'added_floor_area_m2': 1000}, 20)
+    # FAR's published floor area is implausible → no plausible stock → no estimate.
+    assert result['available'] is False
+
+
+def test_facts_carry_their_numbers_for_verification():
+    area = resolve_area({'type': 'admin', 'code': '35012650'}, GRIDS, POINTS, ADMIN, ZONING)
+    history = build_history(area, YEARS, inputs())
+    comparison = before_after(history, 2020, 3)
+    facts = area_facts(history, comparison, effort(history, {'added_floor_area_m2': 40000}, 40))
+    change = next(f for f in facts if f['id'] == 'change')
+    assert change['numbers'][0] == 50.0 and change['signed_pct'] == 50.0 and '+50.0%' in change['text']
+    assert '같은 기존 단지 1곳끼리는 +0.0% 변했습니다' in change['text'] and change['numbers'][1:] == [1, 0.0]
+    assert all(isinstance(n, (int, float)) for f in facts for n in f['numbers'])
+    # the apartment (K-apt) baseline is stated too, so a summary that also quotes building-wide energy says which one the target uses
+    basis = next(f for f in facts if f['id'] == 'effort_basis')
+    assert '공동주택 단지(K-apt' in basis['text'] and '1,800,000 kWh' in basis['text'] and 1800000 in basis['numbers']
+    assert [f['id'] for f in facts].index('effort_basis') < [f['id'] for f in facts].index('effort_target')
+
+
+def test_building_energy_block_sums_the_area_grids_per_year(tmp_path, monkeypatch):
+    from app.area import building_energy_block
+    monkeypatch.setenv('DATA_DIR', str(tmp_path))  # no finished city-wide run recorded here
+    grids = {'g1': {'parcels': 10, 'electricity_complete': 8, 'electricity_kwh': 1000000.0, 'gas_complete': 3, 'gas_kwh': 400000.0,
+                    'area_parcels': 5, 'area_m2': 20000.0, 'kwh_per_m2': 40.0},
+             'g2': {'parcels': 2, 'electricity_complete': 0, 'electricity_kwh': None, 'gas_complete': 0, 'gas_kwh': None,
+                    'area_parcels': 0, 'area_m2': None, 'kwh_per_m2': None},
+             'g9': {'parcels': 99, 'electricity_complete': 99, 'electricity_kwh': 9.0, 'gas_complete': 0, 'gas_kwh': None,
+                    'area_parcels': 0, 'area_m2': None, 'kwh_per_m2': None}}
+    block = building_energy_block(['g1', 'g2'], {2025: grids}, 0.5)
+    y = block['years'][2025]
+    assert y['complete'] is False
+    (tmp_path / 'ops').mkdir()
+    (tmp_path / 'ops' / 'history-progress.json').write_text('{"items": {"energy:2025": {"status": "DONE", "scope": "all_parcels"}}}', encoding='utf-8')
+    assert building_energy_block(['g1'], {2025: grids}, 0.5)['years'][2025]['complete'] is True
+    # another region passes its own state: the city-wide file does not decide for it
+    assert building_energy_block(['g1'], {2025: grids}, 0.5, {2025: False})['years'][2025]['complete'] is False
+    assert building_energy_block(['g1'], {2025: grids}, 0.5, {})['years'][2025]['complete'] is False
+    assert y['parcels'] == 12 and y['electricity_complete'] == 8 and y['electricity_kwh'] == 1000000.0
+    assert y['kwh_per_m2'] == 40.0 and y['electricity_carbon_kgco2eq'] == 500000.0
+    assert building_energy_block(['g3'], {2025: grids}, 0.5) == {'years': {}, 'available': False, 'trend': None, 'basis': block['basis']}
+
+
+def test_building_energy_history_flags_the_2020_provider_gap_and_trend_skips_it(tmp_path, monkeypatch):
+    """2020 건축HUB lacks part of September·October city-wide: it is shown, flagged and kept out of comparisons.
+    The trend compares the same parcels and reports new and gone meters separately."""
+    from app.area import building_energy_block
+    monkeypatch.setenv('DATA_DIR', str(tmp_path))
+    (tmp_path / 'ops').mkdir()
+    done = {f'energy:{y}': {'status': 'DONE', 'scope': 'all_parcels'} for y in (2020, 2021, 2025)}
+    (tmp_path / 'ops' / 'history-progress.json').write_text(json.dumps({'items': done}), encoding='utf-8')
+
+    def g(parcels):
+        kwh = sum(parcels.values())
+        return {'g1': {'parcels': len(parcels), 'electricity_complete': len(parcels), 'electricity_kwh': kwh, 'gas_complete': 0, 'gas_kwh': None,
+                       'area_parcels': 0, 'area_m2': None, 'kwh_per_m2': None, 'electricity_by_parcel': parcels}}
+    by_year = {2020: g({'a': 100.0}), 2021: g({'a': 400.0, 'b': 600.0}), 2025: g({'a': 440.0, 'c': 300.0})}
+    block = building_energy_block(['g1'], by_year, 0.5)
+    assert block['years'][2020]['provider_gap'] and block['years'][2021]['provider_gap'] is None
+    t = block['trend']
+    assert (t['from'], t['to'], t['same_parcels'], t['same_from_kwh'], t['same_to_kwh'], t['same_change_pct']) == (2021, 2025, 1, 400.0, 440.0, 10.0)
+    assert (t['new_parcels'], t['new_kwh'], t['gone_parcels'], t['gone_kwh']) == (1, 300.0, 1, 600.0)
+    area = resolve_area({'type': 'admin', 'code': '35012650'}, GRIDS, POINTS, ADMIN, ZONING)
+    history = build_history(area, YEARS, inputs())
+    history['building_energy'] = block
+    facts = {f['id']: f for f in area_facts(history)}
+    trend = facts['building_energy_trend']
+    assert trend['signed_pct'] == 10.0 and '+10.0%' in trend['text'] and '2021년과 2025년' in trend['text']
+    assert '2020' in facts['building_energy_gap']['text']
+    assert '2025년 1곳(300 kWh)' in trend['text'] and '2021년 1곳(600 kWh)' in trend['text']
+    # nobody metered only in 2021: say so instead of "0곳(0 kWh)" (no observation is not zero use)
+    history['building_energy'] = building_energy_block(['g1'], {2021: g({'a': 400.0}), 2025: g({'a': 440.0, 'c': 300.0})}, 0.5)
+    trend = {f['id']: f for f in area_facts(history)}['building_energy_trend']
+    assert '2021년 없음' in trend['text'] and '0곳' not in trend['text'] and '(0 kWh)' not in trend['text']
+    assert 0 not in trend['numbers'][6:]
+
+
+def _hub_history(area_type='zone'):
+    """An area with metered buildings (건축HUB) but no K-apt complex observation: a 면 without apartments."""
+    spec = {'type': 'zone', 'category': 'COMMERCIAL'} if area_type == 'zone' else {'type': 'admin', 'code': '35012650'}
+    area = resolve_area(spec, GRIDS, POINTS, ADMIN, ZONING)
+    history = build_history(area, YEARS, inputs())
+    history['building_energy'] = {'available': True, 'years': {
+        2023: {'year': 2023, 'electricity_kwh': 2000000.0, 'electricity_complete': 12, 'kwh_per_m2': 50.0, 'area_m2': 40000.0, 'complete': True}}}
+    return history
+
+
+def test_effort_falls_back_to_the_buildings_that_are_metered_when_there_is_no_apartment_basis():
+    history = _hub_history()
+    result = effort(history, {'added_floor_area_m2': 1000}, 20)
+    assert result['available'] and result['basis'] == 'buildings' and result['fallback_from'] == 'apartments'
+    assert result['baseline_kwh'] == 2000000.0 and result['fallback_reason']
+    facts = area_facts(history, None, result)
+    ids = [f['id'] for f in facts]
+    assert 'effort_fallback' in ids and ids.index('effort_fallback') < ids.index('effort_basis')
+    assert '건물 전체(건축HUB) 기준으로 바꿔' in next(f['text'] for f in facts if f['id'] == 'effort_fallback')
+    # nothing on either basis: still unavailable, with the requested basis' reason
+    history['building_energy'] = {'available': False, 'years': {}}
+    assert effort(history, {'added_floor_area_m2': 1000}, 20)['available'] is False
+
+
+def test_coverage_says_which_series_is_missing_when_only_buildings_are_metered():
+    history = _hub_history()
+    cov = next(f for f in area_facts(history) if f['id'] == 'coverage')
+    assert '공동주택(K-apt)' in cov['text'] and '건물 전체(건축HUB)' in cov['text']
+    history['building_energy'] = {'available': False, 'years': {}}
+    assert '연간 에너지와 탄소를 계산하지 않았습니다' in next(f for f in area_facts(history) if f['id'] == 'coverage')['text']
+
+
+def test_demolishing_more_than_the_area_has_is_rejected():
+    area = resolve_area({'type': 'admin', 'code': '35012650'}, GRIDS, POINTS, ADMIN, ZONING)
+    history = build_history(area, YEARS, inputs())
+    # baseline 1,800,000 kWh at 22.5 kWh/m² ≈ 80,000 m²
+    assert effort(history, {'added_floor_area_m2': 1000, 'removed_floor_area_m2': 80000}, 20)['available']
+    with pytest.raises(ValueError, match='철거 연면적'):
+        effort(history, {'added_floor_area_m2': 1000, 'removed_floor_area_m2': 90000}, 20)
+
+
+def test_measure_mix_sums_each_measure_against_the_requirement():
+    area = resolve_area({'type': 'admin', 'code': '35012650'}, GRIDS, POINTS, ADMIN, ZONING)
+    history = build_history(area, YEARS, inputs())
+    result = effort(history, {'added_floor_area_m2': 40000, 'removed_floor_area_m2': 10000}, 40, 1200,
+                    measures={'new_efficiency_pct': 30, 'existing_efficiency_pct': 10, 'pv_kw': 100})
+    mix = result['mix']
+    intensity = 1800000 / 80000
+    new_kwh = intensity * 40000 * 0.30
+    existing_kwh = (1800000 - intensity * 10000) * 0.10
+    total_c = (new_kwh + existing_kwh + 100 * 1200) * 0.5
+    assert mix['new_kwh'] == pytest.approx(new_kwh, abs=0.1) and mix['existing_kwh'] == pytest.approx(existing_kwh, abs=0.1)
+    assert mix['pv_kwh'] == 120000.0 and mix['pv_counted']
+    assert mix['total_kgco2eq'] == pytest.approx(total_c, abs=0.1)
+    assert mix['gap_kgco2eq'] == pytest.approx(result['required_reduction_kgco2eq'] - total_c, abs=0.2)
+    assert mix['met'] is (mix['gap_kgco2eq'] <= 0)
+    facts = {f['id']: f for f in area_facts(history, None, result)}
+    assert '감축 수단 조합' in facts['effort_mix']['text'] and mix['total_kgco2eq'] in facts['effort_mix']['numbers']
+    assert facts['effort_mix_gap']['numbers'][0] == mix['required_kgco2eq']
+    # PV without any yield basis is shown but not counted
+    no_yield = effort(history, {'added_floor_area_m2': 40000}, 40, measures={'pv_kw': 100})['mix']
+    assert no_yield['pv_counted'] is False and no_yield['total_kwh'] == 0
+    with pytest.raises(ValueError):
+        effort(history, {'added_floor_area_m2': 40000}, 40, measures={'new_efficiency_pct': 120})
+    # without measures there is no mix and no mix fact (recorded cases stay as they were)
+    plain = effort(history, {'added_floor_area_m2': 40000}, 40)
+    assert 'mix' not in plain and not any(f['id'].startswith('effort_mix') for f in area_facts(history, None, plain))
+
+
+def test_benchmark_ranks_admin_areas_on_the_same_year_and_basis():
+    from app.area import benchmark, benchmark_position
+    data = dict(inputs(), grids=GRIDS, admin=ADMIN, zoning=ZONING, region={'code': '52110', 'short_name': '전주'}, register=[],
+                sgis_grid=(None, {}), building_energy={}, building_energy_complete={}, solar=None, years=YEARS)
+    table = benchmark(None, YEARS, None, 'apartments', inputs=data)
+    by_code = {i['code']: i for i in table['items']}
+    assert by_code['35012650']['year'] == 2022 and by_code['35012650']['kwh_per_m2'] == pytest.approx(22.5, abs=0.01)
+    assert by_code['35011999']['kwh_per_m2'] is None  # no observation: not ranked, not zero
+    assert table['reference_year'] == 2022 and table['count'] == 1 and table['median'] == pytest.approx(22.5, abs=0.01)
+    assert benchmark_position(table, 2022, 22.5) == {'rank': 1, 'count': 1, 'lower_pct': 0.0, 'quintile': None}
+    assert benchmark_position(table, 2021, 22.5) is None  # another year is not comparable
+    with pytest.raises(ValueError):
+        benchmark(None, YEARS, None, 'shops', inputs=data)
+
+
+def test_observed_baseline_is_the_year_effort_uses():
+    from app.area import observed_baseline
+    history = _hub_history('admin')
+    for basis in ('apartments', 'buildings'):
+        base = observed_baseline(history, basis)
+        result = effort(history, {'added_floor_area_m2': 1000}, 20, basis=basis)
+        assert base['year'] == result['baseline_year'] and base['kwh'] == result['baseline_kwh']
+        assert base['kwh_per_m2'] == pytest.approx(result['intensity_kwh_per_m2'])
+
+
+def test_before_after_names_the_observed_years_and_flags_a_thinner_before_period():
+    """Only some complexes were collected for the years before the development: the total change mixes in coverage."""
+    data = inputs()
+    complexes = dict(COMPLEXES, OLD2={'kapt_code': 'OLD2', 'name': '기존단지2', 'approval_year': 2012, 'approval_date': '2012-01-01', 'households': 400,
+                                      'gfa': 40000.0, 'floor_area_ok': True, 'lon': 127.1030, 'lat': 35.8030, 'grid_id': 'g1'})
+    rows = data['energy'] + [{'use_ym': f'{y}{m:02d}', 'energy_type': 'ELECTRICITY', 'usage_kwh': 80000.0, 'grid_id': 'g1', 'kapt_code': 'OLD2', 'parcel': 'p-old2'}
+                             for y in (2021, 2022) for m in range(1, 13)]
+    data.update(complexes=complexes, energy=rows)
+    points = POINTS + [{'kapt_code': 'OLD2', 'lon': 127.1030, 'lat': 35.8030, 'grid_id': 'g1'}]
+    area = resolve_area({'type': 'admin', 'code': '35012650'}, GRIDS, points, ADMIN, ZONING)
+    history = build_history(area, YEARS, data)
+    comparison = before_after(history, 2020, 3)
+    cov = comparison['coverage']
+    assert cov['observed_before_years'] == [2018, 2019] and cov['observed_after_years'] == [2021, 2022]
+    assert cov['before_parcels_mean'] == 1 and cov['after_existing_parcels_mean'] == 2 and cov['comparable'] is False
+    facts = {f['id']: f for f in area_facts(history, comparison)}
+    assert '개발 전 관측 2개 연도(2018, 2019) 평균' in facts['before_after']['text'] and '개발 후 관측 2개 연도(2021, 2022)' in facts['before_after']['text']
+    assert '관측 범위 차이가 섞여' in facts['change']['text'] and facts['change']['signed_pct'] == comparison['metrics']['electricity']['total_change_pct']
+    assert '같은 기존 단지 1곳끼리는 +0.0% 변했습니다' in facts['change']['text']
+    # the original fixture (the same complex before and after) stays comparable
+    plain = before_after(build_history(resolve_area({'type': 'admin', 'code': '35012650'}, GRIDS, POINTS, ADMIN, ZONING), YEARS, inputs()), 2020, 3)
+    assert plain['coverage']['comparable'] is True

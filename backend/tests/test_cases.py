@@ -1,0 +1,181 @@
+"""Fixed simulation cases and the cross-PC reproduction check (app/cases.py, `python -m app.cli verify-cases`)."""
+import json
+
+from app import cases
+
+
+def test_cases_file_is_valid_and_every_input_is_what_the_screen_sends():
+    from app.area import AnalyzeInput
+    from app.main import OptimizationInput, ScenarioInput
+    doc = cases.load()
+    ids = [c["id"] for c in doc["cases"]]
+    assert len(ids) == len(set(ids))
+    for spec in doc["cases"]:
+        assert spec["kind"] in cases.RUNNERS, spec["id"]
+        assert spec.get("title") and spec.get("region"), spec["id"]
+        i = spec["input"]
+        if spec["kind"] in ("area", "area_report"):
+            AnalyzeInput(**i)
+            assert i["region"] == spec["region"]
+        elif spec["kind"] == "scenario":
+            assert ScenarioInput(**i).region == spec["region"]
+        elif spec["kind"] == "optimize":
+            OptimizationInput(**i)
+        elif spec["kind"] == "grid_report":
+            assert all(ScenarioInput(**p).grid_id == i["grid_id"] for p in i["scenarios"])
+    # each region with cases also has its data fingerprint, so a data difference is told apart from a calculation difference
+    regions = {c["region"] for c in doc["cases"] if c["kind"] != "dataset"}
+    assert regions <= {c["input"]["region"] for c in doc["cases"] if c["kind"] == "dataset"}
+
+
+def test_flatten_and_tolerance():
+    flat = cases.flatten({"a": 1, "b": {"c": 2.5, "d": {"e": None}}, "z": [1, 2]})
+    assert flat == {"a": 1, "b.c": 2.5, "b.d.e": None, "z": [1, 2]}
+    assert cases.same(1000.0, 1000.0005)                 # within 1e-6 relative
+    assert not cases.same(1000.0, 1000.1)
+    assert cases.same(10.0, 10.4, tol=0.5)                # a case may widen one value
+    assert not cases.same(None, 0.0) and not cases.same(0.0, None)   # 자료 없음 is never 0
+    assert cases.same([["제3종일반주거지역", 99.85]], [["제3종일반주거지역", 99.85]])
+    assert not cases.same(True, 1)
+
+
+def _spec(values, facts):
+    return {"id": "X", "kind": "area", "expected": {"values": values, "facts": facts, "facts_sha256": cases.facts_hash(facts)}}
+
+
+def test_compare_reports_value_and_sentence_differences():
+    facts = ["2025년 전력 1,000 kWh입니다."]
+    spec = _spec({"effort.pv_capacity_kw": 120.0, "label": "송천1동 (행정동)"}, facts)
+    same = cases.compare(spec, {"values": {"effort.pv_capacity_kw": 120.0, "label": "송천1동 (행정동)"}, "facts": facts, "facts_sha256": cases.facts_hash(facts)})
+    assert same["status"] == "MATCH" and same["checked"] == 2
+    other = ["2025년 전력 1,001 kWh입니다."]
+    diff = cases.compare(spec, {"values": {"effort.pv_capacity_kw": 125.0, "label": "송천1동 (행정동)", "new": 1}, "facts": other,
+                                "facts_sha256": cases.facts_hash(other)})
+    assert diff["status"] == "DIFF"
+    assert {d["key"] for d in diff["diffs"]} == {"effort.pv_capacity_kw", "new"}
+    assert diff["diffs"][0]["label"] == "필요 태양광 kW"
+    assert diff["text_diffs"] == [{"expected": facts[0], "actual": other[0]}]
+    assert cases.compare({"id": "Y"}, {"values": {}, "facts": [], "facts_sha256": ""})["status"] == "NOT_RECORDED"
+    assert cases.compare(spec, {"error": "ValueError: x"})["status"] == "ERROR"
+
+
+def test_a_file_recorded_under_older_sentence_rules_is_compared_on_values_only():
+    facts = ["개발 전 3년 평균 전력은 1,000 kWh입니다."]
+    spec = _spec({"label": "송천1동 (행정동)"}, facts)
+    newer = ["개발 전 관측 1개 연도(2018) 평균 전력은 1,000 kWh입니다."]
+    got = {"values": {"label": "송천1동 (행정동)"}, "facts": newer, "facts_sha256": cases.facts_hash(newer)}
+    old_rules = cases.compare(spec, got, fact_rules=cases.FACT_RULES - 1)
+    assert old_rules["status"] == "MATCH" and old_rules["rules_changed"] and old_rules["text_diffs"]
+    same_rules = cases.compare(spec, got)
+    assert same_rules["status"] == "DIFF" and not same_rules["rules_changed"]   # same rules: a sentence change is a difference
+    value_diff = cases.compare(spec, dict(got, values={"label": "다른 동"}), fact_rules=1)
+    assert value_diff["status"] == "DIFF"   # values are always compared
+
+
+def test_one_failing_case_does_not_stop_the_run_and_nothing_is_committed(monkeypatch):
+    class FakeDb:
+        commits = rollbacks = 0
+
+        def commit(self):
+            FakeDb.commits += 1
+
+        def rollback(self):
+            FakeDb.rollbacks += 1
+
+    def boom(db, spec):
+        raise ValueError("행정동을 찾을 수 없습니다")
+
+    def fine(db, spec):
+        return {"far": 225.0}, ["근거"]
+
+    monkeypatch.setattr(cases, "RUNNERS", {"area": boom, "scenario": fine})
+    doc = {"recorded_on": "2026-10-08", "cases": [{"id": "A", "kind": "area", "title": "a", "input": {}}, {"id": "B", "kind": "scenario", "title": "b", "input": {}}]}
+    lines = []
+    recorded = cases.record(FakeDb(), doc, note="test", log=lines.append)
+    assert "expected" not in recorded["cases"][0] and recorded["cases"][1]["expected"]["values"] == {"far": 225.0}
+    assert recorded["data_note"] == "test" and "expected" not in doc["cases"][1]   # the input document is not changed
+    report = cases.verify(FakeDb(), recorded, log=lines.append)
+    # A는 기준 PC에서도 계산되지 않아 기준값이 없다: 견줄 값이 없으므로 '기준값 없음'으로 세고, 기준값이 있는 B가 일치하면 통과
+    assert report["counts"] == {"MATCH": 1, "DIFF": 0, "ERROR": 0, "NOT_RECORDED": 1} and report["all_match"]
+    assert FakeDb.commits == 0 and FakeDb.rollbacks >= 1
+    assert any(line.startswith("[기준값 없음] A") and "기록되지 않은 사례" in line for line in lines) and any(line.startswith("[일치] B") for line in lines)
+    assert any("기준값이 있는 1개 사례 모두 일치" in line and "기록되지 않은 사례 1개" in line for line in lines)
+    # 기준값이 있는 사례가 이 PC에서 오류면 실패 그대로
+    broken = json.loads(json.dumps(recorded)); broken["cases"][0]["expected"] = {"values": {"x": 1}, "facts": [], "facts_sha256": ""}
+    failed = cases.verify(FakeDb(), broken, log=lines.append)
+    assert failed["counts"]["ERROR"] == 1 and not failed["all_match"]
+    # 기준값이 하나도 없으면 통과가 아니다
+    empty = {"cases": [{"id": "A", "kind": "area", "title": "a", "input": {}}]}
+    assert not cases.verify(FakeDb(), empty, log=lines.append)["all_match"]
+    only = cases.verify(FakeDb(), recorded, only={"B"}, log=lines.append)
+    assert only["all_match"] and only["counts"]["MATCH"] == 1
+    json.dumps(report, default=str)
+
+
+def test_scenario_case_uses_the_engine_without_saving(monkeypatch):
+    import app.main as main
+    seen = {}
+
+    def compute(db, request):
+        seen["request"] = request
+        return {"grid_id": request.grid_id, "far": 225.0, "bcr": 15.0, "gross_floor_area": 90000.0, "annual": {"current": {"carbon_kg": 10.0}, "scenario": {"carbon_kg": 8.0}},
+                "percent_change": {"carbon_kg": -20.0}, "monthly": [], "zoning_check": {"zones": [{"zone": "제3종일반주거지역", "share": 99.85}], "far_limit": 300.0},
+                "legal_status": "조례 기본 상한 이내", "assumptions": ["가정 1"], "_region": "52110"}
+
+    class FakeDb:
+        def rollback(self):
+            seen["rolled_back"] = True
+
+    monkeypatch.setattr(main, "compute_scenario", compute)
+    spec = {"id": "J06", "kind": "scenario", "input": {"site_area": 40000, "building_count": 10, "footprint_per_building": 600, "floors": 15,
+                                                         "households": 1000, "population": 2500, "average_household_area": 84, "green_ratio": 0.3,
+                                                         "grid_id": "cell_966500_1764500", "region": "52110"}}
+    got = cases.run_one(FakeDb(), spec)
+    assert seen["rolled_back"] and seen["request"].floors == 15
+    assert got["values"]["far"] == 225.0 and got["values"]["zoning.dominant_zone"] == "제3종일반주거지역" and got["values"]["carbon_change_pct"] == -20.0
+    assert got["facts"] == ["가정 1"]
+
+
+def test_collection_progress_is_part_of_the_data_fingerprint(tmp_path, monkeypatch):
+    """A 건축HUB year counts as finished only when data/ops/history-progress.json says so (not in the DB): a PC that
+    imported the same rows without that file reads the year as 잠정값. The fingerprint shows it and verify says why."""
+    from app.energy_parcels import year_complete
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    assert year_complete(2025) is False                                       # no progress file
+    (tmp_path / "ops").mkdir()
+    # a bundle's collection-progress.json written by Windows PowerShell may carry a BOM
+    (tmp_path / "ops" / "history-progress.json").write_bytes(
+        b"\xef\xbb\xbf" + json.dumps({"runs": [], "items": {"energy:2025": {"status": "DONE", "scope": "all_parcels"}}}).encode())
+    assert year_complete(2025) is True and year_complete(2024) is False
+
+    expected = {"region": "52110", "hub_year_complete.2025": True}
+    spec = {"id": "D01", "kind": "dataset", "title": "d", "input": {"region": "52110"},
+            "expected": {"values": expected, "facts": [], "facts_sha256": cases.facts_hash([])}}
+    monkeypatch.setattr(cases, "RUNNERS", {"dataset": lambda db, s: ({"region": "52110", "hub_year_complete": {"2025": False}}, [])})
+
+    class FakeDb:
+        def rollback(self):
+            pass
+
+    lines = []
+    report = cases.verify(FakeDb(), {"cases": [spec]}, log=lines.append)
+    assert report["results"][0]["diffs"][0]["label"] == "건축HUB 2025년 수집 완료 표시"
+    assert any("history-progress.json" in line for line in lines)
+
+
+def test_cached_area_inputs_are_dropped_when_the_cases_move_to_another_region(monkeypatch):
+    """Four regions in one verify-cases process filled the PC's memory (2026-10-27): the cache is emptied per region."""
+    from app import area
+    calls = []
+    monkeypatch.setattr(area, "forget_inputs", lambda: calls.append(1))
+    monkeypatch.setattr(cases, "RUNNERS", {"scenario": lambda db, spec: ({"far": 1.0}, [])})
+    doc = {"recorded_on": "2026-10-27", "cases": [{"id": i, "kind": "scenario", "title": i, "input": {"region": r}}
+                                                  for i, r in (("A", "52110"), ("B", "52110"), ("C", "41110"))]}
+
+    class Db:
+        def rollback(self):
+            pass
+    recorded = cases.record(Db(), doc, log=lambda m: None)
+    assert len(calls) == 2           # first region, then 41110 — not again for the second 52110 case
+    cases.verify(Db(), recorded, log=lambda m: None)
+    assert len(calls) == 4

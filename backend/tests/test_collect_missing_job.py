@@ -1,0 +1,165 @@
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app import history, tasks
+from app.models import CollectionJob, CollectionJobConfig
+
+
+def make_job():
+    engine = create_engine('sqlite+pysqlite:///:memory:')
+    CollectionJob.__table__.create(engine)
+    CollectionJobConfig.__table__.create(engine)
+    db = sessionmaker(engine)()
+    job = CollectionJob(id='j1', datasets=[tasks.ALL_MISSING], start_month='2015-01', end_month='2025-12', status='QUEUED', progress=0, message='대기', errors=[])
+    db.add(job)
+    db.commit()
+    return db, job
+
+
+def test_quota_makes_the_job_wait_and_schedules_its_own_resume(monkeypatch):
+    db, job = make_job()
+    scheduled = []
+    monkeypatch.setattr(history, 'collect_missing', lambda db, a, b, **k: {
+        'items': {'kapt_energy:2019': {'status': 'FAILED', 'reason': '한도 초과(22)'}, 'sgis:2019': {'status': 'DONE'}},
+        'blocked': {'kapt_energy': '한도 초과(22)'}, 'quota': {'kapt_energy': '한도 초과(22)'}, 'resume_at': '2026-09-26T15:20:00+00:00'})
+    monkeypatch.setattr(tasks.run_collection, 'apply_async', lambda args, eta: scheduled.append((args, eta)))
+    tasks.run_all_missing(db, job)
+    job = db.get(CollectionJob, 'j1')
+    assert job.status == 'WAITING'
+    assert job.resume_at is not None and '09월 27일 00:20' in job.message
+    assert scheduled and scheduled[0][0] == ('j1',)
+    assert job.errors[0]['dataset'] == 'kapt_energy'
+
+
+def test_kapt_gateway_gaps_make_the_job_wait_and_ask_again(monkeypatch):
+    db, job = make_job()
+    scheduled = []
+    monkeypatch.setattr(history, 'collect_missing', lambda db, a, b, **k: {
+        'items': {'kapt_energy:2025': {'status': 'PARTIAL', 'kind': 'PROVIDER'}, 'sgis:2025': {'status': 'DONE'}},
+        'blocked': {}, 'quota': {}, 'resume_at': None,
+        'provider_retry': ['kapt_energy:2025'], 'provider_retry_at': '2026-09-26T13:00:00+00:00'})
+    monkeypatch.setattr(tasks.run_collection, 'apply_async', lambda args, eta: scheduled.append((args, eta)))
+    tasks.run_all_missing(db, job)
+    job = db.get(CollectionJob, 'j1')
+    assert job.status == 'WAITING' and '2025년' in job.message and '09월 26일 22:00' in job.message
+    assert scheduled and scheduled[0][0] == ('j1',)
+
+
+def test_finished_run_reports_what_is_left(monkeypatch):
+    db, job = make_job()
+    monkeypatch.setattr(history, 'collect_missing', lambda db, a, b, **k: {
+        'items': {'building_register': {'status': 'BLOCKED', 'reason': '활용신청 필요'}, 'sgis:2019': {'status': 'DONE'}},
+        'blocked': {'building_register': '활용신청 필요'}, 'quota': {}, 'resume_at': None})
+    tasks.run_all_missing(db, job)
+    job = db.get(CollectionJob, 'j1')
+    assert job.status == 'PARTIAL' and job.progress == 100.0
+    assert '남은 항목 1개' in job.message
+
+
+def test_a_run_already_in_progress_fails_this_job_cleanly(monkeypatch):
+    db, job = make_job()
+
+    def locked(*a, **k):
+        raise RuntimeError("다른 '빠진 자료 수집'이 이미 실행 중입니다")
+
+    monkeypatch.setattr(history, 'collect_missing', locked)
+    tasks.run_all_missing(db, job)
+    job = db.get(CollectionJob, 'j1')
+    assert job.status == 'FAILED' and '이미 실행 중' in job.message
+
+
+def test_running_job_without_its_live_guard_is_restarted(monkeypatch):
+    db, job = make_job()
+    job.status = 'RUNNING'
+    db.commit()
+    sent = []
+    monkeypatch.setattr(history, 'lock_held', lambda *a, **k: False)
+    monkeypatch.setattr('time.sleep', lambda s: None)
+    monkeypatch.setattr(tasks.run_collection, 'delay', lambda job_id: sent.append(job_id))
+    restarted = tasks.resume_overdue(db)
+    assert restarted is not None and restarted.status == 'QUEUED' and sent == ['j1']
+
+
+def test_running_job_with_a_live_guard_is_left_alone(monkeypatch):
+    db, job = make_job()
+    job.status = 'RUNNING'
+    db.commit()
+    monkeypatch.setattr(history, 'lock_held', lambda *a, **k: True)
+    assert tasks.stale_running(db) is None
+    monkeypatch.setattr(history, 'lock_held', lambda *a, **k: None)  # no Redis: never guess
+    assert tasks.stale_running(db) is None
+
+
+def test_an_older_timer_does_not_start_a_job_that_waits_for_a_later_time(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    db, job = make_job()
+    started = []
+    monkeypatch.setattr(tasks, 'run_all_missing', lambda db, job: started.append(job.id))
+    monkeypatch.setattr(tasks, 'Session', lambda: db)
+    monkeypatch.setattr(db, 'close', lambda: None, raising=False)
+    job.status = 'WAITING'
+    job.resume_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    db.commit()
+    tasks.run_collection('j1')
+    assert started == []  # the timer for the later time will start it
+    job.resume_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    db.commit()
+    tasks.run_collection('j1')
+    assert started == ['j1']
+    job.status = 'RUNNING'
+    db.commit()
+    monkeypatch.setattr(history, 'lock_held', lambda *a, **k: True)
+    tasks.run_collection('j1')
+    assert started == ['j1']  # a live run holds the guard: this delivery does nothing
+
+
+def test_overdue_waiting_job_actually_starts_when_resumed(monkeypatch):
+    # The timed resume is lost when the PC or worker was off at the resume time. Reading the missing
+    # plan re-queues it; that delivery must start the run instead of being taken for an older timer.
+    from datetime import datetime, timedelta, timezone
+    db, job = make_job()
+    job.status = 'WAITING'
+    job.resume_at = datetime.now(timezone.utc) - timedelta(hours=9)
+    db.commit()
+    sent, started = [], []
+    monkeypatch.setattr(history, 'lock_held', lambda *a, **k: None)
+    monkeypatch.setattr(tasks.run_collection, 'delay', lambda job_id: sent.append(job_id))
+    monkeypatch.setattr(tasks, 'run_all_missing', lambda db, job: started.append(job.id))
+    monkeypatch.setattr(tasks, 'Session', lambda: db)
+    monkeypatch.setattr(db, 'close', lambda: None, raising=False)
+    tasks.resume_overdue(db)
+    assert sent == ['j1']
+    tasks.run_collection('j1')
+    assert started == ['j1']
+    assert tasks.resume_overdue(db) is None or sent == ['j1']  # not queued a second time
+
+
+def test_queued_job_whose_delivery_was_lost_is_sent_again_once(monkeypatch):
+    # UX 검토 F11: a job queued days ago stayed '대기 중' with the button locked; the worker never got it.
+    from datetime import datetime, timedelta, timezone
+    db, job = make_job()
+    job.created_at = datetime.now(timezone.utc) - timedelta(days=2)
+    job.progress = 100.0
+    db.commit()
+    sent = []
+    monkeypatch.setattr(history, 'lock_held', lambda *a, **k: False)
+    monkeypatch.setattr('time.sleep', lambda s: None)
+    monkeypatch.setattr(tasks.run_collection, 'delay', lambda job_id: sent.append(job_id))
+    assert tasks.resume_overdue(db) is not None and sent == ['j1']
+    job = db.get(CollectionJob, 'j1')
+    assert job.status == 'QUEUED' and job.resume_at is not None and '다시 보냈습니다' in job.message
+    tasks.resume_overdue(db)
+    assert sent == ['j1']  # sent just now: not again on the next read
+
+
+def test_queued_job_is_left_alone_while_fresh_or_without_redis(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    db, job = make_job()
+    monkeypatch.setattr(history, 'lock_held', lambda *a, **k: False)
+    assert tasks.stale_queued(db) is None  # queued just now
+    job.created_at = datetime.now(timezone.utc) - timedelta(hours=3)
+    db.commit()
+    monkeypatch.setattr(history, 'lock_held', lambda *a, **k: None)  # no Redis: never guess
+    assert tasks.stale_queued(db) is None
+    monkeypatch.setattr(history, 'lock_held', lambda *a, **k: True)  # a run is alive
+    assert tasks.stale_queued(db) is None
