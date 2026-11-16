@@ -14,7 +14,7 @@ describe('탄소공간지도 100m 전기 배출 helpers', () => {
     expect(kcsmFill(cell({ elec_t: 0, status: 'zero' }), c)).toBe(KCSM_ZERO_FILL);
     expect(kcsmFill(cell({ elec_t: null, status: 'missing' }), c)).toBeNull();
     expect(kcsmFill(cell({ elec_t: 30 }), c)).toBe(c.classes[1].color);
-    expect(kcsmValueText({ elec_t: 0 })).toContain('확인 필요');
+    expect(kcsmValueText({ elec_t: 0 })).toContain('제공값');
     expect(kcsmValueText({ elec_t: null })).toBe('값 없음');
     const expr = kcsmColor(c) as unknown[];
     expect(expr[0]).toBe('case');

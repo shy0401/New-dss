@@ -88,6 +88,8 @@ export interface AreaHistory {
     admin_exact: boolean;
     admin_names: string[];
     admin_labels?: string[];
+    /** 구역이 500m 격자와 크기가 많이 다를 때의 안내 (좁은 구역 등) */
+    warnings?: string[];
   };
   energy: YearTable<EnergyYear>;
   weather: YearTable<WeatherYear>;
@@ -519,7 +521,7 @@ export function eventYears(history: AreaHistory): number[] {
 export function effortHeadline(effort: EffortResult | null | undefined): { tone: 'good' | 'warn' | 'bad'; text: string } | null {
   if (!effort) return null;
   if (!effort.available) return { tone: 'warn', text: effort.reason ?? '감축 노력을 계산할 근거가 없습니다.' };
-  if (effort.already_met) return { tone: 'good', text: `계획을 반영해도 목표 ${effort.target_pct}% 감축선 아래입니다. 추가 감축이 필요하지 않습니다.` };
+  if (effort.already_met) return { tone: 'good', text: `계획을 반영해도 목표 ${effort.target_pct}% 감축선(${effort.baseline_year ? `${effort.baseline_year}년 관측 기준` : '기준 연도 대비'}, 국가 목표의 2018년 기준과 다름) 아래입니다. 추가 감축이 필요하지 않습니다.` };
   const o = effort.options;
   if (effort.feasible_with_new_only && o?.new_only_efficiency_pct !== null && o?.new_only_efficiency_pct !== undefined) {
     return { tone: 'warn', text: `신축 건물만으로 달성하려면 신축 부하를 ${o.new_only_efficiency_pct}% 줄여야 합니다.` };

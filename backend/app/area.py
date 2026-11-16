@@ -116,6 +116,40 @@ def circle_geometry(lon: float, lat: float, radius_m: float, steps: int = 64) ->
     return {"type": "Polygon", "coordinates": [coords]}
 
 
+def geometry_area_m2(geometry: dict[str, Any] | None) -> float | None:
+    """Approximate area of a lon/lat (EPSG:4326) polygon in m² (local equirectangular, outer rings minus holes)."""
+    polygons = _polygons(geometry)
+    if not polygons:
+        return None
+    lat0 = math.radians(sum(p[1] for poly in polygons for p in poly[0]) / max(1, sum(len(poly[0]) for poly in polygons)))
+    k = 6_371_008.8 * math.pi / 180
+
+    def ring_area(ring: list[list[float]]) -> float:
+        pts = [(x * k * math.cos(lat0), y * k) for x, y, *_ in ring]
+        return abs(sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(pts, pts[1:] + pts[:1]))) / 2
+
+    return sum(ring_area(poly[0]) - sum(ring_area(h) for h in poly[1:]) for poly in polygons)
+
+
+CELL_AREA_M2 = 250_000.0  # one 500m grid
+
+
+def area_warnings(kind: str, geometry: dict[str, Any] | None, grid_count: int) -> list[str]:
+    """Warn when the 500m grids picked by centroid stand for the drawn area badly (면담 2026-11-11: 좁은 개발지)."""
+    if kind in ("grid", "zone"):
+        return []
+    if grid_count == 0:
+        return ["구역 안에 중심점이 든 500m 격자가 없어 격자 값(건축HUB · 지도 지표)은 비어 있습니다(0이 아님). 구역을 넓히거나 격자를 직접 고르세요."]
+    area = geometry_area_m2(geometry)
+    if not area:
+        return []
+    ratio = grid_count * CELL_AREA_M2 / area
+    if not (0.5 <= ratio <= 2.0):
+        return [f"구역(약 {area / 1e6:,.2f} km²)과 고른 500m 격자 {grid_count}개({grid_count * CELL_AREA_M2 / 1e6:,.2f} km²)의 넓이가 많이 달라, "
+                f"격자 값에는 구역 밖이 섞이거나 구역 일부가 빠집니다. 좁은 개발지는 공동주택 단지 값(K-apt)을 함께 보세요."]
+    return []
+
+
 def region_label(region: dict[str, Any] | None) -> str:
     """Name used in sentences for the region-wide intensity: '전주' for the original region, else the short name."""
     if not region or region.get("is_default", True):
@@ -208,6 +242,7 @@ def resolve_area(spec: dict[str, Any], grids: list[dict[str, Any]], complexes: l
         "admin_codes": admin_codes, "admin_exact": kind == "admin",
         "admin_names": {f["properties"]["adm_code"]: f["properties"].get("adm_name") for f in overlapping},
         "admin_labels": [short_admin_name(f["properties"].get("adm_name")) for f in overlapping],
+        "warnings": area_warnings(kind, geometry, len(grid_ids)),
     }
 
 
@@ -1166,7 +1201,8 @@ def area_facts(history: dict[str, Any], comparison: dict[str, Any] | None = None
             t = trend
             add("building_energy_trend", f"{t['from']}년과 {t['to']}년 모두 12개월 계측된 같은 지번 {t['same_parcels']:,}곳의 전력은 {t['same_from_kwh']:,.0f} kWh에서 "
                 f"{t['same_to_kwh']:,.0f} kWh로 {t['same_change_pct']:+,.1f}% 변했습니다. 한 해에만 계측된 지번은 {only_in(t['to'], t['new_parcels'], t['new_kwh'])}, "
-                f"{only_in(t['from'], t['gone_parcels'], t['gone_kwh'])}입니다(신축·계량 변경·다른 지번으로의 기록 이동이 섞일 수 있음).",
+                f"{only_in(t['from'], t['gone_parcels'], t['gone_kwh'])}입니다(신축·계량 변경·다른 지번으로의 기록 이동이 섞일 수 있음). "
+                "공동주택 지번은 건축HUB가 싣는 범위가 해마다 넓어져, 같은 지번 비교에도 그 몫이 섞입니다(같은 단지의 K-apt 관리비 전력과 대조해 확인).",
                 t["from"], t["to"], t["same_parcels"], t["same_from_kwh"], t["same_to_kwh"], t["same_change_pct"],
                 *([t["new_parcels"], t["new_kwh"]] if t["new_parcels"] else []), *([t["gone_parcels"], t["gone_kwh"]] if t["gone_parcels"] else []),
                 signed_pct=t["same_change_pct"])

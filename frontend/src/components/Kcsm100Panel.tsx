@@ -36,7 +36,7 @@ export function Kcsm100Panel({ gridId, year, region }: { gridId: string; year: n
       </div>
       {picked && <dl className="fact-list grid100-picked">{kcsmLines(picked, y).map(([k, v]) => <div className="fact" key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>}
       {s && <p className="muted">25칸 합 {s.total_t === null ? '값 없음' : formatMetric(s.total_t, 'tCO₂eq', 1)}{s.prev_total_t != null && data.features[0]?.properties.prev_year ? ` (${data.features[0].properties.prev_year}년 ${formatMetric(s.prev_total_t, 't', 1)})` : ''} · 값 있는 칸 {s.value_cells} · 0 {s.zero_cells}{s.drop_cells ? ` · 급감 ${s.drop_cells}칸` : ''}</p>}
-      <Note label="자료 읽는 법"><p className="muted">선도소프트가 준 탄소공간지도 값(건물 전기, 산정 계수 확인 필요)입니다. 0은 제공값으로, 건물이 없는 칸인지 사용량이 연계되지 않은 칸인지 확인이 필요합니다. 이용 조건을 확인하기 전이라 이 PC 화면에서만 보입니다.</p></Note>
+      <Note label="자료 읽는 법"><p className="muted">선도소프트가 준 탄소공간지도 값(건물 전기)입니다. 0은 제공값입니다. 면담(2026-11-11)에서 공동주택은 단지 전체 사용량을 대표 지번이 든 칸 하나에 넣는다는 답을 받아, 단지 안의 다른 칸은 0일 수 있습니다. 산정 계수는 면담에서 0.4911이라 들었으나 공개 자료로 확인하지 못했습니다. 이용 조건을 확인하기 전이라 이 PC 화면에서만 보입니다.</p></Note>
     </>}
   </section>;
 }
