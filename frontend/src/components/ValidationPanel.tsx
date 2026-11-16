@@ -51,7 +51,7 @@ export function ValidationPanel({ regionQuery }: { regionQuery: string }) {
     <p className="muted">같은 양을 다른 기관이 센 통계와 비교합니다. 어느 한쪽을 정답으로 보지 않고, 차이와 그 까닭(포함 범위)을 함께 봅니다.</p>
     <h4>전력: 건축HUB 지번 합계 ↔ 한전 시군구 건물 전력</h4>
     {e.length ? <div className="table-wrap"><table>
-      <thead><tr><th>연도</th><th className="num">건축HUB (GWh)</th><th className="num">한전 건물 (GWh)</th><th className="num" title="그 지역 건물 전력 가운데 계량 자료에 들어 있는 비율 (이전 표기: 덮음)">계측 포함률</th><th className="num">월별 상관</th><th className="num">달마다 비율</th><th className="num">한전 합계 (GWh)</th></tr></thead>
+      <thead><tr><th>연도</th><th className="num">건축HUB (GWh)</th><th className="num">한전 건물 (GWh)</th><th className="num" title="그 지역 건물 전력 가운데 계량 자료에 들어 있는 비율">계측 포함률</th><th className="num">월별 상관</th><th className="num">달마다 비율</th><th className="num">한전 합계 (GWh)</th></tr></thead>
       <tbody>{e.map((y) => <tr key={y.year}><td>{y.year}{y.hub_months < 12 ? ` (${y.hub_months}개월)` : ''}</td><td className="num">{num(y.hub_gwh, '', 1)}</td><td className="num">{num(y.kepco_building_gwh, '', 1)}</td>
         <td className="num">{pct(y.coverage_building, 1)}</td><td className="num">{num(y.monthly_r, '', 3)}</td>
         <td className="num">{y.ratio_min === null ? '—' : `${pct(y.ratio_min)}~${pct(y.ratio_max)}`}</td><td className="num">{num(y.kepco_total_gwh, '', 1)}</td></tr>)}</tbody>
