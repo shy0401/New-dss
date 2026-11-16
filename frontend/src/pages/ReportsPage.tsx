@@ -71,12 +71,17 @@ export function ReportsPage() {
       {scenarios.loading || (!gridId && scope.loading) ? <LoadingState label="대상지와 계획안을 확인하는 중입니다" /> : rows.length ? <div className="scenario-picker">{rows.map((s) => { const order = chosen.indexOf(s.id); const sv = s.result?.savings_pct?.carbon_kg; return <label key={s.id} className={order >= 0 ? `chosen plan-${PLAN[order]}` : undefined}><input type="radio" name="report-plan" checked={order >= 0} onChange={(e) => toggle(s.id, e.target.checked)} /><span><strong>{s.inputs.floors}층 · {s.inputs.building_count}동 · 연면적 {formatMetric(Number(s.result?.gross_floor_area), 'm²')}</strong><small>{new Date(s.created_at).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} 계산 · 연간 {tonnes(s.result?.annual?.scenario?.carbon_kg)}{typeof sv === 'number' ? ` · 기준안 대비 ${savingsText(sv)}` : ''}{s.has_image ? ' · 3D 장면 있음' : ''}</small>{s.result?.legal_status && s.result.legal_status !== '법적 상한 미확정' && <small className={String(s.result.legal_status).includes('초과') ? 'legal over' : 'legal'}>{String(s.result.legal_status)}</small>}</span>{order >= 0 && <i className="plan-chip">이 계획안</i>}</label>; })}</div> : <EmptyState title="이 대상지에 계산한 계획안이 없습니다" description="시뮬레이션에서 ‘시나리오 계산’ 뒤 ‘보고서 작성’을 누르면 그 계획안의 보고서가 바로 만들어집니다." />}
       {scenarios.error && <p role="alert" className="inline-error">{scenarios.error}</p>}<div className="report-actions"><label className="ai-option"><input type="checkbox" checked={useLocal} disabled={engine.data?.status !== 'READY' || busy} onChange={(e) => setUseLocal(e.target.checked)} /><Sparkles size={16} aria-hidden="true" />로컬 AI로 요약 문장 고르기<small>{engine.data?.status === 'READY' ? engine.data.model : '로컬 모델 준비 전, 검증된 서식 사용'}</small></label><button className="button primary" disabled={busy} onClick={() => void generate()}><FileText size={16} />{busy ? '보고서 작성 중…' : chosen.length ? '보고서 작성 (감축 방안 포함)' : '현황 보고서 작성'}</button></div><p className="muted">숫자는 모두 계산 엔진에서 가져오며, AI는 검증된 근거 문장을 고르기만 합니다.</p></section>
     {error && <p role="alert" className="inline-error">{error}</p>}
-    {saved.data?.length ? <section className="report-history"><label>작성 이력<span className="select-wrap"><select aria-label="저장 보고서" value={report?.id ?? ''} onChange={(e) => e.target.value && void open(e.target.value)}><option value="">이전 보고서 열기</option>{saved.data.map((r) => <option key={r.id} value={r.id}>{new Date(r.created_at).toLocaleString('ko-KR')} · {r.year}년 · 계획안 {r.scenario_count ?? 0}개</option>)}</select></span></label></section> : null}</div>
+    {saved.data?.length ? <section className="report-history"><label>작성 이력<span className="select-wrap"><select aria-label="저장 보고서" value={report?.id ?? ''} onChange={(e) => e.target.value && void open(e.target.value)}><option value="">이전 보고서 열기</option>{saved.data.map((r) => <option key={r.id} value={r.id}>{new Date(r.created_at).toLocaleString('ko-KR')} · {r.year}년 · 계획안 {r.scenario_count ?? 0}개{isOldStandard(r.created_at) ? ' · 옛 기준' : ''}</option>)}</select></span></label></section> : null}</div>
     {report && <><div className="report-export no-print"><span className="status-tag">{report.summary.mode === 'LOCAL_SLM' ? '로컬 AI 요약 문장 선택' : '검증된 서식 보고서'}</span><a className="button secondary" href={`/api/reports/${report.id}/markdown`}><Download size={15} />문서 내려받기</a><button className="button secondary" onClick={() => window.print()}><Printer size={15} />인쇄 · PDF 저장</button></div>
       {report.scenarios.length ? <PlanReport report={report} /> : <StatusReport report={report} />}</>}
   </div>;
 }
 
+const OLD_STANDARD_BEFORE = '2026-11-11';  // 감축 방안을 실측 지표로 바꾸고 히트펌프 단계를 뺀 날 (DATA_STANDARD 1.9)
+function isOldStandard(createdAt: string) { return createdAt.slice(0, 10) < OLD_STANDARD_BEFORE; }
+function OldStandardNote({ createdAt }: { createdAt: string }) {
+  return isOldStandard(createdAt) ? <p className="status-tag warn report-old-standard" role="note">옛 기준 보고서: 2026-11-11 이전 감축 방안(가정값 · 히트펌프 단계)으로 작성되어 지금 기준과 숫자가 다릅니다.</p> : null;
+}
 function placeOf(report: Report) { return report.place || '대상지'; }
 function dateOf(value: string) { return new Date(value).toLocaleString('ko-KR', { dateStyle: 'long', timeStyle: 'short' }); }
 
@@ -91,6 +96,7 @@ function PlanReport({ report }: { report: Report }) {
     <p className="report-kicker">Carbon Urban DSS 검토 보고서</p>
     <h1>{report.title}</h1>
     <p className="report-subtitle">{placeOf(report)} · {report.year}년 기준 · 계획안 {plans.length}개</p>
+    <OldStandardNote createdAt={report.created_at} />
     <dl className="report-title-block plan"><div><dt>대상지</dt><dd>{placeOf(report)}</dd></div><div><dt>기준연도</dt><dd>{report.year}</dd></div><div><dt>계획안</dt><dd>{plans.map((p) => p.label ?? '').join(' · ')}</dd></div><div><dt>작성일</dt><dd>{dateOf(report.created_at)}</dd></div></dl>
     <section className="report-section"><h2>1. 핵심 결과</h2>
       <div className="plan-rows">{plans.map((s, i) => { const plan = annualSide(s.result, 'scenario'); const ref = annualSide(s.result, 'reference'); const sv = s.result.savings_pct?.carbon_kg ?? null; const legal = s.result.zoning_check?.check?.label ?? s.result.legal_status; return <div key={s.id} className={`plan-row${s.has_image ? '' : ' no-figure'}`}>
@@ -184,6 +190,7 @@ function StatusReport({ report }: { report: Report }) {
     <p className="report-kicker">Carbon Urban DSS 검토 보고서</p>
     <h1>{report.title}</h1>
     <p className="report-subtitle">{placeOf(report)} · {report.year}년 기준</p>
+    <OldStandardNote createdAt={report.created_at} />
     <dl className="report-title-block plan"><div><dt>대상지</dt><dd>{placeOf(report)}</dd></div><div><dt>기준연도</dt><dd>{report.year}</dd></div><div><dt>자료 범위</dt><dd>전력 {report.coverage.electricity_months}/12개월 · 가스 {report.coverage.gas_months}/12개월</dd></div><div><dt>작성일</dt><dd>{dateOf(report.created_at)}</dd></div></dl>
     <section className="report-section"><h2>1. 검토 요약</h2>{report.summary.paragraphs.map((p, i) => <p key={i}>{p}</p>)}{report.summary.reason && <p className="muted">{report.summary.reason}</p>}</section>
     <section className="report-section"><h2>2. 대상지 개요</h2><ul className="report-list"><li>대상지: {placeOf(report)} (500m 분석 격자 한 칸, 25만 m²), 기준연도 {report.year}</li>{context.filter((f) => OVERVIEW_FACTS.includes(f.id)).map((f) => <li key={f.id}>{f.text}</li>)}</ul></section>

@@ -8,7 +8,7 @@ export interface KcsmProps {
   id: string; x: number; y: number; grid500: string;
   /** 연간 건물 전기 배출, tCO₂eq (제공 값). */
   elec_t: number | null;
-  /** value: 0보다 큼, zero: 제공값 0(건물 없음인지 미연계인지 확인 필요), missing: 값 없음. */
+  /** value: 0보다 큼, zero: 제공값 0(공동주택은 단지 사용량이 대표 지번 칸에 몰려 다른 칸이 0일 수 있음, 면담 2026-11-11), missing: 값 없음. */
   status: 'value' | 'zero' | 'missing';
   prev_year: number | null; prev_t: number | null; change_pct: number | null;
   /** 앞 해 100 tCO₂eq 이상이던 칸이 절반 아래로 줄어 원자료 누락이 의심됨(표시만). */
@@ -58,7 +58,7 @@ export function kcsmClassLabel(classification: Classification, i: number): strin
 
 export function kcsmValueText(p: Pick<KcsmProps, 'elec_t'>): string {
   if (p.elec_t === null) return '값 없음';
-  if (p.elec_t === 0) return '0 (제공값, 건물 없음인지 확인 필요)';
+  if (p.elec_t === 0) return '0 (제공값 · 단지 사용량은 대표 칸에 몰림)';
   return formatMetric(p.elec_t, 'tCO₂eq/년', p.elec_t < 10 ? 2 : 1);
 }
 
