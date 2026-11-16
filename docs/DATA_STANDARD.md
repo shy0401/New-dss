@@ -35,8 +35,8 @@
 | SGIS 행정동 통계·경계 | [SGIS 오픈API](https://sgis.mods.go.kr/developer/html/openApi/api/data.html) | 인구·가구·주택, 행정동 경계 | 통계 연도(최신 2024) | 지역 준비 `sgis_admin` | 행정동 값을 격자에 나눠 넣지 않는다 |
 | SGIS 500m 격자 통계 | [SGIS 자료제공](https://sgis.mods.go.kr/view/pss/dataProvdIntrcn) (신청) | 칸별 인구·가구·주택·사업체·종사자 | 2000~2024 | 받은 CSV → `data/raw/sgis_grid_500m/` → 자동 가져오기 | 비밀보호 잡음 포함. 받은 묶음에 없는 블록·주제는 "통계 없음" |
 | SGIS 1km 격자 통계 | 공공데이터포털 15141768 | 칸별 인구·가구·주택 노후 등 | 2024 | `import-sgis-grid` | 500m에 나눠 넣지 않는다 |
-| 기상청 ASOS | [공공데이터포털 15059093](https://www.data.go.kr/data/15059093/openapi.do) | 일평균기온 → 월 난방·냉방도일, 합계 일사량(MJ/m²) | 일 | `Collect` (전주 146) | 그달 일평균이 하루라도 없으면 그달 도일은 NULL. 일사량은 한 해 모든 날이 있을 때만 연간 값 |
-| ERA5-Land · ERA5 (대체) | [Open-Meteo 과거 기상](https://open-meteo.com/en/docs/historical-weather-api) | 일평균기온(ERA5-Land), 일 일사량 `shortwave_radiation_sum`(MJ/m², **ERA5** — Open-Meteo의 ERA5-Land는 일사량이 비어 옴) | 일 | 지역 준비 `weather`, `backfill-solar` | ASOS가 없을 때만, `FALLBACK`으로 표시. 일사량은 빠진 날이 있는 달을 NULL로 저장 |
+| 기상청 ASOS | [공공데이터포털 15059093](https://www.data.go.kr/data/15059093/openapi.do) | 일평균기온 → 월 난방·냉방도일, 합계 일사량(MJ/m²) | 일 | `Collect` (전주 146), 지역 준비 `weather` (같은 시 · 군의 관측소: 서울 108(강동구), 부산 159(강서구), 세종 239, 수원 119, 군산 140, 정읍 245, 남원 247, 장수 248, 임실 244, 순창 254, 고창 172, 부안 243) | 그달 일평균이 하루라도 없으면 그달 도일은 NULL. 일사량은 한 해 모든 날이 있을 때만 연간 값 |
+| ERA5-Land · ERA5 (대체) | [Open-Meteo 과거 기상](https://open-meteo.com/en/docs/historical-weather-api) | 일평균기온(ERA5-Land), 일 일사량 `shortwave_radiation_sum`(MJ/m², **ERA5** — Open-Meteo의 ERA5-Land는 일사량이 비어 옴) | 일 | 지역 준비 `weather`, `backfill-solar` | 같은 시 · 군에 ASOS가 없거나 그달 ASOS가 다 차지 않을 때만, `FALLBACK`으로 표시. 다른 도시 관측소로 대체하지 않음. 일사량은 빠진 날이 있는 달을 NULL로 저장 |
 | 전력 배출계수 | [온실가스종합정보센터 승인 배출계수](https://www.gir.go.kr/home/index.do?menuId=36) | 소비단 CO2eq tCO2eq/MWh | 공표일 | 원문 PDF를 `data/raw/research/gir/`에 두면 증빙 확인 후 등록 | 5.4절 표 |
 | 한전 시군구 전력판매량 | [한전 전력판매량 게시판](https://www.kepco.co.kr/home/customer/library/electricity-statistics/sales-volume/boardList.do) | 시·군·구 × 월, 계약종별 kWh | 월 | 파일 → `data/raw/kepco/` | 총량 대조용. 격자에 나누지 않음 |
 | 지역 온실가스 인벤토리 | [GIR 지역 온실가스 통계](https://www.gir.go.kr/home/index.do?menuId=36) | 시·군·구 배출량, Gg CO2eq | 2010~2023 | 파일 → `data/raw/research/gir/` | 총량 대조용 |
@@ -225,6 +225,7 @@ docker compose -p carbon-urban-dss -f compose.yaml -f compose.demo.yaml exec -T 
 
 | 판 | 날짜 | 바뀐 것 |
 |---|---|---|
+| 1.13 | 2026-11-16 | 지역 기상(2절): 같은 시 · 군에 기상청 ASOS 관측소가 있으면 그 관측소의 완전월로 ERA5-Land 값을 바꿈(12개 지역, 다른 도시 관측소는 쓰지 않음). 도일 계산 규칙(5.10)은 그대로 |
 | 1.12 | 2026-11-16 | 도시가스 발열량(5.3) 출처 표기를 '에너지법 시행규칙 제5조(에너지열량 환산기준)'로 바로잡음. 값(42.7 · 38.5 MJ/Nm³)과 계산은 그대로 |
 | 1.11 | 2026-11-16 | 감축 수단 목록(5.15): 사다리에 넣지 않은 수단까지 14개를 한 표로 두고 수단마다 '따로 본 값'을 계산(신축 통합 기준 11.3%, 열회수 환기 3.5%, 세대 표시장치 11.7%, 나머지는 지표만). 시공 단계 내재탄소를 참고 계산으로 추가(445.4 kgCO2/m², 저탄소 콘크리트·모듈러·구조 방식·리모델링). 사다리 값과 저장된 값은 그대로 |
 | 1.10 | 2026-11-12 | 감축 지표의 실측 범위를 상수로 두고(단열·창호 20.5~25.8%, 운영 1.95~17.0%) 검토 보고서에 단계 감축량의 폭으로 함께 표시(5.15). 계산값(중앙값)과 저장된 값은 그대로 |
