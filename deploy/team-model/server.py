@@ -52,6 +52,29 @@ def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S%z")
 
 
+def _fix_band_sign(P: Any) -> None:
+    """Band of a predicted decrease (2026-11-16).
+
+    The team code scores residuals as (actual − predicted) / |predicted| but builds the band as predicted × (1 + q),
+    which flips the band when the prediction is negative (a decrease): q90 lands below q10. The right band is
+    predicted + q × |predicted|. Patch ``band_of`` once here so ``_predict_one`` and ``combine`` (which look it up in the
+    module at call time) use it; the bundle under data/raw is left as received.
+    """
+    if getattr(P, "_band_sign_fixed", False):
+        return
+    original = P.band_of
+
+    def band_of(bands, site_kind, change, settings, *args, **kwargs):
+        raw = original(bands, site_kind, change, settings, *args, **kwargs)
+        if change >= 0:
+            return raw
+        # raw = change × (1 + q)  →  q = raw / change − 1  →  change + q × |change| = 2 × change − raw
+        return {k: 2.0 * change - v for k, v in raw.items()}
+
+    P.band_of = band_of
+    P._band_sign_fixed = True
+
+
 def train() -> None:
     snap, code = find_code()
     if code is None:
@@ -64,6 +87,7 @@ def train() -> None:
         import sklearn
         from urban_carbon.core.paths import ProjectPaths
         from urban_carbon.modeling import predict as P
+        _fix_band_sign(P)
         from urban_carbon.modeling.settings import load_baseline, load_change
 
         STATE.update(snapshot=snap, versions={"python": sys.version.split()[0], "numpy": numpy.__version__, "pandas": pandas.__version__,
