@@ -1,0 +1,215 @@
+# 로컬 보고서 작성 모델 학습 (지역 요약)
+
+## 역할 나누기
+
+| 누가 | 하는 일 |
+|---|---|
+| 계산 엔진 (`backend/app/area.py`) | 모든 숫자: 연도별 관측·추정, 개발 전후, 감축 노력 |
+| 근거 문장 (`area_facts`) | 엔진 숫자를 담은 검증 문장 |
+| 로컬 모델 (Ollama) | 근거 문장을 요약 문단으로 다시 쓰기만 함 |
+| 검증기 (`verify_narrative`) | 모델 문장의 숫자·연도·증감 방향·금지 표현을 근거와 대조. 하나라도 다르면 게시하지 않고 검증된 서식으로 바꿈 |
+
+학습은 모델이 근거를 더 잘 따라 쓰도록 해서 불채택(대체) 비율을 줄이는 일입니다. 보고서에 틀린 숫자가 실리지 않는 것은 학습이 아니라 검증기가 보장합니다.
+
+## 1. 학습 자료 만들기 (PC, Docker)
+
+과거 자료를 먼저 수집하면 관측 전후 비교 문장이 들어간 예시가 생깁니다.
+
+```powershell
+scripts\dss.cmd CollectHistory -FromYear 2015 -ToYear 2025
+docker compose -p carbon-urban-dss -f compose.yaml -f compose.demo.yaml exec -T api python -m app.cli llm-dataset --from 2015 --to 2025
+```
+
+결과는 `data/llm/area-narrative/`에 생깁니다 (Git 제외).
+
+- `train.jsonl`, `eval.jsonl`: `{"id", "messages": [system, user, assistant]}`. 평가 파일에는 `facts`도 들어 있습니다.
+- `manifest.json`: 개수, 분할 규칙(지역 단위, 평가 15%), 프롬프트 해시, 수집 범위.
+
+정답 문장은 엔진 근거 문장만 이어 붙여 만들고, 앱과 같은 검증기를 통과한 것만 넣습니다.
+
+미리보기 DB(2025년 관측 3개 지번)로 만들었을 때는 학습 319개, 평가 54개였습니다. 실제 수치는 PC DB에 따라 달라집니다.
+
+## 2. 현재 모델 기준 성능 재기
+
+```powershell
+scripts\setup-local-llm.ps1
+docker compose -p carbon-urban-dss -f compose.yaml -f compose.demo.yaml --profile local-ai exec -T api python -m app.cli llm-eval --limit 40
+```
+
+결과는 `data/llm/area-narrative/eval-<모델>-<시각>.json`에 저장됩니다.
+
+| 항목 | 뜻 |
+|---|---|
+| `pass` | 앱이 모델 문장을 그대로 게시 |
+| `rejected` | 검증기가 막고 서식으로 대체 |
+| `error` | 응답 없음 |
+
+## 3. LoRA 학습 (GPU 컴퓨터 또는 Colab)
+
+```powershell
+python -m venv .venv-llm
+.venv-llm\Scripts\activate
+pip install -r scripts\llm\requirements.txt
+python scripts\llm\train_lora.py --data data\llm\area-narrative --out scripts\llm\out
+```
+
+- 기본 모델: `Qwen/Qwen2.5-1.5B-Instruct` (현재 Ollama `qwen2.5:1.5b`와 같은 계열)
+- 기본 설정: LoRA r=16, 3 epoch, 답변 부분만 손실 계산
+- VRAM 8GB 이상 권장
+- 이어 하기(2026-10-30 추가): `--save-steps N`을 주면 N 단계마다 평가하고 체크포인트를 남깁니다(0이면 epoch마다). 체크포인트는 `<out>/checkpoints/<설정 지문 12자리>/`에 두므로, PC가 꺼져 멈춘 학습을 **같은 자료·같은 설정**으로 다시 시작하면 마지막 체크포인트부터 이어 갑니다. 자료나 설정이 다르면 새 폴더에서 처음부터 합니다. `training.json`의 `resumed_from`에 이어 받은 체크포인트 이름이 남습니다.
+
+결과물:
+
+- `scripts/llm/out/adapter`
+- `scripts/llm/out/merged`
+- `scripts/llm/out/training.json`
+
+`scripts/llm/out/`는 Git에서 제외됩니다.
+
+## 4. GGUF 변환과 Ollama 등록
+
+```powershell
+git clone https://github.com/ggml-org/llama.cpp
+pip install -r llama.cpp\requirements.txt
+python llama.cpp\convert_hf_to_gguf.py scripts\llm\out\merged --outfile scripts\llm\out\carbon-area-narrator.gguf --outtype q8_0
+copy scripts\llm\Modelfile scripts\llm\out\Modelfile
+docker compose -p carbon-urban-dss -f compose.yaml -f compose.demo.yaml --profile local-ai cp scripts\llm\out ollama:/root/carbon-area-narrator
+docker compose -p carbon-urban-dss -f compose.yaml -f compose.demo.yaml --profile local-ai exec -T ollama sh -c "cd /root/carbon-area-narrator && ollama create carbon-area-narrator -f Modelfile"
+```
+
+## 5. 비교 후 교체
+
+```powershell
+docker compose -p carbon-urban-dss -f compose.yaml -f compose.demo.yaml --profile local-ai exec -T api python -m app.cli llm-eval --model carbon-area-narrator
+```
+
+새 모델의 응답 오류가 줄고 `pass_rate`가 같거나 높을 때만 `.env`에 `OLLAMA_NARRATIVE_MODEL=carbon-area-narrator`를 넣고 api·worker를 다시 만듭니다(`docker compose ... up -d --force-recreate --no-deps api worker`). `compose.yaml`이 이 값을 읽습니다.
+
+- `OLLAMA_NARRATIVE_MODEL`: 지역 보고서의 **요약 문단**을 쓰는 모델. 학습·평가한 작업이 이것뿐이므로 학습 모델은 여기에만 씁니다.
+- `OLLAMA_MODEL`: 격자 보고서의 **근거 ID 선택**(다른 작업)에 쓰는 모델. 학습 모델로 바꾸지 않습니다(그 작업으로 평가하지 않았음).
+
+되돌리려면 `OLLAMA_NARRATIVE_MODEL` 줄을 지우고 api·worker를 다시 만들면 됩니다 (요약도 `OLLAMA_MODEL`, 기본 `qwen2.5:1.5b`).
+
+## 6GB GPU(RTX 2060)에서 Docker로 학습하기 (2026-09-27, 실제 실행)
+
+PC에 파이썬이 없어도 Docker Desktop의 GPU 지원(WSL2)으로 학습합니다. `data/ops/claude-runner/train.sh`·`convert.sh`가 그 절차입니다.
+
+```powershell
+docker run --rm --gpus all -v "${PWD}:/work" -v claude-hf-cache:/root/.cache -w /work pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime bash -lc "pip install -q 'transformers>=4.46,<5' 'peft>=0.13' 'accelerate>=0.34' safetensors sentencepiece 'bitsandbytes>=0.43' gguf; python scripts/llm/train_lora.py --data data/llm/area-narrative --out scripts/llm/out --epochs 2 --batch 1 --accum 16 --load-4bit"
+```
+
+- `--load-4bit`: 기본 가중치를 4bit(QLoRA)로 올립니다. 학습 뒤 CPU에서 fp16 기본 모델에 어댑터를 합칩니다.
+- 손실은 답변 토큰 위치의 logits만 계산합니다(`logits_to_keep`). 152k 어휘 × 1,250 토큰 logits 3벌이 6GB를 넘겨 첫 스텝이 진행되지 않던 문제의 해결책입니다.
+- 실측: 예시 8개 연습 실행에서 스텝(4예시)당 31초. 본 학습(319예시 × 2 epoch, 유효 배치 16 → 40스텝)은 3시간 6분(11,138초, 스텝당 약 280초)이 걸렸습니다.
+- GGUF 변환은 같은 컨테이너에서 llama.cpp `convert_hf_to_gguf.py`(q8_0)로 하고, `docker compose cp`로 Ollama 컨테이너에 넣어 `ollama create` 합니다.
+
+## 상태 (2026-09-27)
+
+- 학습 자료: PC DB로 `llm-dataset --from 2015 --to 2025` → 학습 319, 평가 54 (관측 연도 2024·2025).
+- 기준 모델 `qwen2.5:1.5b` 평가(54개): 통과 45, 불합격 1(근거에 없는 숫자), 응답 오류 8(JSON 파싱 실패). 통과율(응답 중) 97.8%. 응답 시간 중앙값 23초(CPU Ollama).
+- QLoRA 학습(2026-09-27 01:41~04:51 KST, RTX 2060 6GB): Qwen2.5-1.5B-Instruct, LoRA rank 16, lr 2e-4, 2 epoch. 학습 손실 4.09 → 0.17, 평가 손실 0.0188(1 epoch) → 0.0110(2 epoch).
+- 변환·등록: GGUF q8_0 1.65GB, Ollama 모델 `carbon-area-narrator:latest`.
+- 학습 모델 평가(같은 54개, 학습에 쓰지 않은 지역): **통과 54, 불합격 0, 응답 오류 0**. 통과율 100%. 응답 시간 중앙값 20.5초(최대 31초, CPU Ollama).
+- 기준 모델의 응답 오류 8개는 모두 JSON 파싱 실패(`JSONDecodeError`)였고, 학습 모델은 0개입니다.
+- 판정: 기준(응답 오류 감소·통과율 유지 이상)을 만족해 PC `.env`에 `OLLAMA_NARRATIVE_MODEL=carbon-area-narrator`를 넣고 적용했습니다. 근거 ID 선택(`OLLAMA_MODEL`)은 `qwen2.5:1.5b` 그대로입니다.
+- 적용 후 실제 앱 확인(2026-09-27 09:20 KST, PC DB·Ollama, `POST /api/area-reports`, 목표 40%): 덕진구 금암1동·금암2동·덕진동 3개 모두 `LOCAL_SLM_NARRATIVE`(숫자 검증 위반 0). 응답 시간은 첫 요청 65초(모델 적재), 이후 28초.
+- 한계: 학습·평가 예시의 정답은 계산 엔진의 근거 문장을 이어 붙인 서식 문단입니다. 그래서 학습 모델은 근거 문장을 거의 그대로 골라 잇는 **추출형** 요약을 씁니다. 숫자 검증은 통과하지만 자유로운 해설 문장이 늘어난 것은 아니며, 평가 지역도 같은 전주 자료에서 나왔습니다. 다른 도시나 새 근거 유형에서는 다시 평가해야 합니다. 앱은 어느 모델이든 숫자·증감 방향이 근거와 다르면 게시하지 않고 검증된 서식으로 바꿉니다.
+
+## 재학습 v2 (2026-10-05)
+
+**왜 다시 학습했나.** 9월 27일 뒤 계산 엔진 근거에 건물 전체(건축HUB) 전력, 같은 지번 비교, 감축 기준(`effort_basis`)이 더해졌고, 검증기에 "감축 기준 설명 없이 감축량 서술" 규칙이 생겼습니다. v1은 이 근거를 본 적이 없어 감축 기준을 빼고 감축량만 쓰는 일이 잦았습니다(아래 평가에서 불합격 10개가 모두 이 규칙).
+
+**바꾼 것**
+
+- 모델 입력 축소(`area_report.NARRATIVE_FACTS`): SGIS 1km 합계, 2020년 제공기관 결측 설명, 비교 결측 메모, 규칙 문장은 보고서 본문에만 두고 모델에는 보내지 않습니다. 검증기는 모든 근거와 대조합니다. 이것이 없을 때는 새 학습 예시 303개 중 135개만 2,048토큰에 들어갔습니다.
+- 학습 정답의 개발 전후 연결어를 "그 결과" → "개발 전후로"로 바꿨습니다(전후 차이를 원인으로 읽지 않게).
+- `train_lora.py --min-keep`(기본 0.9): `--max-len` 안에 드는 예시가 90%보다 적으면 학습을 시작하지 않습니다.
+- 출력 길이 `NARRATIVE_MAX_TOKENS` 600 → 1280: Qwen은 숫자를 한 자리씩 토큰으로 나눕니다. v2 요약(약 650토큰)이 600에서 잘려 JSON 오류가 났습니다.
+
+**학습 (PC, RTX 2060 6GB)**
+
+- 학습 자료: 학습 303, 평가 48(관측 연도 2020~2025, 지역 104곳 × 4). 303개 모두 `--max-len 2304` 안(토큰 최소/중앙/최대 558/1,663/1,988).
+- QLoRA 2 epoch, 38스텝, 4,198초(스텝당 약 110초). 평가 손실 0.0060(v1 학습 때 0.0110, 평가 세트가 달라 직접 비교하지 않음).
+- 병합 저장 때 C: 디스크가 부족해(No space left) 병합·GGUF 변환은 `F:\carbon-urban-dss-llm`에서 했습니다(PC 작업 스크립트 `data/ops/claude-runner/merge_v2.sh`, Git 제외). 어댑터는 `scripts/llm/out-v2/adapter`, v1 어댑터는 `scripts/llm/out-v1/adapter`에 있습니다.
+- Ollama 모델: `carbon-area-narrator-v2:latest`(GGUF q8_0 1.6GB). v1(`carbon-area-narrator`)도 남겨 둡니다.
+
+**평가 (같은 평가 40개, 학습에 쓰지 않은 지역, 출력 길이 1280)**
+
+| 모델 | 통과 | 불합격 | 응답 오류 | 응답 시간 중앙값 |
+|---|---:|---:|---:|---:|
+| v1 `carbon-area-narrator` | 30 | 10 (모두 감축 기준 누락) | 0 | 약 21초 |
+| v2 `carbon-area-narrator-v2` | **40** | 0 | 0 | 38초(최대 88초) |
+
+- 출력 길이 600일 때 v2는 통과 17·응답 오류 23이었고, 오류는 모두 JSON이 문자열 중간에서 잘린 것이었습니다(오류 난 예시 5개를 1200으로 다시 생성하면 모두 약 650토큰에서 정상 종료, 위반 0).
+- v2 응답이 느린 것은 건물 전체·같은 지번 비교·감축 기준 문장까지 담아 요약이 길어졌기 때문입니다(CPU Ollama).
+- 판정: 기준(응답 오류 감소, 통과율 유지 이상)을 만족해 PC `.env`의 `OLLAMA_NARRATIVE_MODEL`을 `carbon-area-narrator-v2`로 바꿨습니다(2026-10-06). 되돌릴 때는 그 줄을 `carbon-area-narrator`로 고치고 api·worker를 다시 만듭니다.
+- 같은 사례 8곳(송천1동 공동주택·건물 전체 기준, 효자5동, 에코시티·서부신시가지·효자동2가 격자, 중화산1동, 상업지역 전체)을 같은 근거로 비교: v1은 5곳 불합격(모두 감축 기준 누락), v2는 8곳 모두 통과.
+
+**적용 뒤 근거 문장 보완과 재확인 (2026-10-06)**
+
+- v2 요약이 건물 전체 전력과 공동주택 감축 목표를 함께 적어 목표의 기준이 헷갈릴 수 있어, 공동주택(K-apt) 기준일 때도 감축 기준 문장(`effort_basis`: 기준 연도 전력·원단위·연면적)을 내도록 했습니다. 같은 지번 비교에서 한 해에만 계측된 지번이 없으면 "0곳(0 kWh)" 대신 "없음"으로 씁니다.
+- 바뀐 근거로 학습 예시를 다시 만들어(평가 48개 중 29개가 공동주택 기준 문장 포함) v2를 재학습 없이 다시 평가: **통과 40·불합격 0·응답 오류 0**, 응답 시간 중앙값 41초(최대 51초).
+- 실제 앱 경로(PC DB·Ollama, 보고서는 DB에 저장하지 않는 점검 스크립트): 지역 7곳 모두 `LOCAL_SLM_NARRATIVE`(검증 위반 0)였고, 7곳 모두 감축 기준 문장과 목표를 함께 적었습니다. 첫 요청은 분석 39초(입력 적재) + 요약 51초, 이후는 분석 0.1초 + 요약 38~50초였습니다.
+- 대기 시간: 모델 호출 180초, nginx(`frontend/nginx.conf`, `deploy/gateway.conf`) 240초, 모델 유지 10분(`NARRATIVE_KEEP_ALIVE`). 예전 값(120초·120초·2분)이면 첫 요청이 경계에 가까웠습니다.
+- 학습 예시 보관: v1 `data/llm/area-narrative-20260926`, v2 `data/llm/area-narrative-20261005-v2`, 현재 근거 `data/llm/area-narrative`.
+- 한계는 v1과 같습니다: 정답이 엔진 근거 문장을 이어 붙인 것이라 추출형 요약이고, 평가 지역도 전주 자료입니다.
+
+
+## 재학습 v3 (2026-10-10, 여러 지역)
+
+**왜 다시 학습했나.** v2는 전주 자료로만 학습·평가했습니다. 10월 8~10일에 완주·수원·서울 강동·부산 강서·세종 자료가 들어왔고, 근거 문장 규칙도 바뀌었습니다(`cases.FACT_RULES = 2`: 감축 기준 자동 전환 `effort_fallback`, 개발 전후 문장의 관측 연도와 관측 범위 주의, 같은 단지 변화, 감축 수단 조합 `effort_mix`). v2는 다른 지역 이름·면 지역·자동 전환 문장을 본 적이 없습니다.
+
+**학습 자료** (`llm-dataset --from 2015 --to 2025 --regions 52110,52710,41110,11740,26440,36110`)
+
+- 6개 시·군·구, 구역 336곳, 분석 1,213건 → 학습 982, 평가 192 (구역 키 해시로 분할, 평가 15%). 행정동·용도지역은 모든 지역에서 전부 넣고, 원·격자는 전주 24·40개, 다른 지역 8·12개(`other_limits`), 구역당 계획·목표 조합은 전주 6개, 다른 지역 3개입니다(6GB GPU로 하룻밤에 학습되는 크기).
+- 분석 실패 36건은 새 철거 면적 검증("철거 연면적이 기준 건물 규모보다 큽니다")에 걸린 예시라 넣지 않았습니다. 검증기 불통과로 버린 예시 0, 중복 39.
+- 토큰 최소/중앙/최대 323/1,758/2,196 → 982개 모두 `--max-len 2304` 안.
+
+**학습 (PC, RTX 2060 6GB)**
+
+- QLoRA, rank 16, lr 2e-4, 유효 배치 16. 예시가 v2의 3배라 학습 시간 상한(예시 1,800회 분량)으로 1.83 epoch, 114스텝, 5시간 11분(스텝당 약 164초, 2026-10-10 04:47~10:06 KST).
+- 학습 손실 1.56(첫 기록) → 0.087, 평가 손실 0.0060(1 epoch) → 0.0054(끝). 평가 세트가 v2와 달라 손실을 직접 비교하지 않습니다.
+- 병합·GGUF 변환은 `F:\carbon-urban-dss-llm`(PC 작업 스크립트 `merge_v3.sh`, Git 제외). 어댑터 `scripts/llm/out-v3/adapter`. Ollama `carbon-area-narrator-v3:latest`(q8_0 1.6GB). v1·v2도 남겨 둡니다.
+
+**평가 (새 평가 파일 192개에서 고르게 고른 48개, 6개 지역 모두 포함, 학습에 쓰지 않은 구역)**
+
+| 모델 | 통과 | 불합격 | 응답 오류 | 응답 시간 중앙값 |
+|---|---:|---:|---:|---:|
+| v2 `carbon-area-narrator-v2` | 48 | 0 | 0 | 40.4초(최대 65초) |
+| v3 `carbon-area-narrator-v3` | **48** | 0 | 0 | 38.9초(최대 55초) |
+
+- 판정(`llm_decide.py`, 결과 `data/ops/claude-runner/out/llm_decision.json`): 같은 평가 파일·같은 표본 수에서 통과율 v2 이상, 응답 오류 v2 이하, 중앙 응답 150초 이하 → 충족. PC `.env`의 `OLLAMA_NARRATIVE_MODEL`을 `carbon-area-narrator-v3`로 바꾸고 api·worker를 다시 만들었습니다(2026-10-10 10:50 KST). 되돌릴 때는 그 줄을 `carbon-area-narrator-v2`로 고치고 api·worker를 다시 만듭니다.
+- 해석: 이 표본에서는 v2도 48개를 모두 통과해, 통과율로는 두 모델의 차이가 드러나지 않습니다. v3로 바꾼 근거는 "나빠지지 않았고 약간 빠르며, 새 근거 유형·다른 지역을 학습했다"입니다. 문장 품질(빠뜨린 근거, 읽기 쉬움)은 이 평가가 재지 않습니다.
+- 적용 뒤 실제 앱 경로(PC DB·Ollama, 보고서를 DB에 저장하지 않는 점검 `llm_check.py`, 2026-10-10 10:51~10:58 KST): 사례 7곳(송천1동 공동주택·건물 전체 기준, 효자5동, 에코시티·서부신시가지·효자동2가 격자, 중화산1동) 모두 `LOCAL_SLM_NARRATIVE`(모델 `carbon-area-narrator-v3`, 검증 위반 0). 요약 38~56초. api를 다시 켠 직후 첫 분석은 지역 입력 적재로 127초, 이후 0.1초 안팎.
+- 학습 예시 보관: `data/llm/area-narrative-20261010-v3`.
+- 한계: 평가 구역은 학습에 쓰지 않았지만 같은 6개 시·군·구 안에서 나왔습니다. 처음 보는 시·군·구에서는 다시 평가해야 합니다. 정답이 엔진 근거 문장을 이어 붙인 것이라 추출형 요약인 점은 v1·v2와 같습니다.
+
+## 재학습 v4 (2026-10-30, 추정·ZEB 근거)
+
+**왜 다시 학습했나.** 10/27에 근거 문장 2종이 모델 입력에 들어갔습니다: 2015~2019년 건물 전체 되돌림 추정(`estimate_buildings_backcast`, [데이터 기준 4.1](../../docs/DATA_STANDARD.md))과 신축 ZEB 자립률 참고(`bench_zeb`, 5.14). v3는 이 문장을 본 적이 없습니다.
+
+**학습 자료** (`llm-dataset --from 2015 --to 2025`, 2026-10-27 19:29~20:25 KST)
+
+- 6개 시·군·구(전주·완주·수원·서울 강동·부산 강서·세종), 구역 335곳 → 학습 1,009, 평가 176. 새 근거가 든 학습 입력: 되돌림 987개·ZEB 823개. 정답 요약에 든 것: 되돌림 문장 987개, ZEB 문장 121개(요약 길이 상한 1,100자 안에 들 때만).
+- 토큰 최소/중앙/최대 386/2,227/2,502 → 1,009개 모두 `--max-len 2560` 안.
+
+**학습 (PC, RTX 2060 6GB)**
+
+- QLoRA, rank 16, lr 2e-4, 유효 배치 16, 1.78 epoch = 114단계, `--save-steps 24`(3절의 이어 하기). 5시간 14분(2026-10-30 09:35~14:57 KST, 단계당 약 155초). 앞선 두 번(10/27 23:32, 10/29 08:12)은 PC 종료로 멈췄습니다.
+- 학습 손실 1.27(12단계) → 0.080(108단계), 평가 손실 0.0072·0.0066·0.0055·0.0048(24·48·72·96단계) → 가장 낮은 96단계 체크포인트를 씀.
+- 병합·GGUF는 `F:\carbon-urban-dss-llm`(PC 작업 스크립트 `merge_v4.sh`). Ollama `carbon-area-narrator-v4:latest`(q8_0 1.6GB).
+
+**평가 (v3와 같은 평가 파일 176개에서 고르게 고른 48개)**
+
+| 모델 | 통과 | 불합격 | 응답 오류 | 응답 시간 중앙값 | 되돌림 문장을 쓴 요약 | ZEB 문장을 쓴 요약 |
+|---|---:|---:|---:|---:|---:|---:|
+| v3 `carbon-area-narrator-v3` | 46 | 0 | 2 | 51.1초 | 7/46 | 1/38 |
+| v4 `carbon-area-narrator-v4` | **48** | 0 | **0** | 53.5초 | **48/48** | 0/40 |
+
+- 판정(`llm_decide4.py`, `data/ops/claude-runner/out/llm_decision_v4.json`): 같은 평가 파일·같은 표본 수에서 통과율 v3 이상, 응답 오류 v3 이하, 중앙 응답 150초 이하 → 충족. PC `.env`의 `OLLAMA_NARRATIVE_MODEL`을 `carbon-area-narrator-v4`로 바꾸고 api·worker를 다시 만들었습니다(2026-10-30 15:50쯤 KST). 되돌릴 때는 그 줄을 `carbon-area-narrator-v3`로 고칩니다.
+- v3의 응답 오류 2건은 JSON이 아닌 출력(JSONDecodeError)입니다. 앱에서는 검증된 서식 문장으로 바뀝니다.
+- **새 근거 사용은 요약 전문으로 셌습니다.** `llm-eval` 결과 파일이 요약 앞 600자만 남겨, 판정 때 나온 수(v3 되돌림 3/46, v4 0/48)는 잘린 글 기준이었습니다(되돌림 문장은 600자 근처에서 시작). 같은 표본을 다시 생성해 전문으로 센 값이 위 표입니다(`data/ops/claude-runner/llm_eval_full.py` → `out/llm-newfact-1030.json`, 다시 생성한 평가의 통과·불합격·오류 수는 판정 때와 같음). 평가 코드는 이제 전문을 남깁니다(`app/llm_dataset.evaluate`).
+- 해석: v4는 되돌림 추정 문장을 숫자까지 그대로 옮깁니다. ZEB 문장은 정답 요약에 적게 들어 있어(121/1,009) v3·v4 모두 거의 쓰지 않습니다. ZEB 참고 위치는 보고서 본문에서 봅니다. 늘리려면 요약 정답(`reference_summary`)에서 ZEB 문장의 순서를 앞당겨야 합니다(다음 학습 때).
+- 실제 앱 경로: 시제품 보고서 자료(`proto_data.py`, 2026-10-30 17:22~17:26)의 사례 A·B·C 요약 모두 `LOCAL_SLM_NARRATIVE`(v4, 49~81초). PC 점검(`llm_check.py`, 전주 7개 구역) 중 5개는 게시, 1개는 Docker 엔진이 응답하지 않던 동안 모델에 연결하지 못해 서식 문장으로 대체(설계대로), 1개는 엔진을 다시 켜며 중단됐습니다.
+- 학습 자료는 `data/llm/area-narrative`(2026-10-27 생성)에 그대로 있습니다.
+
