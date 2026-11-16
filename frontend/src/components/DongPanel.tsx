@@ -83,7 +83,7 @@ export function DongPanel({ data, index, grids, complexes, metric, regionName, o
     <section className="detail-section" aria-label="읍면동 비교">
       <h3>동별 비교: {metric.label} <small className="muted">{metric.unit}</small></h3>
       <table className="dong-rank">
-        <thead><tr><th scope="col">행정동</th><th scope="col">값</th><th scope="col" title="값 있는 격자가 차지하는 행정동 면적 비율 (이전 표기: 덮음)">면적 포함률</th><th scope="col"><span className="sr-only">막대</span></th></tr></thead>
+        <thead><tr><th scope="col">행정동</th><th scope="col">값</th><th scope="col" title="값 있는 격자가 차지하는 행정동 면적 비율">면적 포함률</th><th scope="col"><span className="sr-only">막대</span></th></tr></thead>
         <tbody>{ranks.map((r) => <tr key={r.index} className={r.index === index ? 'active' : undefined}>
           <th scope="row"><button type="button" className="link-button" aria-current={r.index === index ? 'true' : undefined} onClick={() => onSelect(r.index)}>{r.name}</button></th>
           <td>{r.result.value === null ? <span className="muted">없음</span> : formatMetric(r.result.value, '', r.result.kind === 'sum' ? 0 : metric.digits)}</td>
