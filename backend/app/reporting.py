@@ -242,7 +242,7 @@ def plan_sentence_facts(n,label,inputs,result):
     saving=(result.get('savings_pct') or {}).get('carbon_kg')
     if carbon is not None and ref is not None:
         e=(annual.get('scenario') or {}).get('electricity_carbon_kg');g=carbon-e if e is not None else None
-        parts=f"(전력 {e/1000:,.1f} t, 가스 {g/1000:,.1f} t 가정 계수)" if e is not None and g is not None else ''
+        parts=f"(전력 {e/1000:,.1f} t, 가스 {g/1000:,.1f} t)" if e is not None and g is not None else ''
         verdict=('과 같습니다' if saving is None or abs(saving)<0.05 else f"보다 {abs(saving):.1f}% {'적습니다' if saving>0 else '많습니다'}")
         facts.append({'id':f'carbon_{n}','text':f"{label}의 연간 운영탄소는 {carbon/1000:,.1f} tCO2eq{parts}이며, 같은 연면적을 지역 관측 원단위 그대로 지을 때(기준안 {ref/1000:,.1f} t){verdict}."})
     elif carbon is not None and change is not None:   # plans saved before the reference plan existed
@@ -279,7 +279,7 @@ def grid_detail_facts(db,year,grid_id,data):
             props=map_properties(item,factor);complete=region_year_complete(db,region_for_grid(db,grid_id),year)
             out['building_energy']=dict(props,year=year,complete=complete)
             elec=props.get('bldg_electricity_kwh');gas=props.get('bldg_gas_kwh');carbon=props.get('bldg_carbon_t')
-            parts=[f"전력 {elec:,.0f}kWh" if elec is not None else None,f"가스 {gas:,.0f}kWh" if gas is not None else None,f"전력 탄소 {carbon:,.1f}tCO2eq" if carbon is not None else None,f"가스 탄소 {props['bldg_gas_carbon_t']:,.1f}tCO2eq(가정 계수)" if props.get('bldg_gas_carbon_t') is not None else None]
+            parts=[f"전력 {elec:,.0f}kWh" if elec is not None else None,f"가스 {gas:,.0f}kWh" if gas is not None else None,f"전력 탄소 {carbon:,.1f}tCO2eq" if carbon is not None else None,f"가스 탄소 {props['bldg_gas_carbon_t']:,.1f}tCO2eq" if props.get('bldg_gas_carbon_t') is not None else None]
             out['facts'].append({'id':'building_energy','text':f"건축HUB가 계량한 격자 안 모든 건물(지번 {props['bldg_parcels']}곳, 12개월 완전 관측 {props['bldg_electricity_complete']}곳)의 {year}년 연간 사용량은 "+", ".join(p for p in parts if p)+f"입니다{'' if complete else ' (그해 수집이 끝나지 않아 잠정값)'}. 단독주택·200세대 미만 공동주택은 제공기관이 제외합니다."})
             if props.get('bldg_kwh_per_m2') is not None:
                 out['facts'].append({'id':'building_intensity','text':f"건축물대장 연면적이 있는 지번 {props['bldg_area_parcels']}곳 기준 건물 전체 전력 원단위는 {props['bldg_kwh_per_m2']:,.1f} kWh/m²·년입니다."})
@@ -325,7 +325,8 @@ def _gas_caution(data):
     if gas.get('assumed'):
         return (f"가스 탄소는 고정 규칙의 가정 계수 {gas['factor']:g} kgCO2eq/kWh(IPCC 2006 천연가스 기본 배출계수, 건축HUB kWh를 총발열량 기준으로 가정)로 계산했습니다. "
                 '순발열량 기준이면 약 11% 커집니다. 전력 탄소는 GIR 승인 계수입니다.')
-    return f"가스 탄소는 등록된 배출계수 {gas['factor']:g} kgCO2eq/kWh로 계산했습니다."
+    return (f"가스 탄소는 도시가스 배출계수 {gas['factor']:g} kgCO2eq/kWh(온실가스종합정보센터 승인 국가 고유 CO2 계수 15.236 tC/TJ, 순발열량 기준을 "
+            '건축HUB의 총발열량 기준 kWh에 맞춤)로 계산했습니다. 전력 탄소는 GIR 승인 계수입니다.')
 
 def report_cautions(data,detail,scenarios):
     """Fixed, engine-derived cautions the reader must see before acting on the numbers."""
@@ -419,7 +420,7 @@ def energy_rows(sc):
     return [('연간 전력',_num(plan.get('electricity_kwh'),' kWh'),_num(ref.get('electricity_kwh'),' kWh'),_pct(sv.get('electricity_kwh'))),
             ('연간 가스',_num(plan.get('gas_kwh'),' kWh'),_num(ref.get('gas_kwh'),' kWh'),_pct(sv.get('gas_kwh'))),
             ('전력 탄소',_t(plan.get('electricity_carbon_kg')),_t(ref.get('electricity_carbon_kg')),''),
-            ('가스 탄소 (가정 계수)',_t(gas_c(plan)),_t(gas_c(ref)),''),
+            ('가스 탄소',_t(gas_c(plan)),_t(gas_c(ref)),''),
             ('연간 운영탄소 (전력+가스)',_t(plan.get('carbon_kg')),_t(ref.get('carbon_kg')),_pct(sv.get('carbon_kg'))),
             ('1인당 운영탄소',_num(r.get('carbon_per_person'),' kgCO2eq',1),'',''),('세대당 운영탄소',_num(r.get('carbon_per_household'),' kgCO2eq',1),'','')]
 
@@ -478,7 +479,7 @@ def report_markdown(s):
         sections.append(('용도지역·조례 상한 확인',table_blocks(zoning)))
     else:
         totals=s.get('totals') or {}
-        gas_note='가스 탄소는 가정 계수' if totals.get('gas_carbon_kg') is not None else '가스 탄소는 계수 미확정'
+        gas_note=('가스 탄소는 가정 계수' if (s.get('factors') or {}).get('GAS',{}).get('assumed') else '가스 탄소는 국가 고유 계수') if totals.get('gas_carbon_kg') is not None else '가스 탄소는 계수 미확정'
         status=[f'- 공동주택 관측 전력 {_num(totals.get("electricity_kwh")," kWh")}, 가스 {_num(totals.get("gas_kwh")," kWh")}, 전력 탄소 {_t(totals.get("electricity_carbon_kg"))}, 가스 탄소 {_t(totals.get("gas_carbon_kg"))} (12개월 관측 지번 합계; {gas_note})']
         status+=['- '+f['text'] for f in s['facts'] if f['id'] in ('electricity_intensity','annual','missing')]
         status+=['- '+f['text'] for f in context.get('facts') or [] if f['id'] in GRID_ENERGY_IDS]

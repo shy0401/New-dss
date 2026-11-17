@@ -406,7 +406,7 @@ def grid_energy_properties(db,year,factors,sc=None):
         p['electricity_carbon_kg_annual']=carbon_kg(e.get('kwh'),electricity_factor)
         p['electricity_carbon_kg']=carbon_kg(p['electricity_kwh'],electricity_factor)
         p['electricity_carbon_kg_per_m2']=carbon_kg(p['electricity_kwh_per_m2'],electricity_factor)
-        # 도시가스 탄소: 가정 계수 규칙 (emissions.ensure_gas_factor), 12개월 관측 지번만
+        # 도시가스 탄소: GIR 승인 국가 고유 계수 (emissions.ensure_gas_factor), 12개월 관측 지번만
         p['gas_carbon_kg_annual']=carbon_kg(g.get('kwh'),factors.get('GAS'))
     return result
 

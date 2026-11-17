@@ -170,7 +170,7 @@ function PlanResult({ result, chart, reporting, sceneSaved, onReport }: { result
   }
   return <>
     <div className="result-hero" data-testid="plan-hero">
-      <div className="hero-main"><span>연간 운영탄소 (전력+가스)</span><strong>{tonnes(plan?.carbon_kg)}</strong><small>전력 {tonnes(plan?.electricity_carbon_kg)} · 가스 {tonnes(gasCarbon(plan))} (가정 계수)</small></div>
+      <div className="hero-main"><span>연간 운영탄소 (전력+가스)</span><strong>{tonnes(plan?.carbon_kg)}</strong><small>전력 {tonnes(plan?.electricity_carbon_kg)} · 가스 {tonnes(gasCarbon(plan))}</small></div>
       <div className={`hero-saving ${savings !== null ? (savings > 0 ? 'good' : savings < 0 ? 'bad' : '') : ''}`}><span>기준안 대비</span><strong>{savingsText(savings)}</strong><small>{reference?.carbon_kg != null ? `같은 연면적을 효율 1.0·태양광 0으로 지으면 ${tonnes(reference.carbon_kg)}` : '기준안 값 없음'}</small></div>
       <div><span>1인당 운영탄소</span><strong>{formatMetric(result.carbon_per_person, 'kgCO₂eq', 0)}</strong><small>세대당 {formatMetric(result.carbon_per_household, 'kgCO₂eq', 0)}</small></div>
       <div><span>조례 상한 1차 확인</span><strong className={`legal ${zoningTone(legal ?? undefined)}`}>{legal ?? '판단 보류'}</strong><small>{limits?.bcr_limit != null && limits?.far_limit != null ? `상한 건폐율 ${limits.bcr_limit}% · 용적률 ${limits.far_limit}%` : '대지 위치를 지정하면 확인'}</small></div>
@@ -184,7 +184,7 @@ function PlanResult({ result, chart, reporting, sceneSaved, onReport }: { result
       <tr><th>전력</th><td className="num">{formatMetric(plan?.electricity_kwh, 'kWh')}</td><td className="num">{formatMetric(reference?.electricity_kwh, 'kWh')}</td><td className="num">{savingsText(result.savings_pct?.electricity_kwh)}</td></tr>
       <tr><th>가스</th><td className="num">{formatMetric(plan?.gas_kwh, 'kWh')}</td><td className="num">{formatMetric(reference?.gas_kwh, 'kWh')}</td><td className="num">{savingsText(result.savings_pct?.gas_kwh)}</td></tr>
       <tr><th>전력 탄소</th><td className="num">{tonnes(plan?.electricity_carbon_kg)}</td><td className="num">{tonnes(reference?.electricity_carbon_kg)}</td><td className="num"></td></tr>
-      <tr><th>가스 탄소 (가정 계수)</th><td className="num">{tonnes(gasCarbon(plan))}</td><td className="num">{tonnes(gasCarbon(reference))}</td><td className="num"></td></tr>
+      <tr><th>가스 탄소</th><td className="num">{tonnes(gasCarbon(plan))}</td><td className="num">{tonnes(gasCarbon(reference))}</td><td className="num"></td></tr>
     </tbody></table>
     </Fold>
     <details className="method-note"><summary>산정 방법과 가정</summary><p>{methodText(result)}</p><p>{result.limitation ?? '원단위 기반 1차 추정이며, 설계·인허가 수치로 사용할 수 없습니다.'}</p>{result.assumptions?.length ? <ul>{result.assumptions.map((a) => <li key={a}>{a}</li>)}</ul> : null}<ConfidenceGrades compact ids={['cell', 'measure']} /></details>
