@@ -42,6 +42,13 @@ _OBSERVED_SUMS = {"building_count_filled": "building_count_sum", "apartment_buil
                   "population_total_persons_filled": "population_total_persons_sum"}
 _MASKED_CELLS = "population_total_persons_masked_cells"  # withheld (N/A) 100 m cells: a provider fact, added as an input
 _REGISTER_FLOOR = "reg_floor_area_m2"
+# each region's own-city KMA ASOS station (Gyeonggi has 98, 99, 119, 202, 203 only). A row whose team station is not
+# its own city's and that ``asos_annual.csv`` does not cover gets NULL weather: no other city's station (DATA_STANDARD 2절)
+_OWN_STATION = {"11": "108", "26": "159", "27": "143", "28": "112", "30": "133", "31": "152", "36110": "239",
+                "41110": "119", "41111": "119", "41113": "119", "41115": "119", "41117": "119", "41480": "99",
+                "43111": "131", "44133": "232", "48121": "155", "48129": "155", "48170": "192", "48250": "253",
+                "51130": "114", "52110": "146"}
+_STATION = "weather_station_id"
 
 STATE: dict[str, Any] = {"status": "starting", "snapshot": None, "train": TRAIN, "started_at": None, "ready_at": None,
                          "train_seconds": None, "error": None, "versions": {}, "regions": [], "acceptance": [], "pair_inputs": None,
@@ -95,8 +102,10 @@ def official_inputs(table: Any, folder: Path, asos: Any) -> tuple[Any, dict[str,
     * ``heat_share_ctx``/``gas_share_ctx``: the team code gives a cell under 100 t the share of its 3 x 3 neighbours or of
       the region. Here every cell takes its own carbon-map share (heat or gas ÷ elec + gas + heat of that cell and year);
       a cell with no emission gets NULL, which the learner handles as missing.
-    * weather of a region whose own ASOS station has 12 months of a year (``asos_annual.csv``, from region_weather_monthly
-      OFFICIAL; Sejong 36110 ← ASOS 239, the team table used Daejeon) replaces temp/HDD/CDD of that region and year.
+    * weather: a year in which the region's own-city ASOS station has 12 complete months (``asos_annual.csv``: Sejong
+      239, Paju 99; made by project/tools/experiments/asos_annual_for_team.py with the team's weather rules) replaces
+      temp/HDD/CDD of that region and year. Rows still on another city's station (team table: Seoul for Paju, Uijeongbu,
+      Goyang, ...; Daejeon for Sejong) get NULL: no substitute from another city.
     * building counts and population (2026-11-17 §8): the team reads a 100 m cell without a value as 0 and a withheld
       population cell as 3 persons. Here the columns keep their names (the scenario code updates them) but hold the
       provider's observed sums, NULL where nothing was observed; the count of withheld cells becomes an input
@@ -120,13 +129,21 @@ def official_inputs(table: Any, folder: Path, asos: Any) -> tuple[Any, dict[str,
         # a joined table names each row's region; a region table is one region (its folder "<code>_<name>")
         region = t["region"].astype(str).str[:5] if "region" in t else pandas.Series(folder.name[:5], index=t.index)
         replaced = []
+        own = pandas.Series(False, index=t.index)
         for r in asos.itertuples(index=False):
             rows = (region == str(r.region_code)) & (t["year"] == int(r.year))
             n = int(rows.sum())
             if n:
                 t.loc[rows, list(_WEATHER)] = [float(r.temp_avg_c), float(r.heating_degree_days_c), float(r.cooling_degree_days_c)]
+                own |= rows
                 replaced.append({"region": str(r.region_code), "station": str(r.station), "year": int(r.year), "rows": n})
         note["asos"] = replaced
+        if _STATION in t:
+            station = t[_STATION].astype("Int64").astype(str)
+            own |= pandas.Series([(_OWN_STATION.get(c) or _OWN_STATION.get(c[:2])) == s for c, s in zip(region, station)], index=t.index)
+            t.loc[~own, list(_WEATHER)] = np.nan
+            note["weather_null_rows"] = int((~own).sum())
+            note["weather_null_regions"] = sorted(region[~own].unique().tolist())
     sums = {k: v for k, v in _OBSERVED_SUMS.items() if k in t and v in t}
     for filled, observed in sums.items():
         t[filled] = t[observed]
