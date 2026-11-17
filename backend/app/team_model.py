@@ -67,7 +67,7 @@ def service_status() -> dict[str, Any]:
     code, body = _call("/status", timeout=3.0)
     if code != 200 or not isinstance(body, dict):
         return {"status": "off", "reason": OFF}
-    keep = ("status", "snapshot", "train", "ready_at", "train_seconds", "error", "versions", "acceptance")
+    keep = ("status", "snapshot", "train", "ready_at", "train_seconds", "error", "versions", "acceptance", "inputs")
     out = {k: body.get(k) for k in keep}
     out["regions"] = [r[:5] for r in body.get("regions") or []]
     if out["status"] == "unavailable":

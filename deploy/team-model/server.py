@@ -29,9 +29,15 @@ TEAM_ROOT = Path(os.environ.get("TEAM_ROOT", "/team-root"))
 TRAIN = os.environ.get("TEAM_TRAIN", "00_합본_7차")
 PORT = int(os.environ.get("PORT", "8090"))
 MAX_PLANS = 9
+# official (기본): 아래 두 입력을 공식 값으로 바꿔 학습·예측. team: 받은 팀 코드 그대로(전후 비교용)
+INPUTS = os.environ.get("TEAM_INPUTS", "official")
+ASOS_FILE = Path(os.environ.get("TEAM_ASOS_FILE", str(Path(__file__).with_name("asos_annual.csv"))))
+_ELEC, _GAS, _HEAT = "elec_tco2e_total", "gas_tco2e_total", "heat_tco2e_total"
+_WEATHER = ("temp_avg_c", "heating_degree_days_c", "cooling_degree_days_c")
 
 STATE: dict[str, Any] = {"status": "starting", "snapshot": None, "train": TRAIN, "started_at": None, "ready_at": None,
-                         "train_seconds": None, "error": None, "versions": {}, "regions": [], "acceptance": [], "pair_inputs": None}
+                         "train_seconds": None, "error": None, "versions": {}, "regions": [], "acceptance": [], "pair_inputs": None,
+                         "inputs": {"mode": INPUTS, "tables": {}}}
 _PREDICT_LOCK = threading.Lock()
 _CTX: dict[str, Any] = {}
 _TABLES: dict[str, Any] = {}
@@ -75,6 +81,65 @@ def _fix_band_sign(P: Any) -> None:
     P._band_sign_fixed = True
 
 
+def official_inputs(table: Any, folder: Path, asos: Any) -> tuple[Any, dict[str, Any]]:
+    """Two inputs from official values in place of borrowed ones (2026-11-17 retraining, record methods/official-inputs).
+
+    * ``heat_share_ctx``/``gas_share_ctx``: the team code gives a cell under 100 t the share of its 3 x 3 neighbours or of
+      the region. Here every cell takes its own carbon-map share (heat or gas ÷ elec + gas + heat of that cell and year);
+      a cell with no emission gets NULL, which the learner handles as missing.
+    * weather of a region whose own ASOS station has 12 months of a year (``asos_annual.csv``, from region_weather_monthly
+      OFFICIAL; Sejong 36110 ← ASOS 239, the team table used Daejeon) replaces temp/HDD/CDD of that region and year.
+    Same edit on the training table and on every region table, so training and prediction see the same inputs.
+    """
+    import numpy as np
+    import pandas
+
+    t = table.copy()
+    note: dict[str, Any] = {}
+    if all(c in t for c in (_ELEC, _GAS, _HEAT, "heat_share_ctx", "gas_share_ctx")):
+        heat, gas = t[_HEAT].fillna(0.0), t[_GAS].fillna(0.0)
+        total = (heat + gas + t[_ELEC].fillna(0.0)).where(lambda s: s > 0)
+        old = t[["heat_share_ctx", "gas_share_ctx"]].copy()
+        t["heat_share_ctx"], t["gas_share_ctx"] = heat / total, gas / total
+        same = np.isclose(old.to_numpy(dtype=float), t[["heat_share_ctx", "gas_share_ctx"]].to_numpy(dtype=float), equal_nan=True)
+        note["mix_rows_changed"] = int((~same.all(axis=1)).sum())
+        note["mix_rows_null"] = int(total.isna().sum())
+    if asos is not None and len(asos) and "year" in t and all(c in t for c in _WEATHER):
+        # a joined table names each row's region; a region table is one region (its folder "<code>_<name>")
+        region = t["region"].astype(str).str[:5] if "region" in t else pandas.Series(folder.name[:5], index=t.index)
+        replaced = []
+        for r in asos.itertuples(index=False):
+            rows = (region == str(r.region_code)) & (t["year"] == int(r.year))
+            n = int(rows.sum())
+            if n:
+                t.loc[rows, list(_WEATHER)] = [float(r.temp_avg_c), float(r.heating_degree_days_c), float(r.cooling_degree_days_c)]
+                replaced.append({"region": str(r.region_code), "station": str(r.station), "year": int(r.year), "rows": n})
+        note["asos"] = replaced
+    return t, note
+
+
+def _patch_inputs(P: Any) -> None:
+    """Wrap ``load_training`` (predict and baseline look it up at call time) so every table gets ``official_inputs``."""
+    from urban_carbon.modeling import baseline as B
+
+    if INPUTS != "official" or getattr(B, "_official_inputs", False):
+        return
+    import pandas
+
+    asos = pandas.read_csv(ASOS_FILE, dtype={"region_code": str, "station": str}) if ASOS_FILE.is_file() else None
+    original = B.load_training
+
+    def load_training(folder: Path) -> tuple[Any, list[str]]:
+        table, features = original(folder)
+        table, note = official_inputs(table, Path(folder), asos)
+        STATE["inputs"]["tables"][Path(folder).name] = note
+        return table, features
+
+    B.load_training = load_training
+    P.load_training = load_training
+    B._official_inputs = True
+
+
 def train() -> None:
     snap, code = find_code()
     if code is None:
@@ -88,6 +153,7 @@ def train() -> None:
         from urban_carbon.core.paths import ProjectPaths
         from urban_carbon.modeling import predict as P
         _fix_band_sign(P)
+        _patch_inputs(P)
         from urban_carbon.modeling.settings import load_baseline, load_change
 
         STATE.update(snapshot=snap, versions={"python": sys.version.split()[0], "numpy": numpy.__version__, "pandas": pandas.__version__,
