@@ -169,6 +169,19 @@ def use_register_floor_area(P: Any) -> None:
     P.FLOOR_TOTAL = _REGISTER_FLOOR
 
 
+def weather_change_only(pairs: Any) -> Any:
+    """Drop the before-year weather levels (``temp_avg_c_before`` ...) from a pair table; the change between the two
+    years (``*_delta``) stays (performance step 1, 2026-11-18: the levels act as a region marker; 12 seeds, region
+    grouped CV 0.458 -> 0.443, 1k 0.366 -> 0.355). Prediction inputs follow the fitted columns, so they lose the
+    levels too (``pair_inputs`` reindexes to them)."""
+    from dataclasses import replace
+
+    from urban_carbon.modeling.pairs import BEFORE
+
+    drop = [c + BEFORE for c in _WEATHER if c + BEFORE in pairs.matrix.columns]
+    return replace(pairs, matrix=pairs.matrix.drop(columns=drop)) if drop else pairs
+
+
 def _patch_inputs(P: Any) -> None:
     """Wrap ``load_training`` (predict and baseline look it up at call time) so every table gets ``official_inputs``."""
     from urban_carbon.modeling import baseline as B
@@ -191,6 +204,12 @@ def _patch_inputs(P: Any) -> None:
     B.load_training = load_training
     P.load_training = load_training
     use_register_floor_area(P)
+    original_pairs = P.build_pairs  # predict looks it up at call time (_Trained)
+
+    def build_pairs(*args: Any, **kwargs: Any) -> Any:
+        return weather_change_only(original_pairs(*args, **kwargs))
+
+    P.build_pairs = build_pairs
     B._official_inputs = True
 
 
