@@ -34,6 +34,14 @@ INPUTS = os.environ.get("TEAM_INPUTS", "official")
 ASOS_FILE = Path(os.environ.get("TEAM_ASOS_FILE", str(Path(__file__).with_name("asos_annual.csv"))))
 _ELEC, _GAS, _HEAT = "elec_tco2e_total", "gas_tco2e_total", "heat_tco2e_total"
 _WEATHER = ("temp_avg_c", "heating_degree_days_c", "cooling_degree_days_c")
+# team estimates with an official value already in the table (audit 2026-11-17 §8): left out of the inputs
+_ESTIMATED_INPUTS = ("floor_area_total_est_filled_m2", "complex_households_est")  # → reg_floor_area_m2, reg_dwellings
+# counts read as 0 (and masked population as 3 persons) → the provider's observed sums, NULL where none observed
+_OBSERVED_SUMS = {"building_count_filled": "building_count_sum", "apartment_building_count_filled": "apartment_building_count_sum",
+                  "detached_building_count_filled": "detached_building_count_sum",
+                  "population_total_persons_filled": "population_total_persons_sum"}
+_MASKED_CELLS = "population_total_persons_masked_cells"  # withheld (N/A) 100 m cells: a provider fact, added as an input
+_REGISTER_FLOOR = "reg_floor_area_m2"
 
 STATE: dict[str, Any] = {"status": "starting", "snapshot": None, "train": TRAIN, "started_at": None, "ready_at": None,
                          "train_seconds": None, "error": None, "versions": {}, "regions": [], "acceptance": [], "pair_inputs": None,
@@ -82,13 +90,17 @@ def _fix_band_sign(P: Any) -> None:
 
 
 def official_inputs(table: Any, folder: Path, asos: Any) -> tuple[Any, dict[str, Any]]:
-    """Two inputs from official values in place of borrowed ones (2026-11-17 retraining, record methods/official-inputs).
+    """Official values in place of borrowed or estimated ones (2026-11-17 retraining, record methods/official-inputs).
 
     * ``heat_share_ctx``/``gas_share_ctx``: the team code gives a cell under 100 t the share of its 3 x 3 neighbours or of
       the region. Here every cell takes its own carbon-map share (heat or gas ÷ elec + gas + heat of that cell and year);
       a cell with no emission gets NULL, which the learner handles as missing.
     * weather of a region whose own ASOS station has 12 months of a year (``asos_annual.csv``, from region_weather_monthly
       OFFICIAL; Sejong 36110 ← ASOS 239, the team table used Daejeon) replaces temp/HDD/CDD of that region and year.
+    * building counts and population (2026-11-17 §8): the team reads a 100 m cell without a value as 0 and a withheld
+      population cell as 3 persons. Here the columns keep their names (the scenario code updates them) but hold the
+      provider's observed sums, NULL where nothing was observed; the count of withheld cells becomes an input
+      (``official_features``). The estimated total floor area and area-split complex households leave the inputs.
     Same edit on the training table and on every region table, so training and prediction see the same inputs.
     """
     import numpy as np
@@ -115,7 +127,27 @@ def official_inputs(table: Any, folder: Path, asos: Any) -> tuple[Any, dict[str,
                 t.loc[rows, list(_WEATHER)] = [float(r.temp_avg_c), float(r.heating_degree_days_c), float(r.cooling_degree_days_c)]
                 replaced.append({"region": str(r.region_code), "station": str(r.station), "year": int(r.year), "rows": n})
         note["asos"] = replaced
+    sums = {k: v for k, v in _OBSERVED_SUMS.items() if k in t and v in t}
+    for filled, observed in sums.items():
+        t[filled] = t[observed]
+    if sums:
+        note["observed_sums"] = sorted(sums)
     return t, note
+
+
+def official_features(features: list[str], table: Any) -> list[str]:
+    """The team's input list without the estimated columns, plus the withheld-cell count (when the table has it)."""
+    out = [f for f in features if f not in _ESTIMATED_INPUTS]
+    if _MASKED_CELLS in table and _MASKED_CELLS not in out:
+        out.append(_MASKED_CELLS)
+    return out
+
+
+def use_register_floor_area(P: Any) -> None:
+    """The predict module's floor area (out-of-range notes, floor area before/after, jump check) from the building
+    register (``reg_floor_area_m2``) instead of the estimated total, which is no longer an input. The scenario code
+    adds a plan's area to both columns, so before/after stay consistent. ``predict`` reads ``FLOOR_TOTAL`` at call time."""
+    P.FLOOR_TOTAL = _REGISTER_FLOOR
 
 
 def _patch_inputs(P: Any) -> None:
@@ -132,11 +164,14 @@ def _patch_inputs(P: Any) -> None:
     def load_training(folder: Path) -> tuple[Any, list[str]]:
         table, features = original(folder)
         table, note = official_inputs(table, Path(folder), asos)
+        features = official_features(features, table)
+        note["inputs"] = len(features)
         STATE["inputs"]["tables"][Path(folder).name] = note
         return table, features
 
     B.load_training = load_training
     P.load_training = load_training
+    use_register_floor_area(P)
     B._official_inputs = True
 
 
