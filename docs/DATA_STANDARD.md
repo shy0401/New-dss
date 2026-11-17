@@ -2,7 +2,7 @@
 
 > **자료를 모으기 전에 이 문서부터 읽습니다.** 팀원 누구나, 어느 지역이든, 사람이 하든 AI 도구로 하든 같은 기준으로 모으고 같은 공식으로 계산해야 결과를 합치고 비교할 수 있습니다. 이 문서가 그 기준의 **유일한 원본**입니다. 코드의 상수·규칙이 이 문서와 다르면 둘 중 하나가 틀린 것이니, 같은 커밋에서 함께 고칩니다(9절).
 
-- 판: 1.16 (2026-11-17) · 근거: [팀 데이터 비교](TEAM_DATA_COMPARISON.md), [탄소 계산](CARBON_METHOD.md), [정확도 점검](ACCURACY.md), 팀 데이터셋 urban-carbon의 `config/rules.yaml`·ADR
+- 판: 1.17 (2026-11-17) · 근거: [팀 데이터 비교](TEAM_DATA_COMPARISON.md), [탄소 계산](CARBON_METHOD.md), [정확도 점검](ACCURACY.md), 팀 데이터셋 urban-carbon의 `config/rules.yaml`·ADR
 - 점검 명령: `docker compose exec api python -m app.cli check-standard` (8절)
 
 ## 0. 작업 전 확인 (매번)
@@ -36,6 +36,7 @@
 | SGIS 500m 격자 통계 | [SGIS 자료제공](https://sgis.mods.go.kr/view/pss/dataProvdIntrcn) (신청) | 칸별 인구·가구·주택·사업체·종사자 | 2000~2024 | 받은 CSV → `data/raw/sgis_grid_500m/` → 자동 가져오기 | 비밀보호 잡음 포함. 받은 묶음에 없는 블록·주제는 "통계 없음" |
 | SGIS 1km 격자 통계 | 공공데이터포털 15141768 | 칸별 인구·가구·주택 노후 등 | 2024 | `import-sgis-grid` | 500m에 나눠 넣지 않는다 |
 | 기상청 ASOS | [공공데이터포털 15059093](https://www.data.go.kr/data/15059093/openapi.do) | 일평균기온 → 월 난방·냉방도일, 합계 일사량(MJ/m²) | 일 | `Collect` (전주 146), 지역 준비 `weather` (같은 시 · 군의 관측소: 서울 108(강동구), 부산 159(강서구), 세종 239, 수원 119, 군산 140, 정읍 245, 남원 247, 장수 248, 임실 244, 순창 254, 고창 172, 부안 243) | 그달 일평균이 하루라도 없으면 그달 도일은 NULL. 일사량은 한 해 모든 날이 있을 때만 연간 값 |
+| 기상청 AWS(방재기상관측) | [기상청 API허브](https://apihub.kma.go.kr/) 방재기상월보 조회(`AwsMtlyInfoService` 일자료 · 지점일람표, 인증키 `KMA_APIHUB_KEY`) | 월보 일평균기온 → 연 평균기온 · 난방 · 냉방도일 | 일 | 팀 변화 모델의 기상만(같은 시에 ASOS가 없는 지역, `project/tools/experiments/aws_annual_for_team.py`) | 월보 표시 `)`(일부 시간 결측으로 계산한 공표값)는 값으로 쓰고 `x`는 결측. 하루라도 결측이면 그달 값 없음, 12개월이 다 있어야 그해 값 |
 | ERA5-Land · ERA5 (대체) | [Open-Meteo 과거 기상](https://open-meteo.com/en/docs/historical-weather-api) | 일평균기온(ERA5-Land), 일 일사량 `shortwave_radiation_sum`(MJ/m², **ERA5** — Open-Meteo의 ERA5-Land는 일사량이 비어 옴) | 일 | 지역 준비 `weather`, `backfill-solar` | 같은 시 · 군에 ASOS가 없거나 그달 ASOS가 다 차지 않을 때만, `FALLBACK`으로 표시. 다른 도시 관측소로 대체하지 않음. 일사량은 빠진 날이 있는 달을 NULL로 저장 |
 | 전력 배출계수 | [온실가스종합정보센터 승인 배출계수](https://www.gir.go.kr/home/index.do?menuId=36) | 소비단 CO2eq tCO2eq/MWh | 공표일 | 원문 PDF를 `data/raw/research/gir/`에 두면 증빙 확인 후 등록 | 5.4절 표 |
 | 한전 시군구 전력판매량 | [한전 전력판매량 게시판](https://www.kepco.co.kr/home/customer/library/electricity-statistics/sales-volume/boardList.do) | 시·군·구 × 월, 계약종별 kWh | 월 | 파일 → `data/raw/kepco/` | 총량 대조용. 격자에 나누지 않음 |
@@ -225,6 +226,7 @@ docker compose -p carbon-urban-dss -f compose.yaml -f compose.demo.yaml exec -T 
 
 | 판 | 날짜 | 바뀐 것 |
 |---|---|---|
+| 1.17 | 2026-11-17 | 팀 변화 모델 기상(5.8): 같은 시에 ASOS가 없는 지역은 같은 시의 기상청 AWS 한 지점(완전한 해가 가장 많은 지점, ASOS 포함)을 모든 해에 씀. 출처 표에 AWS 추가. 다른 도시 관측소는 여전히 쓰지 않음 |
 | 1.16 | 2026-11-17 | 팀 변화 모델 기상(5.8): 같은 시 ASOS의 완전한 해만(세종 239, 파주 99), 다른 도시 관측소 값은 NULL로(학습 행의 47.5%). 2절의 지역 기상 규칙과 같게 함. 기준온도는 그대로 |
 | 1.15 | 2026-11-17 | 팀 변화 모델 입력(5.8): 팀 추정 입력을 표에 있는 공식 값으로 바꿈(총 연면적 추정 · 면적 비율 단지 세대수 뺌, 인구는 공개 칸 합 + 비공개 칸 수, 건물 수는 제공값 합). 시험 오차 0.373 → 0.380(같은 수준), 1,000 t 이상 0.269 → 0.315. 계수 · 기준온도는 그대로 |
 | 1.14 | 2026-11-17 | 팀 변화 모델 입력(5.8): 난방 · 가스 비중은 그 칸의 탄소공간지도 값만(이웃 칸 · 지역 비중 빌림 없앰, 배출 0이면 NULL), 세종 기상은 세종 ASOS 239의 완전한 해. 재학습 실험에서 정확도 같음(시험 오차 0.376 → 0.373). 계수 · 기준온도는 그대로 |

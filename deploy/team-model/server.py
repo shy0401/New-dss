@@ -31,7 +31,7 @@ PORT = int(os.environ.get("PORT", "8090"))
 MAX_PLANS = 9
 # official (기본): 아래 두 입력을 공식 값으로 바꿔 학습·예측. team: 받은 팀 코드 그대로(전후 비교용)
 INPUTS = os.environ.get("TEAM_INPUTS", "official")
-ASOS_FILE = Path(os.environ.get("TEAM_ASOS_FILE", str(Path(__file__).with_name("asos_annual.csv"))))
+STATION_FILE = Path(os.environ.get("TEAM_STATION_FILE", str(Path(__file__).with_name("station_annual.csv"))))
 _ELEC, _GAS, _HEAT = "elec_tco2e_total", "gas_tco2e_total", "heat_tco2e_total"
 _WEATHER = ("temp_avg_c", "heating_degree_days_c", "cooling_degree_days_c")
 # team estimates with an official value already in the table (audit 2026-11-17 §8): left out of the inputs
@@ -43,7 +43,7 @@ _OBSERVED_SUMS = {"building_count_filled": "building_count_sum", "apartment_buil
 _MASKED_CELLS = "population_total_persons_masked_cells"  # withheld (N/A) 100 m cells: a provider fact, added as an input
 _REGISTER_FLOOR = "reg_floor_area_m2"
 # each region's own-city KMA ASOS station (Gyeonggi has 98, 99, 119, 202, 203 only). A row whose team station is not
-# its own city's and that ``asos_annual.csv`` does not cover gets NULL weather: no other city's station (DATA_STANDARD 2절)
+# its own city's and that ``station_annual.csv`` does not cover gets NULL weather: no other city's station (DATA_STANDARD 2절)
 _OWN_STATION = {"11": "108", "26": "159", "27": "143", "28": "112", "30": "133", "31": "152", "36110": "239",
                 "41110": "119", "41111": "119", "41113": "119", "41115": "119", "41117": "119", "41480": "99",
                 "43111": "131", "44133": "232", "48121": "155", "48129": "155", "48170": "192", "48250": "253",
@@ -102,10 +102,12 @@ def official_inputs(table: Any, folder: Path, asos: Any) -> tuple[Any, dict[str,
     * ``heat_share_ctx``/``gas_share_ctx``: the team code gives a cell under 100 t the share of its 3 x 3 neighbours or of
       the region. Here every cell takes its own carbon-map share (heat or gas ÷ elec + gas + heat of that cell and year);
       a cell with no emission gets NULL, which the learner handles as missing.
-    * weather: a year in which the region's own-city ASOS station has 12 complete months (``asos_annual.csv``: Sejong
-      239, Paju 99; made by project/tools/experiments/asos_annual_for_team.py with the team's weather rules) replaces
-      temp/HDD/CDD of that region and year. Rows still on another city's station (team table: Seoul for Paju, Uijeongbu,
-      Goyang, ...; Daejeon for Sejong) get NULL: no substitute from another city.
+    * weather: where the team table used another city's ASOS station (Seoul for Paju, Uijeongbu, Goyang, ...; Daejeon
+      for Sejong), one station of the region's own city is used for all years (``station_annual.csv``: the KMA ASOS or
+      AWS station with the most complete years; AWS from the 방재기상월보 via 기상청 API허브; team weather rules, a year
+      needs 12 months without a missing day; made by project/tools/experiments/aws_annual_for_team.py and
+      asos_annual_for_team.py). Years that station does not complete, and regions without a usable station, get NULL:
+      no substitute from another city.
     * building counts and population (2026-11-17 §8): the team reads a 100 m cell without a value as 0 and a withheld
       population cell as 3 persons. Here the columns keep their names (the scenario code updates them) but hold the
       provider's observed sums, NULL where nothing was observed; the count of withheld cells becomes an input
@@ -137,7 +139,7 @@ def official_inputs(table: Any, folder: Path, asos: Any) -> tuple[Any, dict[str,
                 t.loc[rows, list(_WEATHER)] = [float(r.temp_avg_c), float(r.heating_degree_days_c), float(r.cooling_degree_days_c)]
                 own |= rows
                 replaced.append({"region": str(r.region_code), "station": str(r.station), "year": int(r.year), "rows": n})
-        note["asos"] = replaced
+        note["stations"] = replaced
         if _STATION in t:
             station = t[_STATION].astype("Int64").astype(str)
             own |= pandas.Series([(_OWN_STATION.get(c) or _OWN_STATION.get(c[:2])) == s for c, s in zip(region, station)], index=t.index)
@@ -175,7 +177,7 @@ def _patch_inputs(P: Any) -> None:
         return
     import pandas
 
-    asos = pandas.read_csv(ASOS_FILE, dtype={"region_code": str, "station": str}) if ASOS_FILE.is_file() else None
+    asos = pandas.read_csv(STATION_FILE, dtype={"region_code": str, "station": str}) if STATION_FILE.is_file() else None
     original = B.load_training
 
     def load_training(folder: Path) -> tuple[Any, list[str]]:
