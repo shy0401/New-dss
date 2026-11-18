@@ -29,8 +29,16 @@ export interface TeamStatus {
   status: 'starting' | 'training' | 'ready' | 'unavailable' | 'error' | 'off' | 'restricted';
   reason?: string | null; snapshot?: string | null; train?: string | null; ready_at?: string | null; train_seconds?: number | null; error?: string | null;
   versions?: Record<string, string>; regions?: string[];
-  accuracy?: { model: string; train: string; test: TeamAccuracyRow[]; by_use: string; band_coverage: string; source: string };
+  accuracy?: { model: string; train: string; test: TeamAccuracyRow[]; by_use: string; band_coverage: string; source: string; development?: TeamDevelopmentAccuracy };
 }
+
+/** 개발 단위 성능(맞닿은 개발 칸 묶음, 2026-11-19 · docs/TEAM_DATASET.md 7.3절). 백엔드 accuracy.development */
+export interface TeamDevelopmentAccuracy {
+  basis: string; rows: TeamAccuracyRow[]; by_use: string; electricity: string; small: string; band_coverage: string; requirement: string;
+}
+
+/** 요구 수준(오차 0.30 이하 · ±50% 안 75% 이상, project 요구 수준 문서 3절 U1) */
+export const REQUIREMENT = { median_error: 0.3, within_50pct: 0.75 };
 
 export interface TeamPrediction {
   grid?: string; cell: string; region: string | null; before_year: number; after_year: number;
