@@ -32,7 +32,12 @@ MAX_PLANS = 9
 # official (기본): 아래 두 입력을 공식 값으로 바꿔 학습·예측. team: 받은 팀 코드 그대로(전후 비교용)
 INPUTS = os.environ.get("TEAM_INPUTS", "official")
 STATION_FILE = Path(os.environ.get("TEAM_STATION_FILE", str(Path(__file__).with_name("station_annual.csv"))))
+# 2024 electricity emission factor of each region's carbon-map 500m file (2026-11-18, methods performance-candidates
+# §25-26): 2013-2022 use 0.4173, 2023 uses 0.4781 everywhere, 2024 is 0.4781 in 인천 · 경기 and 0.4173 elsewhere.
+FACTOR_FILE = Path(os.environ.get("TEAM_FACTOR_FILE", str(Path(__file__).with_name("elec_factor_2024.csv"))))
+_FACTOR_BASE, _FACTOR_HIGH = 0.4173, 0.4781
 _ELEC, _GAS, _HEAT = "elec_tco2e_total", "gas_tco2e_total", "heat_tco2e_total"
+_TOTAL = "buildings_tco2e_total"
 _WEATHER = ("temp_avg_c", "heating_degree_days_c", "cooling_degree_days_c")
 # team estimates with an official value already in the table (audit 2026-11-17 §8): left out of the inputs
 _ESTIMATED_INPUTS = ("floor_area_total_est_filled_m2", "complex_households_est")  # → reg_floor_area_m2, reg_dwellings
@@ -96,9 +101,14 @@ def _fix_band_sign(P: Any) -> None:
     P._band_sign_fixed = True
 
 
-def official_inputs(table: Any, folder: Path, asos: Any) -> tuple[Any, dict[str, Any]]:
+def official_inputs(table: Any, folder: Path, asos: Any, factor_high: set[str] | None = None) -> tuple[Any, dict[str, Any]]:
     """Official values in place of borrowed or estimated ones (2026-11-17 retraining, record methods/official-inputs).
 
+    * 2024 electricity on one emission factor (2026-11-18): the carbon map's 2024 500m electricity uses 0.4781 in the
+      regions of ``elec_factor_2024.csv`` marked 0.4781 (인천 · 경기) and 0.4173 elsewhere, while 2013-2022 use 0.4173.
+      Those regions' 2024 electricity (annual and monthly columns) is put on 0.4173 (× 0.4173 / 0.4781) and the
+      building total is recomputed, so a change target ending in 2024 carries no factor step. Done first, before the
+      energy mix below. The received files are not changed.
     * ``heat_share_ctx``/``gas_share_ctx``: the team code gives a cell under 100 t the share of its 3 x 3 neighbours or of
       the region. Here every cell takes its own carbon-map share (heat or gas ÷ elec + gas + heat of that cell and year);
       a cell with no emission gets NULL, which the learner handles as missing.
@@ -119,6 +129,16 @@ def official_inputs(table: Any, folder: Path, asos: Any) -> tuple[Any, dict[str,
 
     t = table.copy()
     note: dict[str, Any] = {}
+    if factor_high and "year" in t and _ELEC in t:
+        region = t["region"].astype(str).str[:5] if "region" in t else pandas.Series(folder.name[:5], index=t.index)
+        rows = (t["year"] == 2024) & region.isin(factor_high)
+        if rows.any():
+            scale = _FACTOR_BASE / _FACTOR_HIGH
+            cols = [c for c in t.columns if c == _ELEC or c.startswith("elec_tco2e_m")]
+            t.loc[rows, cols] = t.loc[rows, cols] * scale
+            if _TOTAL in t:
+                t.loc[rows, _TOTAL] = t.loc[rows, [_ELEC, _GAS, _HEAT]].sum(axis=1, min_count=1)
+        note["elec_factor_2024_rows"] = int(rows.sum())
     if all(c in t for c in (_ELEC, _GAS, _HEAT, "heat_share_ctx", "gas_share_ctx")):
         heat, gas = t[_HEAT].fillna(0.0), t[_GAS].fillna(0.0)
         total = (heat + gas + t[_ELEC].fillna(0.0)).where(lambda s: s > 0)
@@ -178,11 +198,16 @@ def _patch_inputs(P: Any) -> None:
     import pandas
 
     asos = pandas.read_csv(STATION_FILE, dtype={"region_code": str, "station": str}) if STATION_FILE.is_file() else None
+    factor_high: set[str] = set()
+    if FACTOR_FILE.is_file():
+        f = pandas.read_csv(FACTOR_FILE, dtype={"region_code": str, "factor_2024": str})
+        factor_high = set(f.loc[f["factor_2024"] == str(_FACTOR_HIGH), "region_code"])
+    STATE["inputs"]["elec_factor_2024_high_regions"] = sorted(factor_high)
     original = B.load_training
 
     def load_training(folder: Path) -> tuple[Any, list[str]]:
         table, features = original(folder)
-        table, note = official_inputs(table, Path(folder), asos)
+        table, note = official_inputs(table, Path(folder), asos, factor_high)
         features = official_features(features, table)
         note["inputs"] = len(features)
         STATE["inputs"]["tables"][Path(folder).name] = note
