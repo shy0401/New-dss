@@ -94,6 +94,9 @@ export function TeamAreaPanel({ grids, region, plannedFloor, plannedRemoved }: {
     <p className="muted" data-testid="team-area-cells">
       이 구역의 500m 칸 <b>{grids.length}개</b>(지도의 점선 칸)를 한 개발로 봅니다. 용도별 연면적 합계를 칸마다 같게 나눠 예측하고 더합니다.
     </p>
+    <p className="muted" data-testid="team-area-fit-note">
+      구역은 개발 부지에 맞게 고르세요. 개발이 없는 칸의 작은 변화는 모델이 맞히지 못해, 넓은 구역에 작은 계획을 나누면 칸마다 오차가 더해집니다.
+    </p>
     {tooMany && <p className="form-error" role="alert" data-testid="team-area-too-many">칸이 {grids.length}개라 평가한 가장 큰 개발({AREA_MAX_CELLS}칸)보다 큽니다. 반경을 줄이거나 직접 그리기로 개발 부지만 골라 주세요.</p>}
     {grids.length === 0 && <p className="form-error" role="alert">이 구역에 중심이 들어오는 500m 칸이 없습니다. 구역을 조금 넓혀 주세요.</p>}
     <form className="team-area-form" onSubmit={(e) => void submit(e)} aria-label="구역 개발 계획 입력">

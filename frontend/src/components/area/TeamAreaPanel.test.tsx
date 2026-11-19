@@ -31,6 +31,7 @@ describe('TeamAreaPanel', () => {
     render(<TeamAreaPanel grids={GRIDS} region="52110" plannedFloor={50000} plannedRemoved={0} />);
     expect(await screen.findByText(/학습 완료/)).toBeTruthy();
     expect(screen.getByTestId('team-area-cells').textContent).toContain('3개');
+    expect(screen.getByTestId('team-area-fit-note').textContent).toContain('개발 부지에 맞게');
     expect((screen.getByPlaceholderText('예: 120000') as HTMLInputElement).value).toBe('50000');
     expect(screen.getByTestId('team-area-sync').textContent).toContain('그대로');
     fireEvent.click(screen.getByRole('button', { name: /용도 추가/ }));
