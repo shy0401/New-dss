@@ -52,6 +52,16 @@ def test_an_error_answer_is_not_saved_as_data(tmp_path):
     assert not list((tmp_path / "pages").glob("*.json"))
 
 
+def test_the_received_day_is_the_korean_date(tmp_path):
+    from datetime import datetime, timezone
+
+    from app.kea_rating import default_out_dir, kst_today
+    # 2026-11-19 15:21 UTC is 2026-11-20 00:21 in Korea: the folder is named after the Korean day
+    assert kst_today(datetime(2026, 11, 19, 15, 21, tzinfo=timezone.utc)).isoformat() == "2026-11-20"
+    assert kst_today(datetime(2026, 11, 19, 14, 59, tzinfo=timezone.utc)).isoformat() == "2026-11-19"
+    assert default_out_dir(tmp_path, kst_today(datetime(2026, 11, 19, 15, 21, tzinfo=timezone.utc))).name == "2026-11-20"
+
+
 def test_needs_a_key(tmp_path):
     with pytest.raises(RatingFetchError):
         fetch_all(tmp_path, "  ", client=_client(1, 100, []), delay_s=0)

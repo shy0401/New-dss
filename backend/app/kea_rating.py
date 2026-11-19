@@ -14,7 +14,7 @@ import json
 import math
 import os
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -112,8 +112,16 @@ def fetch_all(
     return {k: v for k, v in manifest.items() if k != "files"}
 
 
+KST = timezone(timedelta(hours=9))  # 한국은 서머타임이 없어 고정 +9
+
+
+def kst_today(now: datetime | None = None) -> date:
+    """받은 날 = 한국 날짜. 컨테이너 시계(UTC)의 날짜를 쓰면 00~09시에 받은 자료가 전날 폴더로 간다(2026-11-20 첫 수집)."""
+    return (now or datetime.now(timezone.utc)).astimezone(KST).date()
+
+
 def default_out_dir(data_dir: Path, today: date | None = None) -> Path:
-    return data_dir / "raw" / "kea_building_rating" / (today or date.today()).isoformat()
+    return data_dir / "raw" / "kea_building_rating" / (today or kst_today()).isoformat()
 
 
 def service_key() -> str:
