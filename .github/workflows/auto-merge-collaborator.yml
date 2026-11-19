@@ -14,11 +14,15 @@ on:
   push:
     branches: [main]
     paths: ['.github/workflows/auto-merge-collaborator.yml']   # 규칙을 넣거나 고친 직후, 열려 있던 PR을 한 번 훑는다
+  workflow_run:                       # 시험 · 이름 점검이 끝나면 다시 훑는다(통과한 PR을 그때 병합). main의 이 파일이 쓰인다
+    workflows: ['시험', '보낸 사람 이름 점검']
+    types: [completed]
   workflow_dispatch:
 
 permissions:
   contents: write
   pull-requests: write
+  checks: read                        # 커밋의 시험 결과 읽기
 
 concurrency:
   group: auto-merge-collaborator
@@ -37,6 +41,7 @@ jobs:
       BASE_BRANCH: main
       MAX_REMOVED_FILES: '20'               # 한 PR이 지우는 파일 수가 이보다 많으면 보류
       MAX_DELETED_LINES: '3000'             # 한 PR이 지우는 줄 수가 이보다 많으면 보류
+      REQUIRED_CHECKS: '백엔드 시험,화면 시험,저장소 파일 점검'   # 이 커밋에서 모두 통과해야 병합(tests.yml · privacy-check.yml의 작업 이름)
     steps:
       - name: main의 이름 점검 스크립트 받기
         uses: actions/checkout@v4
@@ -116,6 +121,25 @@ jobs:
               hold "$n" "$sha" mass-delete "지우는 양이 많아 자동 병합하지 않았습니다(파일 ${removed}개 삭제, ${deleted}줄 삭제. 기준: 파일 ${MAX_REMOVED_FILES}개, ${MAX_DELETED_LINES}줄). 의도한 변경이면 저장소 관리자가 내용을 보고 직접 병합합니다."
               return 0
             fi
+
+            # 시험(tests.yml)과 이름 점검(privacy-check.yml)이 이 커밋에서 모두 통과해야 병합한다.
+            # 아직 돌고 있으면 기다린다(끝나면 workflow_run으로 이 워크플로가 다시 돈다). 실패하면 댓글로 알린다.
+            checks=$(api "repos/$GH_REPO/commits/$sha/check-runs?filter=latest&per_page=100" \
+              --jq '.check_runs[] | [.name, .status, (.conclusion // "")] | @tsv' 2>/dev/null) \
+              || { note "- #$n: 시험 결과를 읽지 못함"; return 0; }
+            waiting="" failed=""
+            IFS=',' read -ra required <<<"$REQUIRED_CHECKS"
+            for c in "${required[@]}"; do
+              row=$(awk -F'\t' -v c="$c" '$1 == c' <<<"$checks" | head -1)
+              if [ -z "$row" ] || [ "$(cut -f2 <<<"$row")" != "completed" ]; then waiting="$waiting $c;"
+              elif [ "$(cut -f3 <<<"$row")" != "success" ]; then failed="$failed $c($(cut -f3 <<<"$row"));"
+              fi
+            done
+            if [ -n "$failed" ]; then
+              hold "$n" "$sha" checks-failed "시험이 통과하지 않아 자동 병합하지 않았습니다:${failed} PR의 Checks 탭에서 로그를 보고 고쳐 같은 브랜치에 푸시하면, 시험이 다시 돌고 통과하면 병합합니다."
+              return 0
+            fi
+            if [ -n "$waiting" ]; then note "- #$n: 시험 기다림 (${waiting} )"; return 0; fi
 
             # 병합 가능 여부는 GitHub이 뒤에서 계산한다. 계산이 끝날 때까지 최대 1분 기다린다.
             mergeable=$(jq -r '.mergeable' <<<"$pr")

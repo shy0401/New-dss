@@ -8,6 +8,7 @@ def test_model_cannot_introduce_new_numbers_or_evidence_ids():
     with pytest.raises(ValueError):choose_evidence({'fact_ids':['invented']},facts)
     with pytest.raises(ValueError):choose_evidence({'fact_ids':['scope'],'text':'탄소 100% 감축'},facts)
 
+@pytest.mark.db
 def test_snapshot_is_honest_and_export_contains_sources():
     with Session() as db:
         snapshot=create_snapshot(db,2025,None,[])
@@ -20,6 +21,7 @@ def test_snapshot_is_honest_and_export_contains_sources():
         assert snapshot['evidence_hash'] and 'SHA' not in text   # kept in the stored record, not printed
         assert snapshot['place'] in text and '## 6. 유의사항' in text and text.count('\n## ')==7
 
+@pytest.mark.db
 def test_unknown_scenario_and_different_year_are_rejected():
     with Session() as db:
         with pytest.raises(ValueError):create_snapshot(db,2025,None,['not-found'])

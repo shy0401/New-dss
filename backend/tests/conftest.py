@@ -9,6 +9,14 @@ from __future__ import annotations
 
 import pytest
 
+
+def pytest_configure(config):
+    # GitHub CI (.github/workflows/tests.yml) has no database and no data/ folder: it runs `-m "not db and not local_data"`.
+    # On the PC (Compose) every test runs as before.
+    config.addinivalue_line("markers", "db: needs the PostGIS database with the loaded records (Compose)")
+    config.addinivalue_line("markers", "local_data: needs files under data/ on the PC (not in Git)")
+
+
 # child rows first, then the rows they point at
 TABLES = ["scenario_images", "scenario_results", "scenarios", "decision_reports", "collection_jobs"]
 

@@ -1,8 +1,10 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
 
 
+@pytest.mark.db
 def test_readiness_describes_every_operational_source_without_secret_values(monkeypatch):
     monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "never-return-this-service-key")
     monkeypatch.setenv("SGIS_CONSUMER_KEY", "never-return-this-consumer-key")
@@ -20,6 +22,7 @@ def test_readiness_describes_every_operational_source_without_secret_values(monk
     assert "never-return-this" not in serialized
 
 
+@pytest.mark.db
 def test_readiness_explains_collection_scope_and_uses():
     body = TestClient(app).get("/api/readiness").json()
     sources = {item["id"]: item for item in body["sources"]}
@@ -55,6 +58,7 @@ def test_local_engine_status_exposes_safe_operating_role(monkeypatch):
     assert "수치 계산" in body["prohibited_tasks"]
 
 
+@pytest.mark.db
 def test_readiness_flags_placeholder_key_without_returning_it(monkeypatch):
     placeholder = "여기에_서비스키_입력"
     monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", placeholder)

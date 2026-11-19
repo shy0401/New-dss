@@ -1,7 +1,9 @@
+import pytest
 from fastapi.testclient import TestClient
 from app.main import app
 
 
+@pytest.mark.db
 def test_baseline_area_is_restricted_to_matching_observation_year():
     """Stored sector metadata applies only to its own year, and only where no observation exists
     (with observations the area comes from the same parcel set as the energy)."""
@@ -21,6 +23,7 @@ def test_baseline_area_is_restricted_to_matching_observation_year():
         db.rollback()
 
 
+@pytest.mark.db
 def test_scenario_baseline_uses_one_parcel_set_for_energy_and_area():
     from app.db import Session
     from app.service import dashboard
@@ -36,6 +39,7 @@ def test_scenario_baseline_uses_one_parcel_set_for_energy_and_area():
         if 'GAS' in scope['energy_types']:
             assert all(row['gas_kwh'] is not None for row in data['baseline_monthly'])
 
+@pytest.mark.db
 def test_nondefault_year_is_returned_and_missing_months_are_null():
     c=TestClient(app)
     response=c.get('/api/dashboard?year=2024')
@@ -45,6 +49,7 @@ def test_nondefault_year_is_returned_and_missing_months_are_null():
     assert len(data['monthly'])==12
     assert all(r['use_ym'].startswith('2024') for r in data['monthly'])
 
+@pytest.mark.db
 def test_model_reports_training_gate_not_fake_accuracy():
     c=TestClient(app)
     response=c.get('/api/model')
@@ -56,6 +61,7 @@ def test_model_reports_training_gate_not_fake_accuracy():
             assert model['metrics'] is None
             assert not model['validated']
 
+@pytest.mark.db
 def test_job_history_persists_and_unknown_job_returns_404():
     c=TestClient(app)
     rows=c.get('/api/v1/collection-jobs').json()
@@ -73,6 +79,7 @@ def test_impossible_green_footprint_and_capacity_rejected():
     payload.update(footprint_per_building=500,green_ratio=.2,households=500,average_household_area=100)
     assert c.post('/api/scenarios',json=payload).status_code==422
 
+@pytest.mark.db
 def test_offline_recollection_blocked_without_job_creation(monkeypatch,tmp_path):
     monkeypatch.setenv('DEMO_OFFLINE_MODE','true')
     c=TestClient(app)
@@ -81,6 +88,7 @@ def test_offline_recollection_blocked_without_job_creation(monkeypatch,tmp_path)
     assert c.post('/api/collections',json={'datasets':['weather'],'start_month':'2025-01','end_month':'2025-12'}).status_code==409
     assert len(c.get('/api/collections').json())==before
 
+@pytest.mark.db
 def test_missing_provider_credentials_are_blocked_before_job_creation(monkeypatch):
     monkeypatch.setenv('DEMO_OFFLINE_MODE','false')
     monkeypatch.delenv('SGIS_CONSUMER_KEY',raising=False)

@@ -1,3 +1,4 @@
+import pytest
 import json
 import shutil
 from pathlib import Path
@@ -59,6 +60,7 @@ def test_monthly_energy_accepts_official_direct_item_and_preserves_key_encoding(
     assert cache.params["serviceKey"] == "abc%2Bdef"
 
 
+@pytest.mark.local_data
 def test_collect_kapt_uses_cached_raw_files_in_offline_mode(tmp_path, monkeypatch):
     source = Path(__file__).parents[2] / "data" / "raw" / "research"
     for path in list(source.glob("kapt_jeonju_*_202512.json")) + list(source.glob("kapt_detail_*.json")):

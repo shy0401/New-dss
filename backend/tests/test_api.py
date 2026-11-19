@@ -1,10 +1,12 @@
 """Integration checks run against the actual PostGIS DB in Compose."""
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text,select
 from app.main import app
 from app.db import engine,Session
 from app.models import Grid
 
+@pytest.mark.db
 def test_health_and_postgis():
     client=TestClient(app)
     response=client.get('/api/health')
@@ -13,6 +15,7 @@ def test_health_and_postgis():
     with engine.connect() as connection:
         assert connection.execute(text('SELECT ST_SRID(ST_SetSRID(ST_MakePoint(0,0),5179))')).scalar()==5179
 
+@pytest.mark.db
 def test_stored_grid_exact_dimensions():
     with engine.connect() as c:
         row=c.execute(text('SELECT COUNT(*),MAX(ABS(ST_Area(geom)-250000)),MAX(ABS(ST_XMax(geom)-ST_XMin(geom)-500)),MAX(ABS(ST_YMax(geom)-ST_YMin(geom)-500)) FROM grid_500m')).one()
@@ -21,6 +24,7 @@ def test_stored_grid_exact_dimensions():
     assert row[2]<0.0001
     assert row[3]<0.0001
 
+@pytest.mark.db
 def test_dashboard_and_map_have_real_spatial_records():
     c=TestClient(app)
     d=c.get('/api/dashboard').json();m=c.get('/api/map').json()
@@ -35,6 +39,7 @@ def test_dashboard_and_map_have_real_spatial_records():
     assert len(d['monthly'])==12
 
 
+@pytest.mark.db
 def test_map_grids_carry_explicit_indicator_fields():
     m=TestClient(app).get('/api/map').json()
     props=m['grids']['features'][0]['properties']
@@ -62,6 +67,7 @@ def test_collection_range_prevents_reckless_requests():
     c=TestClient(app)
     assert c.post('/api/collections',json={'datasets':['energy'],'start_month':'2020-01','end_month':'2025-12'}).status_code==422
 
+@pytest.mark.db
 def test_scenario_3d_scene_is_stored_only_as_png_for_a_saved_scenario():
     import base64,uuid
     from app.db import Session,engine
