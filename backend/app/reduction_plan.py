@@ -142,7 +142,7 @@ def building_plan(reference: dict[str, Any] | None, footprint_m2: float | None, 
         f"에너지 절약 운영(계량·제어·행동, 전력 {OPERATION_ELECTRICITY_SAVING * 100:.1f}%)은 입주 뒤 행동이라 계획 단계의 감축 방안에 넣지 않았습니다(수단 목록의 참고 지표).",
         f"지붕 태양광은 건축면적의 {ROOF_USABLE_RATIO * 100:.0f}%를 쓸 수 있고 1 kW에 {ROOF_M2_PER_KW:.0f} m²가 든다고 가정했습니다."
         + (f" 발전량은 {pv_yield['label']} 기준 {kwh_per_kw:,.0f} kWh/kW·년입니다." if kwh_per_kw and (pv_yield or {}).get("label") else ""),
-        f"녹지·조경 흡수는 녹지 1 m²에 연 {GREEN_UPTAKE_KG_PER_M2:.1f} kgCO2(1 ha에 10 t)를 가정했습니다. 국립산림과학원 표준 탄소흡수량(20년생 주요 수종 1 ha에 연 {GREEN_UPTAKE_RANGE_T_PER_HA[0]}~{GREEN_UPTAKE_RANGE_T_PER_HA[1]} t)의 낮은 쪽이며, 조경 녹지는 숲보다 나무가 성기어 더 작을 수 있습니다(확인 필요).",
+        f"녹지·조경 흡수는 녹지 1 m²에 연 {GREEN_UPTAKE_KG_PER_M2:.1f} kgCO2(1 ha에 10 t)를 가정했습니다. 국립산림과학원 표준 탄소흡수량(20년생 주요 수종 1 ha에 연 {GREEN_UPTAKE_RANGE_T_PER_HA[0]}~{GREEN_UPTAKE_RANGE_T_PER_HA[1]} t)의 낮은 쪽이고, 국내 조경 식재지 실측(식재 면적당 연 0.38~2.37 kgCO2/m²) 범위 안입니다. 새로 심은 나무는 처음 10년쯤 흡수가 작아 계획 초기에는 이 값보다 작을 수 있습니다.",
         "난방·급탕 전기화(히트펌프)는 초기 비용이 크고 국내 공동주택 실측 근거가 부족해 기본 단계에 넣지 않았습니다.",
         "에너지자립률은 태양광 발전량과 소비를 1차에너지(전력 2.75·가스 1.1)로 환산한 비율이며 ZEB 등급은 참고 위치입니다(1++ 효율등급·BEMS 요건 별도).",
     ]
