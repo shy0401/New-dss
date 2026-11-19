@@ -26,7 +26,7 @@ from sqlalchemy import select, text
 
 from .degree_days import CDD_BASE_C, HDD_BASE_C, RULE, RULE_ID, degree_days
 
-VERSION = "1.2"  # 1.1 (10-23): K-apt 세대당 전기 상한 SUSPECT 규칙; 1.2 (10-26): K-apt 음수 항목은 NULL(원값은 raw_record) — 둘 다 저장된 달에 다시 적용
+VERSION = "1.3"  # 1.1 (10-23): K-apt 세대당 전기 상한 SUSPECT 규칙; 1.2 (10-26): K-apt 음수 항목은 NULL(원값은 raw_record); 1.3 (11-19): 같은 지번 K-apt 단지의 전기 관측을 합으로(DATA_STANDARD 4절) — 모두 저장된 달에 다시 적용
 ELECTRICITY_UNDERREPORT_KWH_PER_HOUSEHOLD = 2000.0  # urban-carbon config/rules.yaml electricity_underreport (ADR 0012)
 DOC = "docs/DATA_STANDARD.md"
 Log = Callable[[str], None]
