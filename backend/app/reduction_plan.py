@@ -2,7 +2,7 @@
 
 다른 계획안과 견주지 않는다. 같은 계획(같은 연면적·동수·층수)에서
   0. 대책 없음(기준안: 관측 원단위 그대로, 효율 1.0·태양광 0)
-  1. 단열·창호 기준 강화(가스 사용 23.6% 절감: 준공 시기만 다른 개별난방 단지 78쌍 실측)
+  1. 단열·창호 기준 강화(가스 사용 13.7% 절감: 준공 시기만 다른 개별난방 단지 117쌍 실측, 같은 난방 면적(관리비 부과 면적) 기준)
   2. 에너지 절약 운영(전력 사용 4.8% 절감: 계량·제어·행동 실측 문헌 6건 중앙값)
   3. 지붕 태양광(옥상 면적이 허락하는 만큼)
   4. 녹지·조경 흡수(녹지 면적 × 연 1.0 kgCO2/m², 상쇄)
@@ -21,10 +21,14 @@ from .benchmarks import PRIMARY_ENERGY_FACTOR
 from .reduction_measures import embodied, measure_table
 
 # 지표(실측 기반). 근거 표: docs/REDUCTION_INDICATORS.md
-ENVELOPE_GAS_SAVING = 0.236            # 단열·창호 기준 강화: 가스 −23.6% (개별난방 단지 78쌍, 준공 2017~ 대 ~2008, 95% 구간 −25.8~−20.5%)
+# 단열·창호 기준 강화: 가스 −13.7% (2026-11-20 다시 계산: 개별난방 단지 117쌍, 준공 2017~ 대 ~2008, 같은 시군구 · 세대수 구간,
+# 관리비 부과 면적당 짝별 중앙값, 95% 구간 −17.3~−9.8%). 연면적당으로는 −33.9%지만 새 단지는 연면적에 난방하지 않는
+# 면적이 많아(관리비 부과 면적 ÷ 연면적 새 0.534 · 옛 0.685) 외피 효과로는 과대라서 같은 난방 면적 기준 값을 쓴다.
+# 이전 값 −23.6%(78쌍)는 원래 표 · 스크립트가 없어 재현되지 않았다(관문 G1 미통과). 근거: docs/records/2026-11-20-envelope-step-rerun.md
+ENVELOPE_GAS_SAVING = 0.137
 OPERATION_ELECTRICITY_SAVING = 0.048   # 에너지 절약 운영: 전력 −4.8% (실측 문헌 6건 중앙값, 범위 −17.0~−1.95%)
 # 지표의 실측 범위(작은 쪽, 큰 쪽). 계산은 위 중앙값으로 하고, 범위는 그 단계 감축량이 움직일 수 있는 폭으로만 함께 적는다.
-ENVELOPE_GAS_SAVING_RANGE = (0.205, 0.258)           # 78쌍 차이의 95% 구간
+ENVELOPE_GAS_SAVING_RANGE = (0.098, 0.173)           # 117쌍 짝별 중앙값의 95% 구간(관리비 부과 면적당)
 OPERATION_ELECTRICITY_SAVING_RANGE = (0.0195, 0.170)   # 문헌 6건의 최소~최대
 GREEN_UPTAKE_KG_PER_M2 = 1.0           # 녹지·조경 흡수: 연 1.0 kgCO2/m² = 10 t/ha (국립산림과학원 표준 탄소흡수량 20년생 8.8~15.9 t/ha의 낮은 쪽, 가정)
 GREEN_UPTAKE_RANGE_T_PER_HA = (8.8, 15.9)
@@ -59,7 +63,8 @@ def _carbon(electricity_kwh: float, gas_kwh: float, fe: float, fg: float | None)
 
 def building_plan(reference: dict[str, Any] | None, footprint_m2: float | None, factors: dict[str, Any] | None,
                   pv_yield: dict[str, Any] | None = None, plan_carbon_kg: float | None = None,
-                  green_area_m2: float | None = None, floor_area_m2: float | None = None, floors: float | None = None) -> dict[str, Any]:
+                  green_area_m2: float | None = None, floor_area_m2: float | None = None, floors: float | None = None,
+                  base_year: int | None = None) -> dict[str, Any]:
     """계획안 하나의 감축 방안 사다리.
 
     reference: 기준안 연간 {'electricity_kwh', 'gas_kwh'} (같은 연면적을 관측 원단위 그대로 지을 때)
@@ -70,6 +75,7 @@ def building_plan(reference: dict[str, Any] | None, footprint_m2: float | None, 
     green_area_m2: 계획안의 녹지 면적(대지면적 × 녹지 비율). 없으면 녹지·조경 흡수 단계를 뺀다
     floor_area_m2: 계획안의 지상 연면적. 없으면 시공 단계 내재탄소(참고)를 뺀다
     floors: 계획안의 층수(모듈러 공법처럼 층수 제한이 있는 수단의 값을 낼지 정한다)
+    base_year: 기준안을 만든 관측 연도. 감축량은 그해 기준안에 대한 값이라 함께 적는다(AGENTS.md: 감축량에는 기준 연도)
     """
     ref = reference or {}
     e0, g0 = ref.get("electricity_kwh"), ref.get("gas_kwh")
@@ -96,7 +102,7 @@ def building_plan(reference: dict[str, Any] | None, footprint_m2: float | None, 
     e1, g1 = e0, g0
     if gas_known and g0 > 0 and fg:
         g1 = g0 * (1 - ENVELOPE_GAS_SAVING)
-        step("envelope", "단열·창호 기준 강화", f"가스 사용을 {ENVELOPE_GAS_SAVING * 100:.1f}% 줄임 (준공 시기만 다른 개별난방 단지 78쌍의 실측 차이)", e1, g1,
+        step("envelope", "단열·창호 기준 강화", f"가스 사용을 {ENVELOPE_GAS_SAVING * 100:.1f}% 줄임 (준공 시기만 다른 개별난방 단지 117쌍의 실측 차이, 같은 난방 면적 기준)", e1, g1,
              range_pct=tuple(r * 100 for r in ENVELOPE_GAS_SAVING_RANGE), range_kg=tuple(g0 * r * fg for r in ENVELOPE_GAS_SAVING_RANGE))
     e2, g2 = e1 * (1 - OPERATION_ELECTRICITY_SAVING), g1
     step("operation", "에너지 절약 운영", f"계량·제어·행동 개선으로 전력 사용을 {OPERATION_ELECTRICITY_SAVING * 100:.1f}% 줄임 (실측 문헌 6건 중앙값)", e2, g2,
@@ -132,7 +138,7 @@ def building_plan(reference: dict[str, Any] | None, footprint_m2: float | None, 
                 "offset_kg": round(green["uptake_kg"], 1) if green and green.get("uptake_kg") else 0.0,
                 "offsite_pv_kw": round(e3 / kwh_per_kw, 1) if kwh_per_kw and e3 > 0 else None}
     assumptions = [
-        f"단열·창호 기준 강화는 가스 사용 {ENVELOPE_GAS_SAVING * 100:.1f}% 절감을 적용했습니다. 같은 지역·난방 방식·규모에서 준공 시기만 다른 개별난방 단지 78쌍의 실측 차이(면적당 가스, 95% 구간 20.5~25.8%)이며, 같은 비교에서 전기는 5.2% 많아 전기 절감은 넣지 않았습니다.",
+        f"단열·창호 기준 강화는 가스 사용 {ENVELOPE_GAS_SAVING * 100:.1f}% 절감을 적용했습니다. 같은 시군구·세대수 구간에서 준공 시기만 다른 개별난방 단지 117쌍의 실측 차이(관리비 부과 면적당 가스, 95% 구간 {ENVELOPE_GAS_SAVING_RANGE[0] * 100:.1f}~{ENVELOPE_GAS_SAVING_RANGE[1] * 100:.1f}%)입니다. 연면적당으로는 33.9%이지만 새 단지는 난방하지 않는 면적이 많아 외피 효과로는 과대라 같은 난방 면적 기준 값을 썼습니다. 짝의 86%가 전북 단지이고, 같은 비교에서 전기는 방향이 분명하지 않아 전기 절감은 넣지 않았습니다.",
         f"에너지 절약 운영은 전력 사용 {OPERATION_ELECTRICITY_SAVING * 100:.1f}% 절감을 적용했습니다. 계량·제어·행동 개선을 실측한 문헌 6건의 중앙값이며 범위는 1.95~17.0%입니다.",
         f"지붕 태양광은 건축면적의 {ROOF_USABLE_RATIO * 100:.0f}%를 쓸 수 있고 1 kW에 {ROOF_M2_PER_KW:.0f} m²가 든다고 가정했습니다."
         + (f" 발전량은 {pv_yield['label']} 기준 {kwh_per_kw:,.0f} kWh/kW·년입니다." if kwh_per_kw and (pv_yield or {}).get("label") else ""),
@@ -146,6 +152,9 @@ def building_plan(reference: dict[str, Any] | None, footprint_m2: float | None, 
         assumptions.append("가스 배출계수가 없어 단열·창호 단계와 가스 탄소를 넣지 않았습니다.")
     if pv and not pv["kwh"]:
         assumptions.append("태양광 발전량 근거가 없어 용량만 적고 감축량에는 넣지 않았습니다.")
+    if base_year:
+        assumptions.append(f"기준안(대책 없음)은 {base_year}년 관측 원단위로 만든 값이고, 감축량은 이 {base_year}년 기준안에 대한 값입니다. "
+                           "날씨를 맞춘 사용량도 해마다 달라 다른 해를 기준안으로 쓰면 감축량이 달라집니다.")
     if not green_area_m2:
         assumptions.append("녹지 면적이 없어 녹지·조경 흡수 단계를 넣지 않았습니다.")
     return {
@@ -155,6 +164,7 @@ def building_plan(reference: dict[str, Any] | None, footprint_m2: float | None, 
         "pv": pv, "pv_yield": pv_yield, "green": green, "self_sufficiency_pct": self_pct, "zeb_grade": zeb_grade(self_pct), "residual": residual,
         "plan": {"carbon_kg": round(plan_carbon_kg, 1), "pct": round((c0 - plan_carbon_kg) / c0 * 100, 1) if c0 > 0 else None} if plan_carbon_kg is not None else None,
         "factors": {"electricity": fe, "gas": fg if gas_known else None},
+        "base_year": base_year,
         "assumptions": assumptions,
         # 수단마다 따로 본 값(서로 더하지 않음)과 시공 단계 내재탄소(참고 계산). 사다리 값은 바꾸지 않는다.
         "measures": measure_table(e0, g0 if gas_known else None, fe, fg if gas_known else None, pv, green),
