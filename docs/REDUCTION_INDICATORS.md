@@ -53,7 +53,7 @@
 - 가스 −13.7%는 개별난방 단지의 값입니다. 지역난방 단지는 열 사용량 자료가 없어 같은 비교를 하지 못했습니다.
 - 기준안(대책 없음)은 관측 원단위 × 계획 연면적이라, 새로 짓는 계획안의 연면적에 난방하지 않는 면적이 많으면 기준안 가스가 실제보다 클 수 있습니다. 기준안 보정은 그 칸 관측 단지의 연식 구성을 확인한 뒤 따로 정합니다(아직 넣지 않음).
 - 신축 통합과 운영 지표는 2026-11-20 원문 대조로 다시 봤습니다([작업 기록](records/2026-11-20-operation-newbuild-cleanup.md)). 신축 통합의 원문과 맞는 근거는 총에너지 값이고 전기가 줄었다는 원문이 없으며, 이 도구의 실측(짝 비교 세대 전기, 효율등급 인증 단지 전기 +0.6%)도 전기 차이를 확인하지 못해 전력에 곱하지 않습니다. 운영은 입주 뒤 행동이라 계획 단계의 감축 방안에 넣지 않습니다.
-- 녹지 흡수 계수는 숲 기준입니다. 조경 녹지는 나무가 성기어 더 작을 수 있습니다(확인 필요).
+- 녹지 흡수 계수는 숲 기준 계수의 낮은 쪽이고, 국내 조경 식재지 실측(식재 면적당 연 0.38~2.37 kgCO2/m²) 범위 안입니다(2026-11-20 본문 확인). 부지 전체 면적당 값(공공용지 0.24, 공동주택 단지 약 0.40 kgCO2/m²)은 분모가 달라 견주지 않습니다. 새로 심은 나무는 처음 10년쯤 흡수가 작아 계획 초기에는 더 작을 수 있습니다.
 - 날씨·건물 나이·환기 방식에 따른 차이는 지표에 따로 넣지 않았습니다. 기준안이 같은 지역·같은 용도 건물의 12개월 계량값이라 그 지역의 기후와 건물 구성이 원단위에 들어 있습니다.
 - 조사표 원본(출처 주소 포함)은 저장소 밖 팀 공유 자료에 있습니다(`감축전략_효과통계_2026-11-10.xlsx`).
 
@@ -135,7 +135,7 @@
 - 지역난방 단지 난방 제어(외기온 예측제어·스마트 통합배관): [지역난방 2차측 공급수 온도 제어 실증, 2015](https://koreascience.kr/article/JAKO201509364589215.pdf), [LH 스마트 통합배관 실증, 칸(kharn) 2025-11](https://www.kharn.kr/mobile/article.html?no=29260)
 - 에너지 절약 운영(계량·제어·행동): [피드백 현장실험, Fraunhofer ISI 2012](https://www.isi.fraunhofer.de/content/dam/isi/dokumente/sustainability-innovation/2012/WP08-2012_Feedback-effects_Energy-Policy.pdf), [이웃 비교 고지서, MIT CEEPR](https://ceepr.mit.edu/workingpaper/social-norms-and-energy-conservation), [서울시 에너지자립마을 절전소](https://news.seoul.go.kr/env/archives/38528), [에너지캐시백 참여 실적, 아시아경제 2023-07](https://www.asiae.co.kr/en/article/2023072310332184784)
 - 지붕 태양광: [ZEB·그린리모델링 제도와 실적 정리, 칸(kharn) 2026-09](https://www.kharn.kr/mobile/article.html?no=31811)
-- 녹지·조경 흡수(상쇄): 국립산림과학원 표준 탄소흡수량
+- 녹지·조경 흡수(상쇄): 국립산림과학원 표준 탄소흡수량, [도시공원 식재유형별 탄소 저장 · 흡수(식재 면적당)](https://koreascience.kr/article/JAKO201416743150056.pdf), [조경수 수령별 탄소흡수](https://koreascience.kr/article/JAKO201732863553302.pdf)
 - 저탄소 콘크리트(고로슬래그·플라이애시 치환): [용인 공동주택 에코멘트 배합 물량 기반 산정, 2011](https://koreascience.kr/article/JAKO201123153958559.pdf), [고로슬래그 PHC 말뚝 LCA, 콘크리트학회지 2016](https://koreascience.kr/article/JAKO201620136946695.pdf), [탄소저감 콘크리트 환경성적표지 인증(최대 54%), 한국경제 2025-10](https://www.hankyung.com/article/202510275081i)
 - 모듈러(공장 제작) 공법: [모듈러 공동주택과 RC 공동주택 전과정 비교, 대한건축학회논문집 2023](https://koreascience.or.kr/article/JAKO202318839456382.page), [철골 모듈러 공공임대 100세대 LCA, 건설관리 2023](https://koreascience.or.kr/article/JAKO202315958721150.pdf), [LH 모듈러 주택 현황과 공사비, 2023](https://koreascience.kr/article/JAKO202315958719205.pdf), [용인 영덕 경기행복주택(13층 모듈러)](https://www.hyundaimotorgroup.com/ko/story/CONT0000000000094114)
 - 구조 방식 전환(벽식 → 기둥·보 라멘): [벽식·무량판·라멘 3개 동 골조 CO2 비교, 한국건축시공학회 2010](https://koreascience.kr/article/JAKO201026039609506.pdf), [라멘과 벽식 생애주기비용, 2014](https://koreascience.kr/article/JAKO201436351075349.pdf)

@@ -129,8 +129,8 @@ MEASURES: tuple[dict[str, Any], ...] = (
      "base": "green", "value": None, "range": None, "evidence": "assumed", "n": None, "apply": "신축·재개발",
      "what": "녹지 1 m²에 연 1.0 kgCO2(1 ha에 10 t)를 흡수한다고 본다. 줄이는 것이 아니라 메우는 것이라 따로 적는다.",
      "cost": "확인 필요.",
-     "note": "숲 기준 계수(20년생 8.8~15.9 t/ha)의 낮은 쪽이다. 조경 녹지는 나무가 성기어 더 작을 수 있다(확인 필요).",
-     "sources": (("국립산림과학원 표준 탄소흡수량", "docs/REDUCTION_INDICATORS.md"),)},
+     "note": "숲 기준 계수(20년생 8.8~15.9 t/ha)의 낮은 쪽이고, 국내 조경 식재지 실측(식재 면적당 연 0.38~2.37 kgCO2/m², 탄소 1.04~6.47 t/ha 환산) 범위 안이다. 분모가 부지 전체인 값(공공용지 0.24, 공동주택 단지 약 0.40 kgCO2/m²)과는 견주지 않는다. 새로 심은 조경수는 수령 10년까지 그루당 흡수가 작아 계획 초기에는 더 작을 수 있다(2026-11-20 본문 확인).",
+     "sources": (("국립산림과학원 표준 탄소흡수량", "docs/REDUCTION_INDICATORS.md"), ("도시공원 식재유형별 탄소 저장 · 흡수, 식재 면적당", "https://koreascience.kr/article/JAKO201416743150056.pdf"), ("조경수 수령별 탄소흡수(직접 수확 기반)", "https://koreascience.kr/article/JAKO201732863553302.pdf"))},
 )
 
 # 시공 단계(내재탄소) 수단: 모두 설계·계산 또는 발표 값이라 참고로만 쓴다. base 'embodied' = 자재 생산 단계 전체, 'readymix' = 레미콘 몫.
