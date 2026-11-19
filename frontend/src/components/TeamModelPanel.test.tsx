@@ -43,7 +43,7 @@ describe('TeamModelPanel', () => {
     expect(result.textContent).toContain('비주거 위주 계획');
     const call = fetchMock.mock.calls.find(([u]) => String(u).includes('/team-model/predict'));
     const body = JSON.parse(String(call?.[1]?.body));
-    expect(body).toEqual({ region: '52110', plans: [{ grid: 'cell_959500_1760500', years_after: 3, new: [{ use: 'residential', floor_area_m2: 120000, dwellings: 1200 }], removed: [] }] });
+    expect(body).toEqual({ region: '52110', plans: [{ grid: 'cell_959500_1760500', years_after: 7, new: [{ use: 'residential', floor_area_m2: 120000, dwellings: 1200 }], removed: [] }] });
   });
 
   it('keeps the form closed while the model is off and says why', async () => {
