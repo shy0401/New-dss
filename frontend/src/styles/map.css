@@ -369,6 +369,12 @@ small.resolution-tag { margin: 0 0 0 var(--sp-1); }
 .team-model-panel > .muted { margin-top: var(--sp-2); font-size: var(--fs-caption); line-height: 1.5; }
 .team-model-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--sp-2); margin-top: var(--sp-3); }
 .team-model-form .area-select { min-width: 0; }
+.team-area-form { display: grid; gap: var(--sp-2); margin-top: var(--sp-3); }
+.team-area-rows { display: grid; gap: var(--sp-2); justify-items: start; }
+.team-area-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--sp-2); }
+.team-area-row .area-select { min-width: 0; }
+.team-area-form > .button.primary { justify-self: start; }
+.team-area-sync { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
 .team-cases { width: 100%; font-size: var(--fs-caption); }
 .team-cases small { color: var(--ink-3); }
 .team-model-result { margin-top: var(--sp-3); padding: var(--sp-3); border: 1px solid var(--line); border-radius: var(--r-map); }

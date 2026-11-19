@@ -68,7 +68,11 @@ def training_table(folder: Path, rules_path: Path, factor_high: set[str], base: 
 
     full = pd.read_csv(Path(folder) / "training.csv", encoding="utf-8", low_memory=False)
     team = full["train_usable"].astype(bool).to_numpy()
-    use, note = cell_usable(harmonized(full, factor_high, base, high), rules_path)
+    # a region's own table (시험 10곳 · 동탄, read for a plan's cell state) has no region column: judge it as the folder's
+    # region, as official_inputs does (without this the judging failed with KeyError 'region' and the 2024 factor of
+    # 인천 · 경기 was not harmonized for judging; 7-B2 check 2026-11-19)
+    judged = full if "region" in full else full.assign(region=Path(folder).name)
+    use, note = cell_usable(harmonized(judged, factor_high, base, high), rules_path)
     full["train_usable"] = use & team
     note.update({"team_usable_rows": int(team.sum()), "rows": int(use.sum())})
     return add_energy_mix(full[use].reset_index(drop=True)), note

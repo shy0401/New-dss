@@ -1,6 +1,6 @@
 # 2026-11-19 도시가스 배출계수를 가정값에서 국가 고유 계수 기반으로
 
-- 관련: PR(`fix/gas-national-factor`), `backend/app/emissions.py`, 화면 · 보고서 문구(`frontend/src/pages/*`, `backend/app/reporting.py` 등), `backend/cases/simulation_cases.json`, [공통 데이터 기준](../DATA_STANDARD.md) 1.20(5.5)
+- 관련: PR #19(`fix/gas-national-factor`), `backend/app/emissions.py`, 화면 · 보고서 문구(`frontend/src/pages/*`, `backend/app/reporting.py` 등), `backend/cases/simulation_cases.json`, [공통 데이터 기준](../DATA_STANDARD.md) 1.21(5.5; PR #17이 먼저 1.20을 써서 합칠 때 올림)
 - 숫자의 공통 기준(따로 적지 않으면): 계산 엔진 값, 운영탄소(전력 + 도시가스), 2025년 관측 원단위, kgCO2eq 또는 tCO2eq/년
 
 ## 왜
