@@ -75,7 +75,7 @@ export function ValidationPanel({ regionQuery }: { regionQuery: string }) {
     {g && <><h4>온실가스: 지역 인벤토리 ↔ 이 도구 계산</h4>
       <dl className="compact-list">
         <div><dt>인벤토리 {g.gir_year}년 건물 등</dt><dd>연료(직접) {num(g.gir_building_direct_kt)} · 전력 {num(g.gir_building_electricity_kt)} · 열 {num(g.gir_building_heat_kt)} 천 tCO₂eq</dd></div>
-        <div><dt>이 도구 {g.ours_year ?? '—'}년 (건축HUB 지번)</dt><dd>전력 {num(g.ours_electricity_kt)} (계수 {num(g.electricity_factor, '', 4)}) · 가스 {num(g.ours_gas_kt)} (가정 계수 {num(g.gas_factor, '', 4)}) 천 tCO₂eq</dd></div>
+        <div><dt>이 도구 {g.ours_year ?? '—'}년 (건축HUB 지번)</dt><dd>전력 {num(g.ours_electricity_kt)} (계수 {num(g.electricity_factor, '', 4)}) · 가스 {num(g.ours_gas_kt)} (계수 {num(g.gas_factor, '', 4)}) 천 tCO₂eq</dd></div>
       </dl>
       <p className="validation-note">연도와 범위가 다릅니다. 인벤토리의 '건물 등'에는 농림어업과 석유·LPG가, 전력에는 한전 판매량 전체의 해당 부문이 들어 있습니다. 같은 크기인지만 봅니다{g.electricity_ratio ? ` (전력 ${pct(g.electricity_ratio)})` : ''}.</p></>}
     {(data.population || data.grid_link) && <dl className="compact-list">

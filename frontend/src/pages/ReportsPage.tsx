@@ -129,7 +129,7 @@ function PlanReport({ report }: { report: Report }) {
       <div className="table-wrap report-table"><table><thead><tr><th>연간</th>{plans.map((s, i) => <th key={s.id} className={`num plan-col plan-${PLAN[i] ?? 'c'}`}>{s.label}<small>작은 글씨: 기준안 (같은 연면적, 효율 1.0·태양광 0)과 절감</small></th>)}</tr></thead><tbody>
         {([['electricity_kwh', '전력', 'kWh'], ['gas_kwh', '가스', 'kWh']] as const).map(([key, label, unit]) => <tr key={key}><th>{label}</th>{plans.map((s) => <td className="num" key={s.id}>{cellValue(annualSide(s.result, 'scenario')?.[key], unit)}<small>기준안 {formatMetric(annualSide(s.result, 'reference')?.[key], unit)} · {savingsText(s.result.savings_pct?.[key])}</small></td>)}</tr>)}
         <tr><th>전력 탄소</th>{plans.map((s) => <td className="num" key={s.id}>{tonnes(annualSide(s.result, 'scenario')?.electricity_carbon_kg)}<small>기준안 {tonnes(annualSide(s.result, 'reference')?.electricity_carbon_kg)}</small></td>)}</tr>
-        <tr><th>가스 탄소 (가정 계수)</th>{plans.map((s) => <td className="num" key={s.id}>{tonnes(gasCarbon(annualSide(s.result, 'scenario')))}<small>기준안 {tonnes(gasCarbon(annualSide(s.result, 'reference')))}</small></td>)}</tr>
+        <tr><th>가스 탄소</th>{plans.map((s) => <td className="num" key={s.id}>{tonnes(gasCarbon(annualSide(s.result, 'scenario')))}<small>기준안 {tonnes(gasCarbon(annualSide(s.result, 'reference')))}</small></td>)}</tr>
         <tr className="total"><th>연간 운영탄소 (전력+가스)</th>{plans.map((s) => <td className="num" key={s.id}><strong>{tonnes(annualSide(s.result, 'scenario')?.carbon_kg)}</strong><small>기준안 {tonnes(annualSide(s.result, 'reference')?.carbon_kg)} · {savingsText(s.result.savings_pct?.carbon_kg)}</small></td>)}</tr>
         <tr><th>1인당 운영탄소</th>{plans.map((s) => <td className="num" key={s.id}>{cellValue(s.result.carbon_per_person, 'kgCO₂eq')}</td>)}</tr>
         <tr><th>세대당 운영탄소</th>{plans.map((s) => <td className="num" key={s.id}>{cellValue(s.result.carbon_per_household, 'kgCO₂eq')}</td>)}</tr>
@@ -185,7 +185,7 @@ function ReductionSection({ plan, n, named }: { plan: SavedScenario; n: number; 
 /** 계획안 없이 쓴 현황 보고서: 격자의 관측 에너지·탄소와 대상지 설명만. */
 function StatusReport({ report }: { report: Report }) {
   const context = report.context?.facts ?? [];
-  const gasNote = report.totals?.gas_carbon_kg != null ? '가스 탄소는 가정 계수' : '가스 탄소는 계수 미확정';
+  const gasNote = report.totals?.gas_carbon_kg != null ? (report.factors?.GAS?.assumed ? '가스 탄소는 가정 계수' : '가스 탄소는 국가 고유 계수') : '가스 탄소는 계수 미확정';
   return <article className="report-paper">
     <p className="report-kicker">Carbon Urban DSS 검토 보고서</p>
     <h1>{report.title}</h1>
