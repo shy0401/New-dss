@@ -14,16 +14,16 @@ const plan = {
     savings_pct: { electricity_kwh: 0, gas_kwh: 0, carbon_kg: 0 }, baseline_intensity: { electricity_kwh_per_m2: 36.9, gas_kwh_per_m2: 48.2 },
     zoning_check: { status: 'OK', zones: [{ zone: '제3종일반주거지역', share: 99.8, bcr_limit: 50, far_limit: 300 }], covered_share: 100, bcr_limit: 50.02, far_limit: 300.31, mixed: false, check: { label: '조례 기본 상한 이내 (1차 확인)', notes: [] } } },
   reduction_plan: { available: true, start: { label: '대책 없음 (기준안)', carbon_kg: 2230040.9, electricity_kwh: 3320137.9, gas_kwh: 4339656.2 },
-    steps: [{ key: 'envelope', title: '단열·창호 기준 강화', detail: '가스 사용을 23.6% 줄임', electricity_kwh: 3320137.9, gas_kwh: 3315497.3, carbon_kg: 2043029.5, reduction_kg: 187011.4, cumulative_pct: 8.4, range_pct: [20.5, 25.8], reduction_range_kg: [162446.0, 204444.0] },
-      { key: 'rooftop_pv', title: '지붕 태양광', detail: '옥상 3,600 m²에 360.0 kW', electricity_kwh: 2224146.3, gas_kwh: 3471725.0, carbon_kg: 1597000.0, reduction_kg: 187032.7, cumulative_pct: 28.4 }],
-    final_carbon_kg: 1597000.0, final_pct: 28.4, pv: { roof_m2: 3600, kw: 360, kwh: 431964 }, self_sufficiency_pct: 11.2, zeb_grade: null,
-    residual: { carbon_kg: 1597000.0, offsite_pv_kw: 1853.6 }, plan: { carbon_kg: 2230040.9, pct: 0 }, assumptions: ['가정 문장.'],
+    steps: [{ key: 'envelope', title: '단열·창호 기준 강화', detail: '가스 사용을 13.7% 줄임', electricity_kwh: 3320137.9, gas_kwh: 3745123.3, carbon_kg: 2121479.2, reduction_kg: 108561.7, cumulative_pct: 4.9, range_pct: [9.8, 17.3], reduction_range_kg: [77657.3, 137088.9] },
+      { key: 'rooftop_pv', title: '지붕 태양광', detail: '옥상 3,600 m²에 360.0 kW', electricity_kwh: 2888173.9, gas_kwh: 3745123.3, carbon_kg: 1934446.5, reduction_kg: 187032.7, cumulative_pct: 13.3 }],
+    final_carbon_kg: 1934446.5, final_pct: 13.3, pv: { roof_m2: 3600, kw: 360, kwh: 431964 }, self_sufficiency_pct: 11.2, zeb_grade: null,
+    residual: { carbon_kg: 1934446.5, offsite_pv_kw: 1853.6 }, plan: { carbon_kg: 2230040.9, pct: 0 }, assumptions: ['가정 문장.'],
     // 2026-11-16: 사다리에 넣지 않은 수단까지 하나씩 따로 본 값, 시공 단계 내재탄소(참고 계산)
     measures: [
-      { key: 'envelope', group: '설계·외피', title: '단열·창호 기준 강화', use: 'ladder', use_label: '기본 방안(사다리)', indicator_text: '가스 사용량 −23.6% (−25.8~−20.5%)', evidence: 'measured', evidence_label: '실측', n: '국내 78쌍', apply: '신축·재개발', base: 'gas',
-        what: '외벽·지붕 단열을 지금 기준으로 짓는다.', cost: '세대당 추가 공사비 약 130만 원.', note: '보일러 변화도 섞여 있다.', sources: [{ label: '민간 공동주택 기준 강화', url: 'https://example.org/zeb' }], alone_kg: 187011.4, alone_pct: 8.4, alone_range_kg: [162446.0, 204444.0], reason: null },
-      { key: 'new_build_package', group: '설계·외피', title: '신축 통합 기준(ZEB 5등급 수준·효율등급 인증)', use: 'alone', use_label: '따로 본 값', indicator_text: '총에너지(전력·가스에 같은 비율로 적용) −11.3% (−46~+6.7%)', evidence: 'measured', evidence_label: '실측', n: '14건(국내 11)', apply: '신축·재개발', base: 'total',
-        what: '인증 기준에 맞춰 한꺼번에 적용한다.', cost: '용적률 완화.', note: '단열·창호 단계와 겹친다.', sources: [{ label: '준공 시기별 실사용량', url: 'https://example.org/age' }], alone_kg: 251994.6, alone_pct: 11.3, alone_range_kg: [-149412.7, 1025818.8], reason: null },
+      { key: 'envelope', group: '설계·외피', title: '단열·창호 기준 강화', use: 'ladder', use_label: '기본 방안(사다리)', indicator_text: '가스 사용량 −13.7% (−17.3~−9.8%)', evidence: 'measured', evidence_label: '실측', n: '국내 117쌍', apply: '신축·재개발', base: 'gas',
+        what: '외벽·지붕 단열을 지금 기준으로 짓는다.', cost: '세대당 추가 공사비 약 130만 원.', note: '보일러 변화도 섞여 있다.', sources: [{ label: '민간 공동주택 기준 강화', url: 'https://example.org/zeb' }], alone_kg: 108561.7, alone_pct: 4.9, alone_range_kg: [77657.3, 137088.9], reason: null },
+      { key: 'new_build_package', group: '설계·외피', title: '신축 통합 기준(ZEB 5등급 수준·효율등급 인증)', use: 'indicator', use_label: '지표만', indicator_text: '총 최종에너지 −11.4% (−12.1~−5.9%, 준공 시기 비교)', evidence: 'measured', evidence_label: '실측', n: '국내 2곳(원문과 맞는 행)', apply: '신축·재개발', base: null,
+        what: '인증 기준에 맞춰 한꺼번에 적용한다.', cost: '용적률 완화.', note: '단열·창호 단계와 겹친다.', sources: [{ label: '준공 시기별 실사용량', url: 'https://example.org/age' }], alone_kg: null, alone_pct: null, alone_range_kg: null, reason: '계획안에 계산 근거가 없어 지표만 적습니다.' },
       { key: 'elevator_regeneration', group: '설비', title: '승강기 회생제동장치', use: 'indicator', use_label: '지표만', indicator_text: '대당 연 0.39~0.57 tCO2 · 승강기 전력 −10~−30%', evidence: 'agency', evidence_label: '기관 실적', n: '서울 117대', apply: '신축·재개발·기존', base: null,
         what: '내려올 때 버리는 전기를 되돌려 쓴다.', cost: '회수 2.3~3.1년(계산).', note: '승강기 대수가 있어야 계산한다.', sources: [{ label: '서울시 배출권 승인', url: 'https://example.org/elevator' }], alone_kg: null, alone_pct: null, alone_range_kg: null, reason: '계획안에 계산 근거가 없어 지표만 적습니다.' },
       { key: 'greenery', group: '재생·상쇄', title: '녹지·조경 흡수(상쇄)', use: 'ladder', use_label: '기본 방안(사다리)', indicator_text: '녹지 1 m²에 연 1.0 kgCO2 (8.8~15.9 t/ha)', evidence: 'assumed', evidence_label: '가정', n: null, apply: '신축·재개발', base: 'green',
@@ -74,16 +74,17 @@ describe('ReportsPage', () => {
     expect(reduction).toHaveTextContent('5. 탄소 감축 방안');
     expect(reduction).toHaveTextContent('1. 단열·창호 기준 강화');
     expect(reduction).toHaveTextContent('근거와 가정');
-    expect(screen.getByTestId('reduction-ranges')).toHaveTextContent(/단열·창호 기준 강화 20\.5~25\.8% → −162\.4\s?tCO₂eq~−204\.4\s?tCO₂eq/);   // 지표의 실측 범위와 그 단계 감축량의 폭
-    expect(reduction).toHaveTextContent(/1,597\.0\s?tCO₂eq/);
+    expect(screen.getByTestId('reduction-ranges')).toHaveTextContent(/단열·창호 기준 강화 9\.8~17\.3% → −77\.7\s?tCO₂eq~−137\.1\s?tCO₂eq/);   // 지표의 실측 범위와 그 단계 감축량의 폭
+    expect(reduction).toHaveTextContent(/1,934\.4\s?tCO₂eq/);
     expect(reduction).toHaveTextContent('ZEB 5등급(20%) 미만');
     expect(article).not.toHaveTextContent('계획안 B');
     // 사다리 밖 수단: 하나씩 따로 본 값(합하지 않음). 계산 근거가 없는 수단은 지표만, 사다리 단계인데 입력이 없으면 '값 없음'과 이유
     const measures = screen.getByTestId('report-measures');
     expect(measures).toHaveTextContent('수단별 효과 (따로 본 값, 서로 더하지 않음)');
     const row = (name: string) => within(measures).getByRole('rowheader', { name: new RegExp(name) }).closest('tr')!;
-    expect(row('신축 통합 기준')).toHaveTextContent(/−252\.0\s?tCO₂eq \(−11\.3%\)범위 \+149\.4~−1,025\.8 t/);   // 범위의 음수는 늘어남(+)
-    expect(row('신축 통합 기준')).toHaveTextContent('실측 14건(국내 11)');
+    expect(row('신축 통합 기준')).toHaveTextContent('총 최종에너지 −11.4%');   // 2026-11-20부터 계획 단계 추천이 아니라 지표만
+    expect(row('신축 통합 기준')).toHaveTextContent('지표만');
+    expect(row('신축 통합 기준')).toHaveTextContent('실측 국내 2곳(원문과 맞는 행)');
     expect(row('승강기 회생제동장치')).toHaveTextContent('대당 연 0.39~0.57 tCO2');
     expect(row('승강기 회생제동장치')).toHaveTextContent('지표만');
     expect(row('녹지·조경 흡수')).toHaveTextContent('값 없음녹지 면적이 없습니다.');

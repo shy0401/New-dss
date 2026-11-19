@@ -103,10 +103,10 @@ describe('AreaPage', () => {
     const bodies: Array<Record<string, unknown>> = [];
     const effort = { ...analysis.effort, basis: 'buildings', baseline_mode: 'OBSERVED', baseline_year: 2025, intensity_kwh_per_m2: 44.25, fallback_from: 'apartments', fallback_reason: '지역 관측이 없고 연면적이 확인된 단지도 없어 기준 부하를 정할 수 없습니다',
       factor_kgco2eq_per_kwh: 0.433, pv_yield: { kwh_per_kw: 1199.9, basis: 'ESTIMATED', label: '추정' },
-      recommended: { kind: 'RECOMMENDED', new_efficiency_pct: 20, existing_efficiency_pct: 5, pv_kw: 760, new_kwh: 309700, existing_kwh: 1500000, pv_kwh: 911924, pv_counted: true, total_kwh: 2721624,
-        total_kgco2eq: 1178463.2, required_kgco2eq: 1153205.1, gap_kgco2eq: -25258.1, met: true, share_pct: 102.2, basis: '식', roof_m2: 7600, offset_kwh: null,
-        steps: [{ key: 'new', title: '신축 건물 고효율 설계', detail: '신축 전력 20% 절감', kwh: 309700, kgco2eq: 134100.1 }, { key: 'existing', title: '기존 건물 조명·설비 교체', detail: '기존 건물 전력 5% 절감', kwh: 1500000, kgco2eq: 649500 },
-          { key: 'pv', title: '태양광', detail: '760 kW (옥상 약 7,600 m²)', kwh: 911924, kgco2eq: 394863.1 }] } };
+      // 2026-11-20부터 자동 방안은 태양광만(신축·기존 전력 절감 단계 없음)
+      recommended: { kind: 'RECOMMENDED', new_efficiency_pct: 0, existing_efficiency_pct: 0, pv_kw: 2220, new_kwh: 0, existing_kwh: 0, pv_kwh: 2663778, pv_counted: true, total_kwh: 2663778,
+        total_kgco2eq: 1153415.9, required_kgco2eq: 1153205.1, gap_kgco2eq: -210.8, met: true, share_pct: 100.0, basis: '식', roof_m2: 22200, offset_kwh: null,
+        steps: [{ key: 'pv', title: '태양광', detail: '2,220 kW (옥상 약 22,200 m²)', kwh: 2663778, kgco2eq: 1153415.9 }] } };
     const mix = { new_efficiency_pct: 30, existing_efficiency_pct: 0, pv_kw: 0, new_kwh: 464550, existing_kwh: 0, pv_kwh: 0, pv_counted: true, total_kwh: 464550, total_kgco2eq: 201150.2, required_kgco2eq: 1153205.1, gap_kgco2eq: 952054.9, met: false, share_pct: 17.4, basis: '식' };
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
@@ -135,9 +135,9 @@ describe('AreaPage', () => {
     expect(screen.queryByTestId('area-compare')).toBeNull();
     const rec = screen.getByTestId('area-recommended');
     expect(rec).toHaveTextContent('구체적 감축 방안');
-    expect(rec).toHaveTextContent('760 kW (옥상 약 7,600 m²)');
+    expect(rec).toHaveTextContent('2,220 kW (옥상 약 22,200 m²)');
     fireEvent.click(within(rec).getByRole('button', { name: /이 방안을 아래 칸에 넣기/ }));
-    await waitFor(() => expect(bodies.some((b) => { const m = b.measures as { new_efficiency_pct?: number; existing_efficiency_pct?: number; pv_kw?: number } | null; return m?.new_efficiency_pct === 20 && m.existing_efficiency_pct === 5 && m.pv_kw === 760; })).toBe(true), { timeout: 3000 });
+    await waitFor(() => expect(bodies.some((b) => { const m = b.measures as { new_efficiency_pct?: number; existing_efficiency_pct?: number; pv_kw?: number } | null; return m?.new_efficiency_pct === 0 && m.existing_efficiency_pct === 0 && m.pv_kw === 2220; })).toBe(true), { timeout: 3000 });
   });
 
   it('사례 링크로 열면 링크의 구역·계획·목표·기준 건물로 첫 계산을 하고 보고서 요청에도 기준 건물을 넣는다', async () => {
