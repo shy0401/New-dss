@@ -256,6 +256,65 @@ def test_persistent_gateway_error_marks_month_failed_and_continues(tmp_path, mon
     assert retry['requested'] == 1 and retry['normalized'] == 1
 
 
+def _shared_parcel_months(db, months):
+    """Two complexes on one parcel (5211311600 718), stored months {code: (status, kWh)} for 202501."""
+    for code, (status, kwh) in months.items():
+        db.add(ApartmentEnergyMonthly(id=f'{code}:202501:K-apt', complex_code=code, year_month='202501', source='K-apt',
+                                      electricity_quantity=kwh, quality_status=status, units={},
+                                      raw_record={'kaptCode': code, 'helect': kwh}))
+    db.commit()
+
+
+def test_complexes_on_one_parcel_are_summed_in_any_order():
+    """energy_monthly keeps one row per parcel-month: before 2026-11-19 the complex written last replaced the
+    others (24 parcels, about half their electricity missing). Now the row is the sum, whatever the order."""
+    from app.kapt_energy import reclassify_existing
+    for order in (['A1', 'B2'], ['B2', 'A1']):
+        db = make_db()
+        for code in order:
+            add_complex(db, code=code, households=300)
+        _shared_parcel_months(db, {'A1': ('SUCCESS', 60000.0), 'B2': ('SUCCESS', 45000.0)})
+        reclassify_existing(db)
+        rows = db.scalars(select(EnergyMonthly)).all()
+        assert len(rows) == 1
+        assert rows[0].usage_kwh == 105000.0 and rows[0].grid_id == 'cell_1_1'
+        assert rows[0].raw_record['kapt_code'] == 'A1+B2' and rows[0].raw_record['kapt_codes'] == ['A1', 'B2']
+
+
+def test_one_complex_not_success_leaves_the_parcel_month_empty():
+    """A partial sum would count the missing complex as 0 (DATA_STANDARD 1절): the parcel month stays empty."""
+    from app.kapt_energy import reclassify_existing
+    for first, second in (('A1', 'B2'), ('B2', 'A1')):   # rows are re-judged by id: the result must not depend on it
+        db = make_db()
+        add_complex(db, code='A1', households=300)
+        add_complex(db, code='B2', households=300)
+        months = {'A1': ('SUCCESS', 60000.0), 'B2': ('SUCCESS', 0.0)}   # B2: all zero → NOT_REPORTED
+        _shared_parcel_months(db, {first: months[first]})
+        _shared_parcel_months(db, {second: months[second]})
+        for row in db.scalars(select(ApartmentEnergyMonthly)).all():
+            row.id = f"{'0' if row.complex_code == first else '1'}-{row.complex_code}:202501:K-apt"
+        db.commit()
+        for row in db.scalars(select(ApartmentEnergyMonthly).where(ApartmentEnergyMonthly.complex_code == 'B2')).all():
+            row.raw_record = {'kaptCode': 'B2', 'helect': 0, 'hgas': 0}
+        db.commit()
+        reclassify_existing(db)
+        assert db.scalar(select(ApartmentEnergyMonthly.quality_status).where(ApartmentEnergyMonthly.complex_code == 'B2')) == 'NOT_REPORTED'
+        assert db.scalar(select(func.count()).select_from(EnergyMonthly)) == 0, (first, second)
+
+
+def test_complexes_of_one_parcel_on_different_cells_are_placed_on_none():
+    from app.kapt_energy import reclassify_existing
+    db = make_db()
+    add_complex(db, code='A1', households=300)
+    add_complex(db, code='B2', households=300)
+    db.get(ApartmentComplex, 'B2').grid_id = 'cell_2_2'
+    db.commit()
+    _shared_parcel_months(db, {'A1': ('SUCCESS', 60000.0), 'B2': ('SUCCESS', 45000.0)})
+    reclassify_existing(db)
+    row = db.scalar(select(EnergyMonthly))
+    assert row.usage_kwh == 105000.0 and row.grid_id is None and row.match_method == 'AMBIGUOUS_KAPT_PARCEL'
+
+
 def test_rows_stored_by_older_versions_are_reclassified(tmp_path):
     from app.kapt_energy import reclassify_existing
     db = make_db()
