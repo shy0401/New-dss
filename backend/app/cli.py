@@ -24,7 +24,7 @@ def init_tables():
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('command',choices=['demo','online','status','enrich','collect','collect-history','collect-missing','validate-models','snapshot','llm-dataset','llm-eval','import-sgis-grid','import-sgis-grid500','import-regional-stats','import-team-grid','import-kcsm100',
         'national-admin','national-sgis','national-complexes','national-grid500','national-ordinances','national-all','prepare-region','regions',
-        'check-standard','apply-standard','backfill-solar','region-energy-history','region-kapt-history','region-sgis-history','verify-cases','place-parcels','estimate-gaps']);parser.add_argument('--year',type=int,default=DEFAULT_YEAR)
+        'check-standard','apply-standard','backfill-solar','region-energy-history','region-kapt-history','region-sgis-history','verify-cases','place-parcels','estimate-gaps','fetch-kea-rating']);parser.add_argument('--year',type=int,default=DEFAULT_YEAR)
     parser.add_argument('--from',dest='from_year',type=int,default=2015);parser.add_argument('--to',dest='to_year',type=int,default=DEFAULT_YEAR)
     parser.add_argument('--datasets',default='',help='comma-separated: sgis,kma_asos,kapt_energy,energy,vworld_zoning,vworld_buildings,vworld_cadastral,building_register');parser.add_argument('--force',action='store_true')
     parser.add_argument('--source',choices=['energy','weather','kapt-energy','kma','sgis','vworld-zoning','vworld-cadastral'])
@@ -212,6 +212,13 @@ def main():
                 report=verify(db,cases,only)
                 if args.out:Path(args.out).write_text(json.dumps(report,ensure_ascii=False,indent=1,default=str),encoding='utf-8')
                 if not report['all_match']:raise SystemExit(1)
+        elif args.command=='fetch-kea-rating':
+            # 효율등급 인증 원본(JSON 쪽)을 DATA_DIR/raw/kea_building_rating/<받은 날>/에 받기만 함. DB에 넣지 않음
+            from .settings import offline_mode
+            from .kea_rating import fetch_all,default_out_dir,service_key
+            if offline_mode():raise SystemExit('오프라인 모드: 외부 요청을 하지 않습니다')
+            out=Path(args.file) if args.file else default_out_dir(DATA_DIR)
+            print(json.dumps(dict(fetch_all(out,service_key(),log=lambda m:print(m,flush=True)),out=str(out)),ensure_ascii=False))
         elif args.command=='regions':
             from .regions import StudyRegion,region_summary
             print(json.dumps([region_summary(r) for r in db.scalars(select(StudyRegion))],ensure_ascii=False,indent=1,default=str))
