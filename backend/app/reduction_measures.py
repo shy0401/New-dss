@@ -76,7 +76,7 @@ MEASURES: tuple[dict[str, Any], ...] = (
      "base": "electricity", "value": 0.117, "range": (0.075, 0.159), "evidence": "measured", "n": "국내 2개 지역", "apply": "신축·재개발·기존",
      "what": "세대가 실시간 사용량과 요금을 보게 한다. 설치 전후 가구 전력 −15.9%(청주)·−7.5%(서울).",
      "cost": "확인 필요. 국외 스마트미터 초기 보급은 전기 −2.3%·가스 −1.5%로 더 작았다.",
-     "note": "에너지 절약 운영 단계와 같은 종류(계량·행동)라 더하지 않는다. 2010년 실증이라 지금 가전 구성과 다를 수 있다.",
+     "note": "에너지 절약 운영(지표만)과 같은 종류(계량·행동)라 함께 더하지 않는다. 2010년 실증이라 지금 가전 구성과 다를 수 있다.",
      "sources": (("스마트미터와 세대 표시장치 설치 전후 전력, 2010", "https://koreascience.kr/article/JAKO201015233334329.pdf"),
                  ("영국 스마트미터 초기 보급 평가, 2015", "https://assets.publishing.service.gov.uk/government/uploads/system/uploads/attachment_data/file/407568/8_Synthesis_FINAL_25feb15.pdf"))},
     {"key": "common_lighting", "indicator": "그 조명 전기 −40% (−82.5~−10%)", "group": "설비", "title": "공용부 조명 LED·동작감지 디밍(지하주차장·계단)", "use": "indicator", "phase": "operation",

@@ -602,8 +602,14 @@ def recommended_mix(result: dict[str, Any]) -> dict[str, Any] | None:
     steps: list[dict[str, Any]] = []
     if pv_kw:
         steps.append({"key": "pv", "title": "태양광", "detail": f"{pv_kw:,.0f} kW (옥상 약 {pv_kw * ROOF_M2_PER_KW:,.0f} m²)", "kwh": mix["pv_kwh"], "kgco2eq": round((mix["pv_kwh"] or 0) * factor, 1)})
-    return dict(mix, kind="RECOMMENDED", steps=[s for s in steps if s["kwh"]], roof_m2=round(pv_kw * ROOF_M2_PER_KW, 1) if pv_kw else None,
-                offset_kwh=round(remaining_kwh, 1) if remaining_kwh > 0 and not kwh_per_kw else None)
+    roof_m2 = round(pv_kw * ROOF_M2_PER_KW, 1) if pv_kw else None
+    # 필요한 옥상과 계획 건물 지붕 견주기(2026-11-20 점검 A): 건축면적 합이 있으면 그것, 없으면 연면적(지붕의 위 한계)
+    exact = result.get("plan_roof_m2") is not None
+    limit = float(result["plan_roof_m2"] if exact else result.get("added_floor_area_m2") or 0)
+    return dict(mix, kind="RECOMMENDED", steps=[s for s in steps if s["kwh"]], roof_m2=roof_m2,
+                offset_kwh=round(remaining_kwh, 1) if remaining_kwh > 0 and not kwh_per_kw else None,
+                plan_roof_m2=round(limit, 1), plan_roof_basis="footprint" if exact else "floor_area",
+                roof_over_plan=bool(roof_m2 and roof_m2 > limit))
 
 
 def measure_mix(result: dict[str, Any], measures: dict[str, Any]) -> dict[str, Any]:
@@ -859,6 +865,9 @@ def _effort_result(history: dict[str, Any], plan: dict[str, Any], target_pct: fl
     if added is None and plan.get("floors") and plan.get("building_count") and plan.get("footprint_per_building"):
         added = float(plan["floors"]) * float(plan["building_count"]) * float(plan["footprint_per_building"])
     added = float(added or 0)
+    # 계획 건물 지붕 면적: 동 수 × 동당 건축면적이 있으면 그 합(정확), 없으면 연면적(1층으로 지어도 지붕은 연면적을 넘지 않음 → 위 한계)
+    footprint_sum = (float(plan["building_count"]) * float(plan["footprint_per_building"])
+                     if plan.get("added_floor_area_m2") is None and plan.get("building_count") and plan.get("footprint_per_building") else None)
     removed = float(plan.get("removed_floor_area_m2") or 0)
     if added < 0 or removed < 0:
         raise ValueError("면적은 0 이상이어야 합니다")
@@ -895,6 +904,7 @@ def _effort_result(history: dict[str, Any], plan: dict[str, Any], target_pct: fl
         "baseline_mode": baseline_mode, "data_class": "SCENARIO", "basis": basis, "basis_label": EFFORT_BASIS[basis],
         "intensity_kwh_per_m2": intensity, "intensity_area_m2": basis_area,
         "added_floor_area_m2": round(added, 1), "removed_floor_area_m2": round(removed, 1),
+        "plan_roof_m2": round(footprint_sum, 1) if footprint_sum is not None else None,
         "baseline_kwh": round(base_kwh, 1), "baseline_kgco2eq": round(base_c, 1),
         "new_load_kwh": round(new_kwh, 1), "bau_kwh": round(bau_kwh, 1), "bau_kgco2eq": round(bau_c, 1),
         "target_kgco2eq": round(target_c, 1), "required_reduction_kgco2eq": round(need_c, 1),
@@ -1307,6 +1317,9 @@ def area_facts(history: dict[str, Any], comparison: dict[str, Any] | None = None
                     + ("(추정값)." if pv["basis"] == "ESTIMATED" else "."),
                     pv["kwh_per_kw"], o["pv_capacity_kw"], *([pv["year"], pv["irradiation_kwh_m2"], pv["performance_ratio"]] if pv["basis"] == "ESTIMATED" else []))
         rec = effort_result.get("recommended")
+        if rec and not rec.get("steps") and rec.get("offset_kwh"):
+            add("effort_rec", f"구체적 감축 방안: 발전량 근거가 없어 태양광 용량으로 바꾸지 못하고, 필요 감축량 {rec['required_kgco2eq']:,.0f} kgCO2eq를 "
+                f"채울 전력 {rec['offset_kwh']:,.0f} kWh를 재생에너지 상쇄량으로만 적습니다.", rec["required_kgco2eq"], rec["offset_kwh"])
         if rec and rec.get("steps"):
             parts = [f"{s['title']}({s['detail']}) {s['kgco2eq']:,.0f} kgCO2eq" for s in rec["steps"]]
             nums: list[float] = [s["kgco2eq"] for s in rec["steps"]] + [rec["total_kgco2eq"], rec["required_kgco2eq"], rec["new_efficiency_pct"], rec["existing_efficiency_pct"]]
@@ -1319,6 +1332,11 @@ def area_facts(history: dict[str, Any], comparison: dict[str, Any] | None = None
                 nums.append(rec["offset_kwh"])
             if not rec["met"]:
                 nums.append(rec["share_pct"])
+            if rec.get("roof_over_plan"):
+                what = "계획 건물 지붕(건축면적 합)" if rec.get("plan_roof_basis") == "footprint" else "계획 연면적(1층으로 지어도 지붕은 이보다 작음)"
+                text += (f" 필요한 옥상 약 {rec['roof_m2']:,.0f} m²가 {what} {rec['plan_roof_m2']:,.0f} m²보다 커서, "
+                         "모자라는 몫은 구역 안 기존 건물 지붕이나 구역 밖 발전으로 채워야 합니다.")
+                nums += [rec["plan_roof_m2"]]
             add("effort_rec", text, *nums)
         mix = effort_result.get("mix")
         if mix and not effort_result["already_met"]:
