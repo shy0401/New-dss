@@ -17,6 +17,7 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote
 
 import httpx
 
@@ -71,11 +72,16 @@ def fetch_all(
         if path.exists():
             return path.read_text(encoding="utf-8")
         params = {"serviceKey": key, "pageNo": str(page), "numOfRows": str(page_size), "apiType": "json"}
-        response = client.get(URL, params=params)
+        # httpx의 오류 문장에는 요청 주소(인증키 포함)가 들어가므로 원래 예외를 잇지 않고(from None) 주소 없이 다시 던진다
+        try:
+            response = client.get(URL, params=params)
+        except httpx.HTTPError as exc:
+            raise RatingFetchError(f"{page}쪽 요청 실패: {type(exc).__name__}") from None
         calls += 1
-        response.raise_for_status()
+        if response.status_code >= 400:
+            raise RatingFetchError(f"{page}쪽 HTTP {response.status_code}")
         text = response.text
-        if key in text:
+        if key in text or quote(key, safe="") in text:
             raise RatingFetchError("응답에 인증키가 들어 있어 저장하지 않음")
         _body(text)  # an error page is not kept as data
         path.write_text(text, encoding="utf-8")

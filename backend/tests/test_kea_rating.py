@@ -62,6 +62,15 @@ def test_the_received_day_is_the_korean_date(tmp_path):
     assert default_out_dir(tmp_path, kst_today(datetime(2026, 11, 19, 15, 21, tzinfo=timezone.utc))).name == "2026-11-20"
 
 
+def test_http_and_network_errors_never_carry_the_key(tmp_path):
+    """2026-11-20 점검: 500 응답이면 httpx 오류 문장에 요청 주소(키 포함)가 찍혔다. 주소 없이, 원래 예외를 잇지 않고 던진다."""
+    for send in (lambda r: httpx.Response(500, text="err"), lambda r: (_ for _ in ()).throw(httpx.ConnectError("down", request=r))):
+        with pytest.raises(RatingFetchError) as info:
+            fetch_all(tmp_path, KEY, client=httpx.Client(transport=httpx.MockTransport(send)), delay_s=0)
+        assert KEY not in str(info.value) and info.value.__cause__ is None
+        assert info.value.__context__ is None or info.value.__suppress_context__   # 원래 예외(주소 포함)가 추적에 이어지지 않음
+
+
 def test_needs_a_key(tmp_path):
     with pytest.raises(RatingFetchError):
         fetch_all(tmp_path, "  ", client=_client(1, 100, []), delay_s=0)
