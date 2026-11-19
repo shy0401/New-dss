@@ -3,13 +3,13 @@
 다른 계획안과 견주지 않는다. 같은 계획(같은 연면적·동수·층수)에서
   0. 대책 없음(기준안: 관측 원단위 그대로, 효율 1.0·태양광 0)
   1. 단열·창호 기준 강화(가스 사용 13.7% 절감: 준공 시기만 다른 개별난방 단지 117쌍 실측, 같은 난방 면적(관리비 부과 면적) 기준)
-  2. 에너지 절약 운영(전력 사용 4.8% 절감: 계량·제어·행동 실측 문헌 6건 중앙값)
-  3. 지붕 태양광(옥상 면적이 허락하는 만큼)
-  4. 녹지·조경 흡수(녹지 면적 × 연 1.0 kgCO2/m², 상쇄)
+  2. 지붕 태양광(옥상 면적이 허락하는 만큼)
+  3. 녹지·조경 흡수(녹지 면적 × 연 1.0 kgCO2/m², 상쇄)
 을 차례로 더하고, 그래도 남는 전력을 운영 넷제로까지 채우는 데 필요한 외부 재생에너지를 적는다.
 절감률은 설계 목표가 아니라 실측에서 나온 지표이며, 출처와 범위는 docs/REDUCTION_INDICATORS.md에 있다.
 값은 모두 이 파일 상수이며 DATA_STANDARD 5.15와 같아야 한다. 값이 없으면 0으로 채우지 않고 그 단계를 뺀다.
 난방·급탕 전기화(히트펌프)는 초기 비용이 크고 국내 공동주택 실측 근거가 부족해 2026-11-11부터 기본 단계에서 뺐다.
+에너지 절약 운영(계량·제어·행동)은 입주 뒤 행동이라 2026-11-20부터 사다리에서 뺐다(계획 단계 밖, 지표만).
 사다리에 넣지 않은 수단(신축 통합 기준, 패시브 수준 외피, 열회수 환기, 세대 표시장치, 공용부 조명, 승강기 회생제동 등)은
 reduction_measures의 목록으로 '따로 본 값'(measures)을, 시공 단계 내재탄소는 참고 계산(embodied)을 함께 돌려준다(2026-11-16).
 """
@@ -26,10 +26,12 @@ from .reduction_measures import embodied, measure_table
 # 면적이 많아(관리비 부과 면적 ÷ 연면적 새 0.534 · 옛 0.685) 외피 효과로는 과대라서 같은 난방 면적 기준 값을 쓴다.
 # 이전 값 −23.6%(78쌍)는 원래 표 · 스크립트가 없어 재현되지 않았다(관문 G1 미통과). 근거: docs/records/2026-11-20-envelope-step-rerun.md
 ENVELOPE_GAS_SAVING = 0.137
-OPERATION_ELECTRICITY_SAVING = 0.048   # 에너지 절약 운영: 전력 −4.8% (실측 문헌 6건 중앙값, 범위 −17.0~−1.95%)
+# 에너지 절약 운영(계량·제어·행동): 전력 −4.8% — 원문과 맞는 2건(오스트리아 대조군 실험 −4.5%, 서울 6개 단지 전년 대비 −5.08%)의
+# 중앙값 −4.79%. 입주 뒤 행동이라 사다리 · 지역 자동 방안에는 쓰지 않고 수단 목록의 지표로만 둔다(2026-11-20).
+OPERATION_ELECTRICITY_SAVING = 0.048
 # 지표의 실측 범위(작은 쪽, 큰 쪽). 계산은 위 중앙값으로 하고, 범위는 그 단계 감축량이 움직일 수 있는 폭으로만 함께 적는다.
 ENVELOPE_GAS_SAVING_RANGE = (0.098, 0.173)           # 117쌍 짝별 중앙값의 95% 구간(관리비 부과 면적당)
-OPERATION_ELECTRICITY_SAVING_RANGE = (0.0195, 0.170)   # 문헌 6건의 최소~최대
+OPERATION_ELECTRICITY_SAVING_RANGE = (0.045, 0.0508)   # 원문과 맞는 2건의 값
 GREEN_UPTAKE_KG_PER_M2 = 1.0           # 녹지·조경 흡수: 연 1.0 kgCO2/m² = 10 t/ha (국립산림과학원 표준 탄소흡수량 20년생 8.8~15.9 t/ha의 낮은 쪽, 가정)
 GREEN_UPTAKE_RANGE_T_PER_HA = (8.8, 15.9)
 ROOF_USABLE_RATIO = 0.60     # 옥상 중 패널을 놓을 수 있는 비율 (설비·통로·옥탑 제외, 가정)
@@ -104,9 +106,7 @@ def building_plan(reference: dict[str, Any] | None, footprint_m2: float | None, 
         g1 = g0 * (1 - ENVELOPE_GAS_SAVING)
         step("envelope", "단열·창호 기준 강화", f"가스 사용을 {ENVELOPE_GAS_SAVING * 100:.1f}% 줄임 (준공 시기만 다른 개별난방 단지 117쌍의 실측 차이, 같은 난방 면적 기준)", e1, g1,
              range_pct=tuple(r * 100 for r in ENVELOPE_GAS_SAVING_RANGE), range_kg=tuple(g0 * r * fg for r in ENVELOPE_GAS_SAVING_RANGE))
-    e2, g2 = e1 * (1 - OPERATION_ELECTRICITY_SAVING), g1
-    step("operation", "에너지 절약 운영", f"계량·제어·행동 개선으로 전력 사용을 {OPERATION_ELECTRICITY_SAVING * 100:.1f}% 줄임 (실측 문헌 6건 중앙값)", e2, g2,
-         range_pct=tuple(r * 100 for r in OPERATION_ELECTRICITY_SAVING_RANGE), range_kg=tuple(e1 * r * fe for r in OPERATION_ELECTRICITY_SAVING_RANGE))
+    e2, g2 = e1, g1   # 에너지 절약 운영 단계는 2026-11-20부터 넣지 않는다(입주 뒤 행동, 계획 단계 밖)
     kwh_per_kw = (pv_yield or {}).get("kwh_per_kw")
     pv = roof_pv(footprint_m2, kwh_per_kw)
     e3 = e2
@@ -139,7 +139,7 @@ def building_plan(reference: dict[str, Any] | None, footprint_m2: float | None, 
                 "offsite_pv_kw": round(e3 / kwh_per_kw, 1) if kwh_per_kw and e3 > 0 else None}
     assumptions = [
         f"단열·창호 기준 강화는 가스 사용 {ENVELOPE_GAS_SAVING * 100:.1f}% 절감을 적용했습니다. 같은 시군구·세대수 구간에서 준공 시기만 다른 개별난방 단지 117쌍의 실측 차이(관리비 부과 면적당 가스, 95% 구간 {ENVELOPE_GAS_SAVING_RANGE[0] * 100:.1f}~{ENVELOPE_GAS_SAVING_RANGE[1] * 100:.1f}%)입니다. 연면적당으로는 33.9%이지만 새 단지는 난방하지 않는 면적이 많아 외피 효과로는 과대라 같은 난방 면적 기준 값을 썼습니다. 짝의 86%가 전북 단지이고, 같은 비교에서 전기는 방향이 분명하지 않아 전기 절감은 넣지 않았습니다.",
-        f"에너지 절약 운영은 전력 사용 {OPERATION_ELECTRICITY_SAVING * 100:.1f}% 절감을 적용했습니다. 계량·제어·행동 개선을 실측한 문헌 6건의 중앙값이며 범위는 1.95~17.0%입니다.",
+        f"에너지 절약 운영(계량·제어·행동, 전력 {OPERATION_ELECTRICITY_SAVING * 100:.1f}%)은 입주 뒤 행동이라 계획 단계의 감축 방안에 넣지 않았습니다(수단 목록의 참고 지표).",
         f"지붕 태양광은 건축면적의 {ROOF_USABLE_RATIO * 100:.0f}%를 쓸 수 있고 1 kW에 {ROOF_M2_PER_KW:.0f} m²가 든다고 가정했습니다."
         + (f" 발전량은 {pv_yield['label']} 기준 {kwh_per_kw:,.0f} kWh/kW·년입니다." if kwh_per_kw and (pv_yield or {}).get("label") else ""),
         f"녹지·조경 흡수는 녹지 1 m²에 연 {GREEN_UPTAKE_KG_PER_M2:.1f} kgCO2(1 ha에 10 t)를 가정했습니다. 국립산림과학원 표준 탄소흡수량(20년생 주요 수종 1 ha에 연 {GREEN_UPTAKE_RANGE_T_PER_HA[0]}~{GREEN_UPTAKE_RANGE_T_PER_HA[1]} t)의 낮은 쪽이며, 조경 녹지는 숲보다 나무가 성기어 더 작을 수 있습니다(확인 필요).",
