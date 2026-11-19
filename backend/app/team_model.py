@@ -164,6 +164,18 @@ class PredictIn(BaseModel):
     plans: list[PlanIn] = Field(min_length=1, max_length=9)
 
 
+MAX_AREA_CELLS = 64  # 평가한 가장 큰 개발(모델 로드맵 31절). 서비스 MAX_PLANS와 같음
+
+
+class AreaPredictIn(BaseModel):
+    """한 개발(지역 화면에서 고른 구역): 칸 목록과 용도별 합계. 서비스가 쓸 수 있는 칸에 같게 나눠 예측한다(기록 41절)."""
+    region: str | None = Field(default=None, max_length=10)
+    grids: list[str] = Field(min_length=1, max_length=MAX_AREA_CELLS)
+    new: list[Item] = Field(default_factory=list, max_length=4)
+    removed: list[Item] = Field(default_factory=list, max_length=4)
+    years_after: int | None = Field(default=None, ge=1, le=10)
+
+
 def _xy(grid: str) -> tuple[int, int]:
     m = re.fullmatch(r"cell_(\d+)_(\d+)", grid)
     assert m  # checked by the model
@@ -198,4 +210,56 @@ def predict(body: PredictIn, request: Request) -> dict[str, Any]:
     answer["data_class"] = "SCENARIO"
     answer["note"] = ("팀 변화 모델의 추정입니다(탄소공간지도 건물 배출의 변화, tCO₂e/년). 관측과 섞지 않습니다. "
                       "1,000 tCO₂e 미만은 방향만 읽고, 구간은 사례 잔차의 q10~q90입니다.")
+    return answer
+
+
+def _grid_of(x: int, y: int) -> str:
+    return f"cell_{x}_{y}"
+
+
+def _model_region(db: Any, code: str, cells: list[dict[str, int]]) -> str | None:
+    """The team region the model answers for (a city's 구 has its own table): the dataset holding most of the cells."""
+    from collections import Counter
+
+    from .team_grid import dataset_region
+    found = Counter(d for d in (cell_dataset(db, code, c["x"], c["y"]) for c in cells) if d)
+    return dataset_region(found.most_common(1)[0][0]) if found else None
+
+
+@router.post("/predict-area")
+def predict_area(body: AreaPredictIn, request: Request) -> dict[str, Any]:
+    """구역(여러 칸) 개발의 배출 변화 예측: 용도별 합계를 쓸 수 있는 칸에 같게 나눠 칸마다 예측하고 개발로 더한다."""
+    if _public(request):
+        raise HTTPException(403, RESTRICTED)
+    if not body.new and not body.removed:
+        raise HTTPException(422, "신축이나 철거를 하나 이상 적어 주세요")
+    grids = list(dict.fromkeys(body.grids))
+    if any(not re.fullmatch(r"cell_\d+_\d+", g) for g in grids):
+        raise HTTPException(422, "칸 id는 cell_<x>_<y> 형식입니다")
+    from .regions import region_for_grid
+    cells = [dict(zip(("x", "y"), _xy(g))) for g in grids]
+    with Session() as db:
+        code = body.region or region_for_grid(db, grids[0])
+        model = _model_region(db, code, cells) if code else None
+    if not code:
+        raise HTTPException(422, "지역을 알 수 없습니다")
+    status_code, answer = _call("/predict-area", {
+        "region": model or code, "cells": cells, "years_after": body.years_after,
+        "new": [i.model_dump(exclude_none=True) for i in body.new],
+        "removed": [i.model_dump(exclude_none=True) for i in body.removed]}, timeout=600.0)
+    if status_code == 0:
+        raise HTTPException(503, OFF)
+    if status_code != 200:
+        detail = (answer or {}).get("detail") if isinstance(answer, dict) else None
+        raise HTTPException(status_code if status_code in (404, 422, 503) else 502, detail or "팀 변화 모델이 답하지 못했습니다")
+    area = answer.get("area") or {}
+    used = area.get("cells_used") or []
+    for r, u in zip(answer.get("results") or [], used):
+        r["grid"] = _grid_of(u["x"], u["y"])
+    for c in (area.get("cells_used") or []) + (area.get("cells_skipped") or []):
+        c["grid"] = _grid_of(c["x"], c["y"])
+    answer["data_class"] = "SCENARIO"
+    answer["note"] = ("팀 변화 모델의 추정입니다(탄소공간지도 건물 배출의 변화, tCO₂e/년). 관측과 섞지 않습니다. "
+                      "용도별 합계를 구역의 쓸 수 있는 500m 칸에 같게 나눠 칸마다 예측하고 더했습니다. "
+                      "구간은 개발 단위 교차검증 잔차의 q10~q90입니다.")
     return answer

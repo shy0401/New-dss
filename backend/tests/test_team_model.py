@@ -67,3 +67,65 @@ def test_predict_passes_the_reason_when_the_model_is_off_or_still_training(monke
     monkeypatch.setattr(team_model, "_call", lambda *a, **k: (503, {"detail": "변화 모델을 학습하는 중입니다(1~3분)", "status": "training"}))
     r = _client().post("/api/team-model/predict", json=plan)
     assert r.status_code == 503 and "학습하는 중" in r.json()["detail"]
+
+
+def test_area_predict_sends_cell_corners_and_totals_and_names_the_cells_back(monkeypatch):
+    from app import team_model
+    sent: dict[str, Any] = {}
+
+    def fake(path, body=None, timeout=5.0):
+        sent.update(path=path, body=body)
+        return 200, {"dataset": "52110_전주시", "results": [{"change_tco2e": 1200.0}],
+                     "combined": {"change_tco2e": 1200.0, "band": {"q10": 500.0, "q90": 1900.0}},
+                     "area": {"split": "equal", "cells_total": 2, "cells_used": [{"x": 959500, "y": 1760500, "grid_id": "g1"}],
+                              "cells_skipped": [{"x": 960000, "y": 1760500, "reason": "쓸 수 있는 해가 없는 칸(결측·결함 표시)"}]}}
+    monkeypatch.setattr(team_model, "_call", fake)
+    monkeypatch.setattr(team_model, "_model_region", lambda db, code, cells: "52113" if len(cells) == 2 else None)
+    r = _client().post("/api/team-model/predict-area", json={
+        "region": "52110", "grids": ["cell_959500_1760500", "cell_960000_1760500", "cell_959500_1760500"],
+        "new": [{"use": "residential", "floor_area_m2": 200000, "dwellings": 2000}, {"use": "commercial", "floor_area_m2": 30000}],
+        "years_after": 7})
+    assert r.status_code == 200
+    assert sent["path"] == "/predict-area" and sent["body"]["region"] == "52113"  # the team region holding the cells
+    assert sent["body"]["cells"] == [{"x": 959500, "y": 1760500}, {"x": 960000, "y": 1760500}]  # duplicates dropped, order kept
+    assert sent["body"]["new"][0] == {"use": "residential", "floor_area_m2": 200000.0, "dwellings": 2000.0} and sent["body"]["removed"] == []
+    body = r.json()
+    assert body["data_class"] == "SCENARIO" and "같게 나눠" in body["note"]
+    assert body["results"][0]["grid"] == "cell_959500_1760500"
+    assert body["area"]["cells_skipped"][0]["grid"] == "cell_960000_1760500"
+
+
+@pytest.mark.parametrize("payload", [
+    {"region": "52110", "grids": ["cell_959500_1760500"]},                                                  # nothing built or removed
+    {"region": "52110", "grids": [f"cell_{959500 + 500 * i}_1760500" for i in range(65)], "new": [{"floor_area_m2": 10}]},  # > 64 cells
+    {"region": "52110", "grids": ["x"], "new": [{"floor_area_m2": 10}]},
+    {"region": "52110", "grids": ["cell_1_2"], "new": [{"floor_area_m2": 10}] * 5},                            # > 4 use rows
+])
+def test_area_predict_rejects_what_the_model_cannot_read(monkeypatch, payload):
+    from app import team_model
+    monkeypatch.setattr(team_model, "_call", lambda *a, **k: pytest.fail("the service must not be asked"))
+    assert _client().post("/api/team-model/predict-area", json=payload).status_code == 422
+
+
+def test_area_predict_is_closed_on_the_public_gateway():
+    r = _client().post("/api/team-model/predict-area", json={"region": "52110", "grids": ["cell_959500_1760500"], "new": [{"floor_area_m2": 1000}]},
+                       headers={"X-Public-Gateway": "1"})
+    assert r.status_code == 403
+
+
+def test_service_splits_a_development_equally_over_its_cells():
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location("team_server", Path(__file__).resolve().parents[2] / "deploy" / "team-model" / "server.py")
+    server = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(server)
+    got = server.split_equal([{"use": "residential", "floor_area_m2": 90000, "dwellings": 900}, {"use": "office", "floor_area_m2": 30000}], 3)
+    assert got == [{"use": "residential", "floor_area_m2": 30000.0, "dwellings": 300.0}, {"use": "office", "floor_area_m2": 10000.0}]
+    assert server.MAX_PLANS == 64
+    # every cell of the development starts from the same year: the latest year at least half of the cells can use
+    assert server.common_year([{2016, 2021}, {2021}, {2014, 2021}, {2024}]) == 2021
+    assert server.common_year([{2018, 2024}, {2018, 2024}, {2018}, {2018}]) == 2024
+    assert server.common_year([{2016}, {2021}]) == 2021
+    assert server.common_year([{2014}, {2016}, {2018}]) == 2018  # no year with half: the most cells, the later on a tie
+    assert server.common_year([set(), set()]) is None
+    assert server.nearest_year({2014, 2018, 2021}, 2019) == 2018 and server.nearest_year({2017, 2021}, 2019) == 2017

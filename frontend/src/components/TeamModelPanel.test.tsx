@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
 import { TeamModelPanel } from './TeamModelPanel';
 
 afterEach(() => { vi.restoreAllMocks(); });
@@ -26,7 +27,7 @@ describe('TeamModelPanel', () => {
       if (url.includes('/team-model/predict')) { expect(init?.method).toBe('POST'); return json(RESULT); }
       return json({}, 404);
     });
-    render(<TeamModelPanel gridId="cell_959500_1760500" region="52110" />);
+    render(<MemoryRouter><TeamModelPanel gridId="cell_959500_1760500" region="52110" /></MemoryRouter>);
     expect(await screen.findByText(/학습 완료/)).toBeTruthy();
     const table = await screen.findByTestId('team-model-cases');
     expect(table.textContent).toContain('2016→2021');
@@ -49,7 +50,7 @@ describe('TeamModelPanel', () => {
   it('keeps the form closed while the model is off and says why', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => String(input).includes('/status')
       ? json({ status: 'off', reason: '팀 변화 모델 서비스가 꺼져 있습니다.' }) : json({ region: '52110', dataset: null, grid: 'g', cases: [], scored: 0 }));
-    render(<TeamModelPanel gridId="cell_959500_1760500" region="52110" />);
+    render(<MemoryRouter><TeamModelPanel gridId="cell_959500_1760500" region="52110" /></MemoryRouter>);
     expect(await screen.findByText('팀 변화 모델 서비스가 꺼져 있습니다.')).toBeTruthy();
     fireEvent.change(screen.getByPlaceholderText('예: 120000'), { target: { value: '5000' } });
     expect((screen.getByRole('button', { name: '배출 변화 예측' }) as HTMLButtonElement).disabled).toBe(true);

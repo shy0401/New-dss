@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
+import { Link } from 'react-router-dom';
 import { Note } from './Fold';
 import { api } from '../lib/api';
 import { formatMetric } from '../lib/format';
@@ -89,6 +90,7 @@ export function TeamModelPanel({ gridId, region }: { gridId: string; region: str
       <label className="area-select narrow"><span>몇 년 뒤</span><select value={yearsAfter} onChange={(e) => setYearsAfter(Number(e.target.value))}>{[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((y) => <option key={y} value={y}>{y}년 뒤</option>)}</select><small className="muted">평가한 개발 기간 중앙값 7년</small></label>
       <button type="submit" className="button small primary" disabled={!canRun}>{busy ? '예측 중…' : '배출 변화 예측'}</button>
     </form>
+    <p className="muted" data-testid="team-model-area-link">여러 칸에 걸친 개발은 <Link to="/area">지역 시뮬레이션</Link>에서 구역을 골라 한 개발로 예측합니다.</p>
     {error && <p className="muted" role="alert">{error}</p>}
     {r && <div className="team-model-result" data-testid="team-model-result">
       <p className="detail-figure">{signed(r.change_tco2e)}<span className="unit">tCO₂e/년 ({r.before_year}→{r.after_year}년)</span></p>

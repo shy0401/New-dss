@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { AreaMap } from '../components/area/AreaMap';
 import { AreaSummaryBar, BenchmarkPanel, FallbackNotice, MeasuresPanel } from '../components/area/AreaWorkflow';
 import { BeforeAfterChart, DevelopmentChart, EffortBars, EffortCurve, ElectricityChart, RegisterChart, WeatherYearsChart } from '../components/area/AreaCharts';
+import { TeamAreaPanel } from '../components/area/TeamAreaPanel';
 import { Fold, FoldAllButton, FoldStack, Note } from '../components/Fold';
 import { MetricCard } from '../components/MetricCard';
 import { PageHeader } from '../components/PageHeader';
@@ -237,6 +238,7 @@ export function AreaPage() {
       <div className="section-label" id="area-step-plan"><h2>미래 개발과 감축 노력</h2><span>목표 감축률을 넣으면 필요한 노력을 계산합니다</span></div>
       <EffortPanel effort={analysis.effort} plan={plan} setPlan={setPlan} target={target} setTarget={setTarget} pvYield={pvYield} setPvYield={setPvYield} basis={effortBasis} setBasis={setEffortBasis} kcsmAvailable={!!analysis.history.kcsm?.available} />
       <BenchmarkPanel bench={bench} effort={analysis.effort} regionName={options.data?.region?.short_name ?? '시·군·구'} />
+      <TeamAreaPanel grids={analysis.history.area.grid_ids} region={region} plannedFloor={plannedArea(plan)} plannedRemoved={plan.removed_floor_area_m2} />
 
       <div className="section-label" id="area-step-measures"><h2>감축 방안</h2><span>구체적 방안을 순서대로 더해 필요 감축량을 채웁니다. 다른 안과 비교하지 않습니다</span></div>
       <MeasuresPanel effort={analysis.effort} measures={measures} setMeasures={setMeasures} />
