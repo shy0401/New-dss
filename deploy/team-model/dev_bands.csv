@@ -1,0 +1,5 @@
+site_kind,predicted_size_class,use_class,cases,pooled_over_site_kinds,q10,q25,q75,q90
+built_up,big,all,183,False,-0.6572,-0.336,0.2713,0.6962
+new_site,big,all,35,False,-0.7751,-0.3531,0.4821,0.6207
+built_up,small,all,56,False,-5.5458,-1.8513,1.2184,2.7807
+new_site,small,all,68,True,-4.8606,-1.409,1.3578,3.3685

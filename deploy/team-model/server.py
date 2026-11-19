@@ -36,6 +36,19 @@ STATION_FILE = Path(os.environ.get("TEAM_STATION_FILE", str(Path(__file__).with_
 # §25-26): 2013-2022 use 0.4173, 2023 uses 0.4781 everywhere, 2024 is 0.4781 in 인천 · 경기 and 0.4173 elsewhere.
 FACTOR_FILE = Path(os.environ.get("TEAM_FACTOR_FILE", str(Path(__file__).with_name("elec_factor_2024.csv"))))
 _FACTOR_BASE, _FACTOR_HIGH = 0.4173, 0.4781
+# model roadmap stages 4-5 · 7-A (2026-11-19, methods performance-candidates §35, §37, §39):
+# cell (default): the region-drop exclusion judged per cell (region_drop.py), rows taken back join the training pairs only.
+# team: the team marks as received
+REGION_DROP = os.environ.get("TEAM_REGION_DROP", "cell")
+# off (default): the pair input "after_year" is left out. Trees read any year past 2024 as 2024, so a plan's future year
+# carried the 2024 effect (+10~15 % on development totals, §35); without it the development-level accuracy is the same
+AFTER_YEAR_INPUT = os.environ.get("TEAM_AFTER_YEAR_INPUT", "off")
+# prediction bands from the development-level cross-validation of this model (§39 rule 3); the team bands when missing
+BANDS_FILE = Path(os.environ.get("TEAM_BANDS_FILE", str(Path(__file__).with_name("dev_bands.csv"))))
+# years after the current state when a plan does not say (§39 rule 4): the evaluated development windows run 7 years
+# (median, pre-construction → after completion) and 3 vs 7 years moved test predictions by 6.6 % (median); the team default was 3
+DEFAULT_YEARS_AFTER = int(os.environ.get("TEAM_DEFAULT_YEARS_AFTER", "7"))
+_CODE: dict[str, Path] = {}
 _ELEC, _GAS, _HEAT = "elec_tco2e_total", "gas_tco2e_total", "heat_tco2e_total"
 _TOTAL = "buildings_tco2e_total"
 _WEATHER = ("temp_avg_c", "heating_degree_days_c", "cooling_degree_days_c")
@@ -207,7 +220,15 @@ def _patch_inputs(P: Any) -> None:
 
     def load_training(folder: Path) -> tuple[Any, list[str]]:
         table, features = original(folder)
+        rd: dict[str, int] = {}
+        if REGION_DROP == "cell" and "root" in _CODE:
+            import region_drop
+            from urban_carbon.modeling.energy_mix import add_energy_mix
+
+            table, rd = region_drop.training_table(Path(folder), _CODE["root"] / "config" / "rules.yaml", factor_high,
+                                                   _FACTOR_BASE, _FACTOR_HIGH, add_energy_mix)
         table, note = official_inputs(table, Path(folder), asos, factor_high)
+        note.update(rd)
         features = official_features(features, table)
         note["inputs"] = len(features)
         STATE["inputs"]["tables"][Path(folder).name] = note
@@ -217,6 +238,56 @@ def _patch_inputs(P: Any) -> None:
     P.load_training = load_training
     use_register_floor_area(P)
     B._official_inputs = True
+
+
+def _patch_pairs(P: Any) -> None:
+    """Leave the pair input ``after_year`` out (``AFTER_YEAR_INPUT`` off). ``_Trained`` builds its pairs through
+    ``predict.build_pairs``; ``pair_inputs`` reindexes a plan's inputs to the fitted columns, so it drops out there too."""
+    if AFTER_YEAR_INPUT != "off" or getattr(P, "_after_year_off", False):
+        return
+    from dataclasses import replace
+
+    original = P.build_pairs
+
+    def build_pairs(*args: Any, **kwargs: Any) -> Any:
+        pairs = original(*args, **kwargs)
+        if "after_year" in pairs.matrix:
+            pairs = replace(pairs, matrix=pairs.matrix.drop(columns=["after_year"]))
+        return pairs
+
+    P.build_pairs = build_pairs
+    P._after_year_off = True
+
+
+def _patch_warnings(P: Any) -> None:
+    """Use-class warnings with this model's development-level numbers (record §39: 42 regions held out, cross-validated
+    developments of 1,000 tCO2e and more, 12 seeds). The team text quoted cell cases of the team inputs (0.42~0.46)."""
+    from urban_carbon.modeling import use_class as U
+
+    def scope_warnings(use: str) -> list[str]:
+        if use == U.INDUSTRIAL:
+            return ["범위 밖: 공장·물류 위주 계획. 탄소공간지도가 그 에너지를 거의 담지 않아 맞히지 못함(개발 단위 47개 오차 0.59, "
+                    "예측 합이 실제의 0.67배) — 값보다 방향·크기 등급으로만 읽을 것"]
+        if use == U.COMMERCIAL:
+            return ["상업·업무 위주 계획: 개발 단위 33개 오차 중앙값 0.56, ±50% 안 42%, 예측 합이 실제의 0.70배(작게 잡음) "
+                    "— 주거(0.30 · 75%)보다 크게 빗나가므로 구간을 넓게 읽을 것"]
+        if use == U.OTHER_NONRES:
+            return ["기타 비주거(교육·의료 등) 위주 계획: 검증 개발이 12개뿐(오차 0.34)이라 정확도를 말하기 어려움 — 구간을 넓게 읽을 것"]
+        return []
+
+    P.scope_warnings = scope_warnings
+
+
+def _patch_bands(P: Any) -> None:
+    """Bands of a plan and of several plans together from this model's development-level residuals (``BANDS_FILE``)."""
+    if not BANDS_FILE.is_file() or getattr(P, "_dev_bands", False):
+        return
+    import pandas
+
+    bands = pandas.read_csv(BANDS_FILE, encoding="utf-8")
+    P.load_bands = lambda folder: bands
+    P.load_unit_bands = lambda folder: bands
+    P._dev_bands = True
 
 
 def train() -> None:
@@ -231,8 +302,14 @@ def train() -> None:
         import sklearn
         from urban_carbon.core.paths import ProjectPaths
         from urban_carbon.modeling import predict as P
+        _CODE["root"] = code
         _fix_band_sign(P)
         _patch_inputs(P)
+        _patch_pairs(P)
+        _patch_bands(P)
+        _patch_warnings(P)
+        STATE["inputs"].update(region_drop=REGION_DROP, after_year_input=AFTER_YEAR_INPUT,
+                               bands=BANDS_FILE.name if BANDS_FILE.is_file() else "team")
         from urban_carbon.modeling.settings import load_baseline, load_change
 
         STATE.update(snapshot=snap, versions={"python": sys.version.split()[0], "numpy": numpy.__version__, "pandas": pandas.__version__,
@@ -326,8 +403,7 @@ def predict(body: dict[str, Any]) -> dict[str, Any]:
                                    "removed": [_item(r) for r in plan.get("removed") or []]}
             if region is not None:
                 doc["region"] = region
-            if plan.get("years_after") is not None:
-                doc["years_after"] = int(plan["years_after"])
+            doc["years_after"] = int(plan["years_after"]) if plan.get("years_after") is not None else DEFAULT_YEARS_AFTER
             if plan.get("zone"):
                 doc["zone"] = str(plan["zone"])
             path = Path(tmp) / f"plan_{i + 1}.yaml"
