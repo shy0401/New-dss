@@ -239,6 +239,22 @@ def test_effort_falls_back_to_the_buildings_that_are_metered_when_there_is_no_ap
     assert effort(history, {'added_floor_area_m2': 1000}, 20)['available'] is False
 
 
+def test_recommended_fact_states_the_roof_shortfall_and_the_offset_when_there_is_no_yield():
+    """2026-11-20 점검 A: 필요한 옥상이 계획 연면적보다 크면 근거 문장에 적고, 발전량 근거가 없어도 상쇄 전력량 문장은 남긴다."""
+    history = _hub_history()
+    result = effort(history, {'added_floor_area_m2': 1000}, 20, pv_yield_kwh_per_kw=1200)
+    rec = result['recommended']
+    # 225,000 kg ÷ 0.5 ÷ 1,200 = 375 kW → 380 kW · 옥상 3,800 m² > 계획 연면적 1,000 m²
+    assert rec['pv_kw'] == 380 and rec['roof_m2'] == 3800 and rec['plan_roof_basis'] == 'floor_area' and rec['plan_roof_m2'] == 1000 and rec['roof_over_plan']
+    text = next(f for f in area_facts(history, None, result) if f['id'] == 'effort_rec')
+    assert '필요한 옥상 약 3,800 m²가 계획 연면적(1층으로 지어도 지붕은 이보다 작음) 1,000 m²보다 커서' in text['text'] and 1000 in text['numbers']
+    history.pop('solar', None)
+    plain = effort(history, {'added_floor_area_m2': 1000}, 20)
+    assert plain['pv_yield'] is None and plain['recommended']['steps'] == [] and plain['recommended']['offset_kwh'] == 450000
+    fact = next(f for f in area_facts(history, None, plain) if f['id'] == 'effort_rec')
+    assert fact['text'].endswith('전력 450,000 kWh를 재생에너지 상쇄량으로만 적습니다.') and 450000 in fact['numbers']
+
+
 def test_coverage_says_which_series_is_missing_when_only_buildings_are_metered():
     history = _hub_history()
     cov = next(f for f in area_facts(history) if f['id'] == 'coverage')

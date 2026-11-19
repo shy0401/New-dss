@@ -92,6 +92,17 @@ def test_recommended_mix_without_yield_states_the_offset_kwh_only():
     assert recommended_mix({"available": True, "factor_kgco2eq_per_kwh": None}) is None
 
 
+def test_recommended_roof_is_compared_with_the_plan_roof():
+    """2026-11-20 점검 A: 필요한 옥상이 계획 건물 지붕보다 크면 표시. 건축면적 합이 있으면 그것, 없으면 연면적(지붕의 위 한계)."""
+    rec = recommended_mix(_effort(added_floor_area_m2=100_000.0, plan_roof_m2=None))
+    assert rec["roof_m2"] == 213_300 and rec["plan_roof_m2"] == 100_000 and rec["plan_roof_basis"] == "floor_area" and rec["roof_over_plan"]
+    rec = recommended_mix(_effort(added_floor_area_m2=2_000_000.0, plan_roof_m2=None))
+    assert not rec["roof_over_plan"]   # 연면적이 더 크면 지붕이 모자란다고 단정하지 않음
+    rec = recommended_mix(_effort(added_floor_area_m2=2_000_000.0, plan_roof_m2=150_000.0))
+    assert rec["plan_roof_basis"] == "footprint" and rec["plan_roof_m2"] == 150_000 and rec["roof_over_plan"]
+    assert recommended_mix(_effort(pv_yield=None))["roof_over_plan"] is False   # 태양광 용량이 없으면 견주지 않음
+
+
 def test_the_base_year_of_the_reference_is_written_with_the_reductions():
     """감축량에는 기준 연도를 함께 적는다(AGENTS.md): 기준안을 만든 관측 연도를 결과와 가정 문장에 둔다."""
     p = building_plan({"electricity_kwh": 1_000_000, "gas_kwh": 500_000}, 1000, FACTORS, None, base_year=2024)

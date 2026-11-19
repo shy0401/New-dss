@@ -81,14 +81,16 @@ export function MeasuresPanel({ effort, measures, setMeasures }: { effort: Effor
   const parts = mix ? [{ key: 'new', label: '신축', value: share(mix.new_kwh) }, { key: 'existing', label: '기존 건물', value: share(mix.existing_kwh) }, { key: 'pv', label: '태양광', value: share(mix.pv_kwh) }] : [];
   let left = 100;
   const rec = effort?.recommended ?? null;
-  const applyRecommended = () => { if (rec) setMeasures({ new_efficiency_pct: rec.new_efficiency_pct, existing_efficiency_pct: rec.existing_efficiency_pct, pv_kw: rec.pv_kw }); };
+  // 자동 방안은 태양광만이라 태양광 칸만 채우고, 사용자가 넣은 신축 · 기존 % 는 그대로 둔다(2026-11-20 점검 B)
+  const applyRecommended = () => { if (rec) setMeasures({ ...measures, pv_kw: rec.pv_kw }); };
   return <section className="panel area-measures" aria-label="감축 수단 조합">
     <div className="panel-title"><h3>감축 방안</h3><span className="status-tag neutral">순서대로 더해 필요 감축량을 채움</span></div>
-    {effort?.available && !effort.already_met && rec && rec.steps.length > 0 && <div className="area-recommended" data-testid="area-recommended">
+    {effort?.available && !effort.already_met && rec && (rec.steps.length > 0 || !!rec.offset_kwh) && <div className="area-recommended" data-testid="area-recommended">
       <h4>구체적 감축 방안 (자동 계산)</h4>
-      <ol>{rec.steps.map((s) => <li key={s.key}><b>{s.title}</b> — {s.detail}<span className="num">{t1(s.kgco2eq)}/년</span></li>)}</ol>
+      {rec.steps.length > 0 && <ol>{rec.steps.map((s) => <li key={s.key}><b>{s.title}</b> — {s.detail}<span className="num">{t1(s.kgco2eq)}/년</span></li>)}</ol>}
       <p className={`area-headline ${rec.met ? 'good' : 'warn'}`}>{rec.met ? `합계 ${t1(rec.total_kgco2eq)}로 필요 감축량 ${t1(rec.required_kgco2eq)}를 채웁니다.` : `합계 ${t1(rec.total_kgco2eq)}로 필요 감축량 ${t1(rec.required_kgco2eq)}의 ${formatMetric(rec.share_pct, '%', 1)}입니다.${rec.offset_kwh ? ` 발전량 근거가 없어 남는 ${formatMetric(rec.offset_kwh, 'kWh')}는 재생에너지 상쇄량으로 적습니다.` : ''}`}</p>
-      <div className="area-measures-actions"><button type="button" className="button small" onClick={applyRecommended}><ListChecks size={14} />이 방안을 아래 칸에 넣기</button><small className="muted">태양광은 남는 양을 10 kW 단위로 올려 채운 값입니다(기준 문서 5.15). 신축·기존 건물 %는 아래 칸에서 직접 넣어 볼 수 있습니다.</small></div>
+      {rec.roof_over_plan && rec.roof_m2 != null && <p className="area-headline warn" data-testid="area-roof-warning">필요한 옥상 약 {formatMetric(rec.roof_m2, 'm²')}가 {rec.plan_roof_basis === 'footprint' ? '계획 건물 지붕(건축면적 합)' : '계획 연면적(1층으로 지어도 지붕은 이보다 작음)'} {formatMetric(rec.plan_roof_m2 ?? 0, 'm²')}보다 큽니다. 모자라는 몫은 구역 안 기존 건물 지붕이나 구역 밖 발전으로 채워야 합니다.</p>}
+      {rec.pv_kw > 0 && <div className="area-measures-actions"><button type="button" className="button small" onClick={applyRecommended}><ListChecks size={14} />태양광 값을 아래 칸에 넣기</button><small className="muted">태양광은 남는 양을 10 kW 단위로 올려 채운 값입니다(기준 문서 5.15). 아래 칸의 신축·기존 건물 %는 바꾸지 않습니다(넣은 값이 있으면 합계가 필요 감축량을 넘을 수 있음).</small></div>}
     </div>}
     {!effort?.available ? <p className="muted">감축 노력을 계산할 수 있는 구역에서 씁니다.</p> : effort.already_met ? <p className="area-headline good">계획을 반영해도 목표선 아래라 추가 수단이 필요하지 않습니다.</p> : <>
       <div className="field-grid area-measures-form">

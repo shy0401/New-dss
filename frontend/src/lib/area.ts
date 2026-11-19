@@ -336,6 +336,11 @@ export interface RecommendedMix extends MeasureMix {
   steps: Array<{ key: 'new' | 'existing' | 'pv'; title: string; detail: string; kwh: number; kgco2eq: number }>;
   roof_m2: number | null;
   offset_kwh: number | null;
+  /** 계획 건물 지붕: 건축면적 합(footprint, 정확) 또는 연면적(floor_area, 지붕의 위 한계). */
+  plan_roof_m2?: number;
+  plan_roof_basis?: 'footprint' | 'floor_area';
+  /** 필요한 옥상이 계획 건물 지붕보다 큼 → 기존 건물 지붕 · 구역 밖 발전으로 채워야 함. */
+  roof_over_plan?: boolean;
 }
 
 export interface MeasuresState { new_efficiency_pct: number; existing_efficiency_pct: number; pv_kw: number }
