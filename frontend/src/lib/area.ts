@@ -327,7 +327,7 @@ export interface EffortResult {
   fallback_reason?: string;
   /** 감축 수단 조합(도시·군기본계획의 수단별 감축량 합산 방식): 요청에 measures가 있을 때만. */
   mix?: MeasureMix;
-  /** 구체적 감축 방안(자동, 기준 문서 5.15): 신축 11.3% → 기존 4.8% → 남는 양 태양광(10 kW 단위). 사용자 조합과 따로. */
+  /** 구체적 감축 방안(자동, 기준 문서 5.15): 남는 양 태양광(10 kW 단위). 2026-11-20부터 신축 · 기존 전력 절감 단계 없음. 사용자 조합과 따로. */
   recommended?: RecommendedMix | null;
 }
 

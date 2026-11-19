@@ -28,7 +28,7 @@ def test_catalog_has_every_field_a_reader_needs_and_matches_the_ladder_constants
     assert table["envelope"]["value"] == ENVELOPE_GAS_SAVING and table["envelope"]["range"] == ENVELOPE_GAS_SAVING_RANGE
     assert table["operation"]["value"] == OPERATION_ELECTRICITY_SAVING and table["operation"]["range"] == OPERATION_ELECTRICITY_SAVING_RANGE
     # 사다리에는 실측 지표와 가정(태양광·녹지)만: 설계·계산과 기업 발표 값은 '지표만' 또는 내재탄소 참고
-    assert {m["key"] for m in MEASURES if m["use"] == "ladder"} == {"envelope", "operation", "rooftop_pv", "greenery"}
+    assert {m["key"] for m in MEASURES if m["use"] == "ladder"} == {"envelope", "rooftop_pv", "greenery"}   # 운영은 2026-11-20부터 지표만
     assert all(m["evidence"] in ("measured", "agency") for m in MEASURES if m["use"] == "alone")
     assert all(m["evidence"] == "calc" for m in EMBODIED_MEASURES)
     assert c["embodied_basis"]["kg_per_m2"] == 445.4 and c["embodied_basis"]["range_kg_per_m2"] == [340.3, 586.0] and c["embodied_basis"]["readymix_share_pct"] == 14.9
@@ -38,15 +38,14 @@ def test_each_measure_alone_on_the_plan_and_indicator_only_rows_have_no_value():
     rows = by_key(measure_table(1_000_000, 500_000, 0.4, 0.2, pv={"kwh": 72_000}, green={"uptake_kg": 3000, "range_kg": [2640.0, 4770.0]}))
     # 대책 없음 500,000 kg = 전력 400,000 + 가스 100,000
     assert rows["envelope"]["alone_kg"] == 13_700 and rows["envelope"]["alone_pct"] == 2.7 and rows["envelope"]["alone_range_kg"] == [9_800, 17_300]
-    assert rows["operation"]["alone_kg"] == 19_200 and rows["operation"]["alone_range_kg"] == [7_800, 68_000]
-    # 신축 통합 기준: 총에너지 −11.3%를 전력·가스에 같은 비율로. 범위의 음수는 늘어남(+6.7%)
-    assert rows["new_build_package"]["alone_kg"] == 56_500 and rows["new_build_package"]["alone_range_kg"] == [-33_500, 230_000]
+    # 운영 · 신축 통합은 2026-11-20부터 지표만(입주 뒤 행동 / 전력 절감 근거 없음): 값을 내지 않는다
+    assert rows["operation"]["alone_kg"] is None and rows["new_build_package"]["alone_kg"] is None
     # 열회수 환기는 2026-11-20 원문 대조로 계산(ECO2) 근거로 바뀌어 값을 내지 않는 "지표만"으로 내림
     assert rows["heat_recovery_ventilation"]["alone_kg"] is None
     assert rows["home_energy_display"]["alone_kg"] == 46_800 and rows["home_energy_display"]["alone_pct"] == 9.4   # 전력 400,000 × 11.7%
     assert rows["rooftop_pv"]["alone_kg"] == 28_800 and rows["greenery"]["alone_kg"] == 3000
     # 계산 근거가 계획안에 없는 수단: 값을 지어내지 않고 지표와 이유만
-    for key in ("passive_package", "window_retrofit", "shading", "heat_recovery_ventilation", "common_lighting", "elevator_regeneration", "condensing_boiler", "district_heating_control"):
+    for key in ("operation", "new_build_package", "passive_package", "window_retrofit", "shading", "heat_recovery_ventilation", "common_lighting", "elevator_regeneration", "condensing_boiler", "district_heating_control"):
         assert rows[key]["alone_kg"] is None and rows[key]["alone_range_kg"] is None and rows[key]["reason"]
     assert rows["common_lighting"]["value_pct"] == 40.0 and rows["common_lighting"]["range_pct"] == [10.0, 82.5]
 
@@ -55,7 +54,7 @@ def test_missing_gas_pv_or_green_leaves_the_value_empty_not_zero():
     rows = by_key(measure_table(1_000_000, None, 0.4, None))
     assert rows["envelope"]["alone_kg"] is None and "가스" in rows["envelope"]["reason"]
     assert rows["rooftop_pv"]["alone_kg"] is None and rows["greenery"]["alone_kg"] is None
-    assert rows["new_build_package"]["alone_kg"] == 45_200   # 전력만 있는 계획안: 400,000 × 11.3%
+    assert rows["new_build_package"]["alone_kg"] is None   # 지표만(2026-11-20)
 
 
 def test_embodied_carbon_is_a_reference_calculation_with_its_range_and_options():
@@ -78,11 +77,11 @@ def test_the_ladder_result_carries_the_measures_and_embodied_block_without_chang
     args = ({"electricity_kwh": 1_000_000, "gas_kwh": 500_000}, 1000, FACTORS, {"kwh_per_kw": 1200, "label": "추정"})
     before = building_plan(*args, plan_carbon_kg=450_000, green_area_m2=3000)
     after = building_plan(*args, plan_carbon_kg=450_000, green_area_m2=3000, floor_area_m2=20_000, floors=12)
-    assert after["steps"] == before["steps"] and after["final_carbon_kg"] == before["final_carbon_kg"] == 435_300
+    assert after["steps"] == before["steps"] and after["final_carbon_kg"] == before["final_carbon_kg"] == 454_500
     assert before["embodied"] is None and after["embodied"]["carbon_kg"] == 8_908_000
     assert [m["key"] for m in after["measures"]] == [m["key"] for m in MEASURES]
     rows = by_key(after["measures"])
-    assert rows["new_build_package"]["alone_kg"] == 56_500 and rows["passive_package"]["alone_kg"] is None
+    assert rows["new_build_package"]["alone_kg"] is None and rows["passive_package"]["alone_kg"] is None
 
 
 def test_indicator_document_lists_every_measure_with_the_same_indicator():

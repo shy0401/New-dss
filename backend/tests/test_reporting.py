@@ -77,12 +77,12 @@ def test_markdown_names_the_place_shows_the_plan_and_its_savings_and_hides_cell_
     ladder = building_plan(scenario['result']['annual']['reference'], 2800.0, snapshot['factors'], {'kwh_per_kw': 1199.9, 'label': '추정'}, 560280.0)
     with_plan = report_markdown(dict(snapshot, scenarios=[dict(scenario, reduction_plan=ladder)]))
     section = with_plan.split('## 5. 탄소 감축 방안')[1].split('## 6.')[0]
-    assert '| 0. 대책 없음 (기준안) |' in section and '| 1. 단열·창호 기준 강화 |' in section and '| 2. 에너지 절약 운영 |' in section and '| 3. 지붕 태양광 |' in section and '난방·급탕 전기화 |' not in section
+    assert '| 0. 대책 없음 (기준안) |' in section and '| 1. 단열·창호 기준 강화 |' in section and '| 2. 지붕 태양광 |' in section and '에너지 절약 운영 |' not in section.split('#### 수단별')[0] and '난방·급탕 전기화 |' not in section
     assert '옥상 1,680 m² · 168.0 kW' in section and '에너지자립률' in section and '계획안 B' not in with_plan
     assert '|---|---|---:|---:|---:|\n| 0. 대책 없음 (기준안) |' in section and ' |\n| 1. 단열·창호 기준 강화 |' in section and '|\n\n|' not in with_plan   # 사다리 표도 한 덩어리
     # 2026-11-16: 사다리 밖 수단은 '따로 본 값' 표로, 시공 단계 내재탄소는 참고 계산으로 같은 절에 (연면적 없이 만든 사다리에는 내재탄소 없음)
     assert '#### 수단별 효과 (따로 본 값, 서로 더하지 않음)' in section and '#### 시공 단계 내재탄소' not in section
-    assert '| 신축 통합 기준(ZEB 5등급 수준·효율등급 인증) | 총에너지(전력·가스에 같은 비율로 적용) −11.3% (−46~+6.7%) | 실측 14건(국내 11) | −107.0 t (−11.3%)<br>범위 +63.4~−435.5 t | 따로 본 값 |' in section
+    assert '| 신축 통합 기준(ZEB 5등급 수준·효율등급 인증) | 총 최종에너지 −11.4% (−12.1~−5.9%, 준공 시기 비교) | 실측 국내 2곳(원문과 맞는 행) | 지표만 | 지표만 |' in section
     assert '| 공용부 조명 LED·동작감지 디밍(지하주차장·계단) | 그 조명 전기 −40% (−82.5~−10%) | 기관 실적 국내 5건 | 지표만 | 지표만 |' in section
     assert '| 녹지·조경 흡수(상쇄) | 녹지 1 m²에 연 1.0 kgCO2 (8.8~15.9 t/ha) | 가정 | 값 없음 (녹지 면적이 없습니다.) | 기본 방안(사다리) |' in section
     assert '- **승강기 회생제동장치**:' in section and '](https://news.seoul.go.kr/citybuild/archives/517382)' in section   # 수단마다 설명·비용·주의·출처
