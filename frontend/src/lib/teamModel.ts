@@ -48,6 +48,25 @@ export interface TeamPrediction {
 }
 export interface TeamPredictResponse { dataset: string; train: string; snapshot: string | null; results: TeamPrediction[]; combined: unknown; data_class: 'SCENARIO'; note: string }
 
+/** 구역(여러 칸) 예측: 평가한 가장 큰 개발 64칸, 용도 줄 4개까지(모델 로드맵 7-B2) */
+export const AREA_MAX_CELLS = 64;
+export const AREA_MAX_USES = 4;
+
+/** 개발 크기 묶음(백엔드 accuracy.development 행 이름과 같은 글자): 1칸 · 2~9칸 · 10칸 이상 */
+export function areaSizeLabel(cells: number): string {
+  return cells <= 1 ? '1칸' : cells <= 9 ? '2~9칸' : '10칸 이상';
+}
+
+export interface TeamAreaItem { use: string; floor_area_m2: number; dwellings?: number }
+/** 칸의 시작 상태: shared = 기준 해, nearest = 그 칸의 가장 가까운 해(추정), empty = 빈 땅으로 봄(추정) */
+export type TeamAreaStart = 'shared' | 'nearest' | 'empty';
+export interface TeamAreaCell { x: number; y: number; grid: string; grid_id?: string; reason?: string; year?: number; start?: TeamAreaStart }
+export interface TeamAreaResponse {
+  dataset: string; train: string; snapshot: string | null; results: TeamPrediction[]; data_class: 'SCENARIO'; note: string;
+  combined: { cells: string[]; site_kind: string; change_tco2e: number; band: Record<string, number>; sources_tco2e?: Record<string, number>; attribution?: Record<string, number>; out_of_range?: string[] };
+  area: { split: 'equal'; year: number; cells_total: number; cells_used: TeamAreaCell[]; cells_skipped: TeamAreaCell[]; per_cell: { new: TeamAreaItem[]; removed: TeamAreaItem[] }; seconds: number };
+}
+
 export const SOURCE_LABEL: Record<string, string> = { elec_tco2e_total: '전기', gas_tco2e_total: '가스', heat_tco2e_total: '지역난방' };
 
 export function signed(value: number | null | undefined, digits = 0): string {

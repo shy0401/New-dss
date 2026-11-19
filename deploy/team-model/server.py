@@ -9,6 +9,8 @@
 
 GET /health, GET /status, POST /predict {"region": "52110", "plans": [{"x": 959500, "y": 1760500, "new": [...],
 "removed": [...], "years_after": 3}]} — 칸은 이 도구의 500m 격자 왼쪽 아래 좌표(EPSG:5179).
+POST /predict-area {"region": "52110", "cells": [{"x": .., "y": ..}, ...], "new": [...], "removed": [...], "years_after": 7}
+— 한 개발의 용도별 합계를 쓸 수 있는 칸에 같게 나눠 칸마다 예측하고 개발로 더한다(모델 로드맵 7-B2, 기록 41절).
 """
 from __future__ import annotations
 
@@ -28,7 +30,9 @@ from typing import Any
 TEAM_ROOT = Path(os.environ.get("TEAM_ROOT", "/team-root"))
 TRAIN = os.environ.get("TEAM_TRAIN", "00_합본_7차")
 PORT = int(os.environ.get("PORT", "8090"))
-MAX_PLANS = 9
+# 칸 수: 평가한 가장 큰 개발이 64칸(모델 로드맵 31절). 그 위는 검증 밖이라 받지 않는다
+MAX_PLANS = 64
+MAX_AREA_ITEMS = 10  # 구역 예측의 신축·철거 용도 줄 수(칸 계획과 같은 한도, 화면은 4줄)
 # official (기본): 아래 두 입력을 공식 값으로 바꿔 학습·예측. team: 받은 팀 코드 그대로(전후 비교용)
 INPUTS = os.environ.get("TEAM_INPUTS", "official")
 STATION_FILE = Path(os.environ.get("TEAM_STATION_FILE", str(Path(__file__).with_name("station_annual.csv"))))
@@ -48,6 +52,15 @@ BANDS_FILE = Path(os.environ.get("TEAM_BANDS_FILE", str(Path(__file__).with_name
 # years after the current state when a plan does not say (§39 rule 4): the evaluated development windows run 7 years
 # (median, pre-construction → after completion) and 3 vs 7 years moved test predictions by 6.6 % (median); the team default was 3
 DEFAULT_YEARS_AFTER = int(os.environ.get("TEAM_DEFAULT_YEARS_AFTER", "7"))
+# developments (default): the development cases that get the case weight (x10) come from developments.csv, as in every
+# evaluation of this model (record §34~§41: 762 pairs). team: the team predict path's baseline/development_cases.csv
+# (158 pairs). Found 2026-11-19 (7-B2 check): the service then differed from the evaluated model by 5~13 % on developments
+CASE_WEIGHTS = os.environ.get("TEAM_CASE_WEIGHTS", "developments")
+# area cells without a usable row in the shared state year (record §43): start from the cell's nearest usable year (R-b) and
+# empty-land cells from the empty state (R-c) instead of leaving them out
+AREA_NEAREST_YEAR = os.environ.get("TEAM_AREA_NEAREST_YEAR", "off") == "on"  # off: §43 rule 2 not met (sum ratio 0.044 off 1 vs 0.036 when left out)
+AREA_EMPTY_LAND = os.environ.get("TEAM_AREA_EMPTY_LAND", "on") == "on"
+_INPUT_SOURCES: dict[str, Any] = {}
 _CODE: dict[str, Path] = {}
 _ELEC, _GAS, _HEAT = "elec_tco2e_total", "gas_tco2e_total", "heat_tco2e_total"
 _TOTAL = "buildings_tco2e_total"
@@ -216,6 +229,7 @@ def _patch_inputs(P: Any) -> None:
         f = pandas.read_csv(FACTOR_FILE, dtype={"region_code": str, "factor_2024": str})
         factor_high = set(f.loc[f["factor_2024"] == str(_FACTOR_HIGH), "region_code"])
     STATE["inputs"]["elec_factor_2024_high_regions"] = sorted(factor_high)
+    _INPUT_SOURCES.update(asos=asos, factor_high=factor_high)
     original = B.load_training
 
     def load_training(folder: Path) -> tuple[Any, list[str]]:
@@ -290,6 +304,20 @@ def _patch_bands(P: Any) -> None:
     P._dev_bands = True
 
 
+def _patch_case_weights(P: Any) -> None:
+    """``_Trained`` weights the pairs of the cases it reads from ``CASES_FILE`` (also the fill stats' source, unchanged);
+    the evaluated model weights the cases of ``developments.csv``. Swap only the cases ``chosen_pairs`` sees there."""
+    if CASE_WEIGHTS != "developments":
+        return
+    from urban_carbon.modeling.developments import chosen_pairs, load_developments
+
+    def chosen(cases: Any, table: Any, settings: Any) -> Any:
+        dev = load_developments(_CODE["root"] / "data" / "processed" / TRAIN)
+        return chosen_pairs(dev if dev is not None else cases, table, settings)
+
+    P.chosen_pairs = chosen
+
+
 def train() -> None:
     snap, code = find_code()
     if code is None:
@@ -308,7 +336,9 @@ def train() -> None:
         _patch_pairs(P)
         _patch_bands(P)
         _patch_warnings(P)
-        STATE["inputs"].update(region_drop=REGION_DROP, after_year_input=AFTER_YEAR_INPUT,
+        _patch_case_weights(P)
+        STATE["inputs"].update(region_drop=REGION_DROP, after_year_input=AFTER_YEAR_INPUT, case_weights=CASE_WEIGHTS,
+                               area_nearest_year=AREA_NEAREST_YEAR, area_empty_land=AREA_EMPTY_LAND,
                                bands=BANDS_FILE.name if BANDS_FILE.is_file() else "team")
         from urban_carbon.modeling.settings import load_baseline, load_change
 
@@ -384,7 +414,7 @@ def _item(raw: Any) -> dict[str, Any]:
     return out
 
 
-def predict(body: dict[str, Any]) -> dict[str, Any]:
+def predict(body: dict[str, Any], context: tuple[Any, str, Any] | None = None) -> dict[str, Any]:
     import yaml
 
     P, settings, change = _CTX["P"], _CTX["settings"], _CTX["change"]
@@ -392,7 +422,7 @@ def predict(body: dict[str, Any]) -> dict[str, Any]:
     plans = body.get("plans") or []
     if not code.isdigit() or len(code) != 5 or not isinstance(plans, list) or not 1 <= len(plans) <= MAX_PLANS:
         raise ValueError(f"region(5자리 코드)과 plans(1~{MAX_PLANS}개)가 필요합니다")
-    ctx, dataset, region = cell_context(code)
+    ctx, dataset, region = context or cell_context(code)
     results = []
     with tempfile.TemporaryDirectory() as tmp:
         for i, plan in enumerate(plans):
@@ -404,6 +434,8 @@ def predict(body: dict[str, Any]) -> dict[str, Any]:
             if region is not None:
                 doc["region"] = region
             doc["years_after"] = int(plan["years_after"]) if plan.get("years_after") is not None else DEFAULT_YEARS_AFTER
+            if plan.get("year") is not None:  # the area path starts every cell from the same state year
+                doc["year"] = int(plan["year"])
             if plan.get("zone"):
                 doc["zone"] = str(plan["zone"])
             path = Path(tmp) / f"plan_{i + 1}.yaml"
@@ -415,6 +447,157 @@ def predict(body: dict[str, Any]) -> dict[str, Any]:
     if len(results) > 1:
         combined = P.combine(results, P.load_unit_bands(_CTX["trained"].train_folder), change)
         out["combined"] = dict(asdict(combined), describe=P.describe_combined(combined))
+    return out
+
+
+def split_equal(items: list[dict[str, Any]], k: int) -> list[dict[str, Any]]:
+    """A development's items (use totals) for one of its k cells: floor area and dwellings / k (record §41: the equal split
+    predicted the developments as well as the register's own split, error 0.221 vs 0.226, sum ratio 0.979 vs 0.950)."""
+    out = []
+    for raw in items:
+        it = _item(raw)
+        cell = {"use": it["use"], "floor_area_m2": it["floor_area_m2"] / k}
+        if it.get("dwellings"):
+            cell["dwellings"] = it["dwellings"] / k
+        out.append(cell)
+    return out
+
+
+def usable_years(ctx: Any, x: int, y: int, region: str | None) -> tuple[str | None, set[int], str | None]:
+    """(grid id, years the model can start from, reason when none) — ``pick_row``'s rule (usable rows of the cell)."""
+    table = ctx.cell_table
+    grid = grid_id_of(table, x, y, region)
+    if grid is None:
+        return None, set(), "쓸 수 있는 해가 없는 칸(결측·결함 표시이거나 이 지역 표 밖)"
+    rows = table[table["grid_id_500m"].astype(str) == grid]
+    if region is not None and "region" in rows:
+        rows = rows[rows["region"].astype(str) == region]
+    if "train_usable" in rows:
+        rows = rows[rows["train_usable"].astype(bool)]
+    years = {int(v) for v in rows["year"]}
+    return grid, years, None if years else "쓸 수 있는 해가 없는 칸(결측·결함 표시)"
+
+
+def common_year(years_of: list[set[int]]) -> int | None:
+    """The state year all cells of a development start from (record §43 R-a): the latest year at least half of the cells can
+    use; without one, the year most cells can use (the later one on a tie). A prediction is the change from that year, so an
+    early year mixes in change that has already happened; one shared year keeps the cells on the same period (§42)."""
+    count: dict[int, int] = {}
+    for ys in years_of:
+        for yr in ys:
+            count[yr] = count.get(yr, 0) + 1
+    if not count:
+        return None
+    half = [yr for yr, n in count.items() if 2 * n >= len(years_of)]
+    return max(half) if half else max(count, key=lambda yr: (count[yr], yr))
+
+
+def nearest_year(years: set[int], year: int) -> int | None:
+    """§43 R-b: a cell without a usable row in the shared year starts from its own usable year nearest to it (earlier on a tie)."""
+    return min(years, key=lambda yr: (abs(yr - year), yr)) if years else None
+
+
+_EMPTY: dict[str, Any] = {}
+
+
+def empty_land_rows(ctx: Any, folder_name: str, region: str | None) -> Any:
+    """§43 R-c: state rows for the cells without a usable row that are empty land by the providers' own values — no
+    building emission in any year, the register floor area given as 0 in every year it is given, no 국토통계 building count
+    above 0. Their emission (NULL or 0 from the carbon map) is read as 0, the only value an empty cell can have; the rows get
+    the same edits as every table (team energy mix, ``official_inputs``) and ``train_usable`` for ``pick_row``. Cached per table."""
+    import pandas
+
+    key = folder_name
+    if key not in _EMPTY:
+        folder = _CTX["processed"] / folder_name
+        raw = pandas.read_csv(folder / "training.csv", encoding="utf-8", low_memory=False)
+        cells = ["region", "grid_id_500m"] if "region" in raw else ["grid_id_500m"]
+        table = ctx.cell_table
+        live = table[table["train_usable"].astype(bool)] if "train_usable" in table else table  # cells pick_row can start from
+        kept = set(map(tuple, live[cells].astype(str).drop_duplicates().to_numpy()))
+        raw_keys = list(map(tuple, raw[cells].astype(str).to_numpy()))
+        cand = raw[[k not in kept for k in raw_keys]]
+        cand = cand.assign(**{c: cand[c].astype(str) for c in cells})
+        g = cand.groupby(cells)
+        emis = g[_TOTAL].max().fillna(0.0) <= 0
+        reg_n, reg_max = g["reg_floor_area_m2"].count(), g["reg_floor_area_m2"].max()
+        bld = g["building_count_sum"].max().fillna(0.0) <= 0 if "building_count_sum" in cand else True
+        empty = emis & (reg_n > 0) & (reg_max <= 0) & bld
+        chosen = {v if isinstance(v, tuple) else (v,) for v in empty[empty].index}
+        rows = cand[[k in chosen for k in map(tuple, cand[cells].astype(str).to_numpy())]].copy()
+        for c in [col for col in rows.columns if col in (_ELEC, _GAS, _HEAT, _TOTAL) or col.startswith(("elec_tco2e_m", "gas_tco2e_m", "heat_tco2e_m"))]:
+            rows[c] = rows[c].fillna(0.0)
+        rows["train_usable"] = True
+        if len(rows):
+            from urban_carbon.modeling.energy_mix import add_energy_mix
+            rows, _ = official_inputs(add_energy_mix(rows.reset_index(drop=True)), folder, _INPUT_SOURCES.get("asos"), _INPUT_SOURCES.get("factor_high"))
+        _EMPTY[key] = rows.reindex(columns=table.columns)
+    rows = _EMPTY[key]
+    if region is not None and "region" in rows:
+        rows = rows[rows["region"].astype(str) == region]
+    return rows
+
+
+def predict_area(body: dict[str, Any]) -> dict[str, Any]:
+    """One development over several cells: the use totals split equally over the cells, each cell predicted with the service
+    model and added up (``combine``: development band). Every cell starts from the shared state year (§43 R-a); a cell without
+    a usable row that year starts from its nearest usable year (R-b), an empty-land cell from the empty state (R-c); the rest
+    are left out and listed, and the totals stay."""
+    import copy as _copy
+
+    import pandas
+
+    code = str(body.get("region") or "")
+    cells = body.get("cells") or []
+    new, removed = body.get("new") or [], body.get("removed") or []
+    if not code.isdigit() or len(code) != 5 or not isinstance(cells, list) or not 1 <= len(cells) <= MAX_PLANS:
+        raise ValueError(f"region(5자리 코드)과 cells(1~{MAX_PLANS}칸)가 필요합니다")
+    if not isinstance(new, list) or not isinstance(removed, list) or len(new) > MAX_AREA_ITEMS or len(removed) > MAX_AREA_ITEMS:
+        raise ValueError(f"신축·철거는 각각 {MAX_AREA_ITEMS}줄까지입니다")
+    if not new and not removed:
+        raise ValueError("신축이나 철거를 하나 이상 적어 주세요")
+    ctx, dataset, region = cell_context(code)
+    found = [(int(c["x"]), int(c["y"]), *usable_years(ctx, int(c["x"]), int(c["y"]), region)) for c in cells]
+    # a named state year (checks against past developments) or R-a
+    year = int(body["year"]) if body.get("year") is not None else common_year([ys for *_, ys, _ in found if ys])
+    # the same table the cell states come from: the training join for its 42 regions (filtered by region), else the region table
+    empty = empty_land_rows(ctx, TRAIN if region is not None else dataset, region) if AREA_EMPTY_LAND else None
+    empty_xy = set(zip(empty["x_min_m"].round().astype(int), empty["y_min_m"].round().astype(int))) if empty is not None and len(empty) else set()
+    used, skipped, extra = [], [], []
+    for x, y, grid, ys, why in found:
+        if year is not None and year in ys:
+            used.append({"x": x, "y": y, "grid_id": grid, "year": year, "start": "shared"})
+        elif ys and AREA_NEAREST_YEAR and year is not None:
+            used.append({"x": x, "y": y, "grid_id": grid, "year": nearest_year(ys, year), "start": "nearest"})
+        elif (x, y) in empty_xy:
+            rows = empty[(empty["x_min_m"].round() == x) & (empty["y_min_m"].round() == y)]
+            pick = rows.iloc[(rows["year"] - (year or int(rows["year"].max()))).abs().argsort()[:1]]
+            extra.append(pick)
+            used.append({"x": x, "y": y, "grid_id": str(pick["grid_id_500m"].iloc[0]), "year": int(pick["year"].iloc[0]), "start": "empty"})
+        else:
+            skipped.append({"x": x, "y": y, "reason": why if not ys else f"기준 해({year}년)에 쓸 수 있는 자료가 없는 칸(이 칸은 {', '.join(map(str, sorted(ys)))}년만)"})
+    if not used:
+        raise LookupError(f"구역의 칸 {len(cells)}개 모두 모델이 쓸 수 있는 해가 없습니다(결측·결함 표시 칸이거나 이 지역 표 밖)")
+    context = None
+    if extra:
+        ctx = _copy.copy(ctx)
+        ctx.cell_table = pandas.concat([ctx.cell_table, *extra], ignore_index=True)
+        context = (ctx, dataset, region)
+    k = len(used)
+    per_new, per_removed = split_equal(new, k), split_equal(removed, k)
+    years = body.get("years_after")
+    plans = [{"x": u["x"], "y": u["y"], "year": u["year"], "new": per_new, "removed": per_removed, "years_after": years} for u in used]
+    started = time.time()
+    out = predict({"region": code, "plans": plans}, context)
+    if out["combined"] is None:  # one usable cell: the development is that cell
+        r = out["results"][0]
+        out["combined"] = {"cells": [r["cell"]], "site_kind": r["site_kind"], "change_tco2e": r["change_tco2e"], "band": r["band"],
+                           "sources_tco2e": r.get("sources_tco2e"), "attribution": r.get("attribution"),
+                           "out_of_range": r.get("out_of_range") or [], "describe": r.get("describe")}
+    if year is None:  # only empty-land cells: their own state year
+        year = max(u["year"] for u in used)
+    out["area"] = {"split": "equal", "year": year, "cells_total": len(cells), "cells_used": used, "cells_skipped": skipped,
+                   "per_cell": {"new": per_new, "removed": per_removed}, "seconds": round(time.time() - started, 1)}
     return out
 
 
@@ -452,7 +635,7 @@ class Handler(BaseHTTPRequestHandler):
             length = min(int(self.headers.get("Content-Length") or 0), 64 * 1024)
             body = json.loads(self.rfile.read(length) or b"{}")
             with _PREDICT_LOCK:
-                self._send(200, predict(body))
+                self._send(200, predict_area(body) if self.path.startswith("/predict-area") else predict(body))
         except (ValueError, KeyError, TypeError) as exc:
             self._send(422, {"detail": str(exc)})
         except LookupError as exc:
