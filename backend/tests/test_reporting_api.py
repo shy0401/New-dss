@@ -1,9 +1,11 @@
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from app.main import app
 from app.db import Session
 from app.models import Grid
 
+@pytest.mark.db
 def test_report_persists_snapshot_and_download():
     with TestClient(app) as c:
         response=c.post('/api/reports',json={'year':2025})
@@ -16,6 +18,7 @@ def test_report_persists_snapshot_and_download():
         assert export.status_code==200 and '## 6. 유의사항' in export.text and r['place'] in export.text
         assert c.get('/api/reports/missing').status_code==404
 
+@pytest.mark.db
 def test_selected_grid_is_preserved_in_dashboard_and_report():
     with Session() as db:gid=db.scalar(select(Grid.id).order_by(Grid.id))
     c=TestClient(app)
@@ -24,11 +27,13 @@ def test_selected_grid_is_preserved_in_dashboard_and_report():
     r=c.post('/api/reports',json={'year':2024,'grid_id':gid}).json()
     assert r['grid_id']==gid and r['year']==2024
 
+@pytest.mark.db
 def test_incompatible_scenario_comparison_is_rejected():
     c=TestClient(app)
     s=c.post('/api/scenarios',json={'year':2024}).json()
     assert c.post('/api/reports',json={'year':2025,'scenario_ids':[s['id']]}).status_code==422
 
+@pytest.mark.db
 def test_plan_report_is_one_plan_with_its_reduction_ladder_and_no_comparison():
     c=TestClient(app)
     s=c.post('/api/scenarios',json={'year':2024}).json()
