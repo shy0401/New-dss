@@ -1,4 +1,5 @@
 """팀 변화 모델 연결: 공개 주소 거부, 서비스가 꺼졌을 때의 안내, 칸 좌표 전달과 추정 표시."""
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -113,10 +114,16 @@ def test_area_predict_is_closed_on_the_public_gateway():
     assert r.status_code == 403
 
 
+# The api image holds only backend/, so inside the Compose container deploy/ is not there.
+# GitHub CI and a pytest run from the repo checkout (docs/TEAM_SETUP.md 4절) do run it.
+TEAM_SERVER = Path(__file__).resolve().parents[2] / "deploy" / "team-model" / "server.py"
+
+
+@pytest.mark.skipif(not TEAM_SERVER.exists(),
+                    reason="deploy/team-model/server.py가 없음(api 컨테이너에는 backend/만 들어 있음). 저장소 폴더에서 돌리면 확인됨")
 def test_service_splits_a_development_equally_over_its_cells():
     import importlib.util
-    from pathlib import Path
-    spec = importlib.util.spec_from_file_location("team_server", Path(__file__).resolve().parents[2] / "deploy" / "team-model" / "server.py")
+    spec = importlib.util.spec_from_file_location("team_server", TEAM_SERVER)
     server = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(server)
     got = server.split_equal([{"use": "residential", "floor_area_m2": 90000, "dwellings": 900}, {"use": "office", "floor_area_m2": 30000}], 3)

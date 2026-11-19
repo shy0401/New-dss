@@ -106,6 +106,7 @@ scripts\dss.cmd Collect
 |---|---|
 | Docker 엔진이 계속 `starting`, 로그에 `ERROR_SHARING_VIOLATION` | `docker_data.vhdx`를 다른 프로세스가 열고 있음(Windows에 가상 디스크로 연결됨, 백업·백신 검사 등). Docker Desktop 종료 → `wsl --shutdown` → 그래도 같으면 재부팅. vhdx 파일을 탐색기에서 직접 옮기거나 열지 말고 Docker Desktop의 Disk image location 설정을 사용한다 |
 | 수집 화면에 `환경변수 형식 오류` | `.env` 값이 발급 키가 아니라 예시 문구·한글·따옴표 포함 값. 실제 키로 교체 후 api/worker 재생성 |
+| 컨테이너 pytest에서 `test_service_splits_a_development_equally_over_its_cells`가 건너뜀(skipped) | 정상. api 이미지에는 `backend/`만 들어 있어 팀 모델 서버 파일(`deploy/team-model/server.py`)이 없다. 내려받을 것은 없다(파일은 저장소에 있음). 확인하려면 저장소 폴더에서 `cd backend` → `pip install -r requirements.txt` → `python -m pytest tests/test_team_model.py`로 돌리거나 GitHub PR 시험 결과를 본다 |
 | 공공데이터포털 `SERVICE_KEY_IS_NOT_REGISTERED`(30) | 해당 서비스 활용신청 미승인 또는 키 반영 전. 승인 후 1시간 캐시가 지나거나 키가 바뀌면 재시도 |
 | VWorld `INCORRECT_KEY` | 인증키 관리 → 활용API에서 **`2D데이터 API` 체크**, 서비스URL과 `VWORLD_DOMAIN`을 똑같이(개발 PC `http://localhost`) 설정한 뒤 `scripts\dss.cmd Collect -RetryRejected` |
 | VWorld `INVALID_RANGE` | geomFilter 형식 오류. 2026-09-23 수정(`BOX(minx,miny,maxx,maxy)` 일반 소수). 오래된 이미지라면 `scripts\dss.cmd Rebuild` |
