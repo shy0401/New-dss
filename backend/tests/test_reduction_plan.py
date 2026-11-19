@@ -90,3 +90,10 @@ def test_recommended_mix_without_yield_states_the_offset_kwh_only():
     rec = recommended_mix(_effort(pv_yield=None))
     assert [s["key"] for s in rec["steps"]] == ["new", "existing"] and not rec["met"] and rec["offset_kwh"] > 0
     assert recommended_mix({"available": True, "factor_kgco2eq_per_kwh": None}) is None
+
+
+def test_the_base_year_of_the_reference_is_written_with_the_reductions():
+    """감축량에는 기준 연도를 함께 적는다(AGENTS.md): 기준안을 만든 관측 연도를 결과와 가정 문장에 둔다."""
+    p = building_plan({"electricity_kwh": 1_000_000, "gas_kwh": 500_000}, 1000, FACTORS, None, base_year=2024)
+    assert p["base_year"] == 2024 and any("2024년 기준안에 대한 값" in a for a in p["assumptions"])
+    assert building_plan({"electricity_kwh": 1_000_000, "gas_kwh": 500_000}, 1000, FACTORS, None)["base_year"] is None
