@@ -4,7 +4,7 @@ import { StandardPanel, factorYears, type StandardRules } from './StandardPanel'
 
 const FACTORS = [{ published: '2019-01-02', factor: 0.4594 }, { published: '2022-01-10', factor: 0.4781 }, { published: '2025-03-31', factor: 0.4541 }, { published: '2025-12-18', factor: 0.433 }];
 const RULES: StandardRules = {
-  version: '1.0', doc: 'docs/DATA_STANDARD.md', electricity_factors: FACTORS, gas_factor: 0.1826, gas_factor_ncv: 0.20256,
+  version: '1.0', doc: 'docs/DATA_STANDARD.md', electricity_factors: FACTORS, gas_factor: 0.1819, gas_factor_ncv: 0.20171,
   degree_days: { rule: 'HDD 18°C · CDD 24°C', hdd_base_c: 18, cdd_base_c: 24 }, annual_rule: '12개월 모두 관측된 지번(단지)만 연간 합계', missing_rule: '없는 값은 NULL, 0과 구분',
   last_check: { version: '1.0', checked_at: '2026-10-08T01:00:00+00:00', applied_version: '1.0', summary: { OK: 1, WARN: 1 }, ok: true,
     items: [{ id: 'energy_negative', label: '건축HUB 음수 사용량은 NULL (4절)', status: 'OK', detail: '음수 행 없음', count: 0 },

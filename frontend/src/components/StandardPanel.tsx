@@ -45,7 +45,7 @@ export function StandardPanel() {
       <caption>계산에 쓰는 기준값 (기준 {rules.version}판, 코드와 같은 값)</caption>
       <tbody>
         <tr><th scope="row">전력 배출계수 (소비단, kgCO₂eq/kWh)</th><td>{factorYears(rules.electricity_factors).map((f) => `${f.years} ${f.factor.toFixed(4)}`).join(' · ')} · 2015~2018년은 계수 없음(빈칸)</td></tr>
-        <tr><th scope="row">도시가스 (가정 계수)</th><td>{rules.gas_factor} kgCO₂eq/kWh (총발열량 기준 kWh로 가정, 순발열량이면 {rules.gas_factor_ncv.toFixed(4)})</td></tr>
+        <tr><th scope="row">도시가스 (국가 고유 계수)</th><td>{rules.gas_factor} kgCO₂eq/kWh (GIR 2021 승인 CO₂ 15.236 tC/TJ · IPCC 2006 CH₄·N₂O, 총발열량 기준 kWh에 맞춤. 순발열량 기준 kWh이면 {rules.gas_factor_ncv.toFixed(4)})</td></tr>
         <tr><th scope="row">냉난방도일</th><td>난방 {rules.degree_days.hdd_base_c}°C · 냉방 {rules.degree_days.cdd_base_c}°C, 빠진 날이 있는 달은 빈칸</td></tr>
         <tr><th scope="row">연간 값</th><td>{rules.annual_rule}</td></tr>
         <tr><th scope="row">결측</th><td>{rules.missing_rule}</td></tr>

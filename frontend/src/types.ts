@@ -67,7 +67,7 @@ export interface DashboardData {
   baseline_floor_area_m2?: number | null;
   electricity_carbon_kg?: number | null;
   gas_carbon_kg?: number | null;
-  /** 적용한 배출계수 (가스는 고정 규칙의 가정 계수일 수 있음). */
+  /** 적용한 배출계수 (가스는 GIR 승인 국가 고유 CO₂ 계수 기반, assumed는 예전 가정 계수 행일 때만 true). */
   carbon_factors?: Record<string, { factor: number; unit: string; source: string; notes: string; assumed: boolean }>;
   /** 시뮬레이션 기준: 격자 관측(GRID_OBSERVED) 또는 관측이 없어 지역 평균 원단위로 추정(REGION_POOLED·ALL_REGIONS_POOLED). */
   baseline_basis?: 'GRID_OBSERVED' | 'REGION_POOLED' | 'ALL_REGIONS_POOLED' | null;
@@ -176,7 +176,7 @@ export interface GridProps {
   gas_complete_parcels: number;
   electricity_carbon_kg: number | null;
   electricity_carbon_kg_per_m2: number | null;
-  /** 12개월 관측 지번의 연간 가스 × 도시가스 가정 계수 (kgCO₂eq). */
+  /** 12개월 관측 지번의 연간 가스 × 도시가스 배출계수 (kgCO₂eq). */
   gas_carbon_kg_annual?: number | null;
   carbon_kg: number | null;
   completeness: number;
@@ -219,7 +219,7 @@ export interface GridProps {
   bldg_area_parcels?: number | null;
   bldg_kwh_per_m2?: number | null;
   bldg_carbon_t?: number | null;
-  /** Building-wide gas × the assumed gas factor (DATA_STANDARD 5.5), tCO₂eq. */
+  /** Building-wide gas × the city-gas factor (DATA_STANDARD 5.5), tCO₂eq. */
   bldg_gas_carbon_t?: number | null;
   bldg_suspect?: number | null;
   bldg_gas_bimonthly?: number | null;

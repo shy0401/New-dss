@@ -608,7 +608,7 @@ function GridDetail({ props: p, year, name, dongs, metric, classification, detai
       </div>
       <dl className="fact-list">
         <Fact label="평균 지상층수" value={p.avg_floors} unit="층" digits={1} why={p.max_floors ? `최고 ${p.max_floors}층` : undefined} missingText="층수 기록 없음" none={p.building_count === 0 && !p.building_layer_gap ? '건물 없음' : undefined} />
-        <Fact label="건물 전체 가스 탄소 (가정 계수)" value={p.bldg_gas_carbon_t} unit="tCO₂eq/년" digits={1} why="가스 × 가정 계수 (산식은 범례의 정의·산식)" missingText={`${bldgMissing('가스')} (0 아님)`} none={noBuilding} />
+        <Fact label="건물 전체 가스 탄소" value={p.bldg_gas_carbon_t} unit="tCO₂eq/년" digits={1} why="가스 × 도시가스 배출계수 (산식은 범례의 정의·산식)" missingText={`${bldgMissing('가스')} (0 아님)`} none={noBuilding} />
       </dl>
     </section>
     {kcsm100 && <Kcsm100Panel gridId={String(p.id)} year={year} region={kcsm100.region} />}

@@ -82,7 +82,7 @@ export function DashboardPage() {
     <section className="metric-grid" id="metrics" aria-label="핵심 지표 8개">
       <MetricCard brief title="전력 사용량" provenance={observed} value={data.electricity_kwh} unit="kWh" basis={<><b>{eMonths}/12개월</b> {complete.electricity ? '연간 값' : '관측 기간 합계'}</>} missingReason="이 격자·연도에 월별 전력 관측이 없습니다." />
       <MetricCard brief title="가스 사용량" provenance={observed} value={data.gas_kwh} unit="kWh" basis={<><b>{gMonths}/12개월</b> {complete.gas ? '연간 값' : '관측 기간 합계'}</>} missingReason="이 격자·연도에 월별 가스 관측이 없습니다." />
-      <MetricCard brief title="전력 탄소배출" value={electricityCarbonT} unit="tCO₂eq" digits={1} basis={gasCarbonT !== null ? <>가스 <b>{formatMetric(gasCarbonT, 'tCO₂eq', 1)}</b> 별도 (가정 계수)</> : '가스는 관측이 없어 제외'} missingReason="전력 관측이 없어 계산하지 않았습니다." />
+      <MetricCard brief title="전력 탄소배출" value={electricityCarbonT} unit="tCO₂eq" digits={1} basis={gasCarbonT !== null ? <>가스 <b>{formatMetric(gasCarbonT, 'tCO₂eq', 1)}</b> 별도</> : '가스는 관측이 없어 제외'} missingReason="전력 관측이 없어 계산하지 않았습니다." />
       <MetricCard brief title="전력 원단위" value={norm.electricity_kwh_per_m2 ?? null} unit="kWh/m²·년" digits={1} basis={<>12개월 관측 지번 <b>{norm.electricity_area_parcels}곳</b></>} missingReason="12개월 관측과 연면적이 모두 확인된 지번이 없습니다." />
       <MetricCard brief title="세대당 전력" value={norm.electricity_kwh_per_household ?? null} unit="kWh/세대·년" basis={<>월 <b>{formatMetric((norm.electricity_kwh_per_household ?? 0) / 12, 'kWh')}</b></>} missingReason="세대수가 확인된 12개월 관측 지번이 없습니다." />
       <MetricCard brief title="건폐율 근사" value={buildings?.coverage_pct ?? null} unit="%" digits={1} ratio={buildings?.coverage_pct} basis="건축면적 ÷ 격자 면적" missingReason="건물 윤곽이 있어야 계산합니다." />
@@ -93,7 +93,7 @@ export function DashboardPage() {
       <dl className="basis-list">
         <div><dt>전력 사용량</dt><dd>{complete.electricity ? '완전 연간 값' : '관측 기간 합계'} <b>{eMonths}/12개월</b>{eMonths ? `, 월평균 ${formatMetric((data.electricity_kwh ?? 0) / Math.max(eMonths, 1), 'kWh')}` : ''}</dd></div>
         <div><dt>가스 사용량</dt><dd>{complete.gas ? '완전 연간 값' : '관측 기간 합계'} <b>{gMonths}/12개월</b>, 건축HUB kWh 환산값</dd></div>
-        <div><dt>전력 탄소배출</dt><dd>전력 × <b>{data.carbon_factors?.ELECTRICITY?.factor ?? '—'}</b> kgCO₂eq/kWh ({data.carbon_factors?.ELECTRICITY?.source ?? 'GIR 승인 계수'}). {gasCarbonT !== null ? <>가스 탄소 <b>{formatMetric(gasCarbonT, 'tCO₂eq', 1)}</b>는 가정 계수 {data.carbon_factors?.GAS?.factor ?? 0.1826}로 따로 계산</> : '가스 탄소는 가스 관측이 없어 제외'}</dd></div>
+        <div><dt>전력 탄소배출</dt><dd>전력 × <b>{data.carbon_factors?.ELECTRICITY?.factor ?? '—'}</b> kgCO₂eq/kWh ({data.carbon_factors?.ELECTRICITY?.source ?? 'GIR 승인 계수'}). {gasCarbonT !== null ? <>가스 탄소 <b>{formatMetric(gasCarbonT, 'tCO₂eq', 1)}</b>는 도시가스 계수 {data.carbon_factors?.GAS?.factor ?? '—'}로 따로 계산</> : '가스 탄소는 가스 관측이 없어 제외'}</dd></div>
         <div><dt>전력 원단위</dt><dd>지번 <b>{norm.electricity_area_parcels}곳</b>, 연면적 {formatMetric(norm.electricity_matched_floor_area_m2, 'm²')}{areaIssues.length ? `, 연면적 이상 ${areaIssues.length}곳 제외` : ''}</dd></div>
         <div><dt>세대당 전력</dt><dd>{formatMetric(norm.electricity_households, '세대')} 기준, 월 <b>{formatMetric((norm.electricity_kwh_per_household ?? 0) / 12, 'kWh')}</b></dd></div>
         <div><dt>건폐율 근사</dt><dd>건축면적 <b>{formatMetric(buildings?.footprint_m2, 'm²')}</b> ÷ 250,000 m²</dd></div>

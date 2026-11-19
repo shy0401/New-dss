@@ -144,6 +144,9 @@ def test_weather_moves_to_where_people_live_when_the_region_centre_is_at_sea(mon
     monkeypatch.setattr(solar, "fetch_region", lambda *a, **k: 0)
     monkeypatch.setattr(region_prepare, "analysis_year", lambda: 2025)
     monkeypatch.setattr(region_prepare, "_root", lambda: tmp_path)
+    # 군산에는 ASOS 관측소(140)가 있어, 공공데이터포털 키가 있는 PC에서는 ERA5-Land 뒤에 ASOS 덮어쓰기(_asos_overlay)가 이 가짜 client를
+    # ASOS 인자(latitude 없음)로 부름. 이 시험은 ERA5-Land 지점 이동만 보므로 키를 지워 덮어쓰기를 건너뜀(키 없는 PC와 같은 결과)
+    monkeypatch.delenv("DATA_GO_KR_SERVICE_KEY", raising=False)
 
     class Region:
         code, legal_codes, center_lat, center_lon = "52130", ["52130"], 35.904, 126.4445
