@@ -621,6 +621,16 @@ def merge_energy_coordinates(db: Any, year: int = 2025) -> dict[str, int]:
             continue
         bjd_code = f"{energy.sigungu_code}{energy.bjdong_code}"
         candidates = index.get((bjd_code, _parcel(energy.bun), _parcel(energy.ji) or "0000"), [])
+        if energy.source == "K-apt":
+            # K-apt rows are placed by kapt_energy._sync_lot_observation (complexes of one parcel summed, 2026-11-19);
+            # rewriting them here made the result depend on which of the two ran last. Counted for the baseline only.
+            if (len(candidates) == 1 and "외" not in (candidates[0].parcel_address or "") and energy.grid_id
+                    and energy.use_ym.startswith(str(year)) and energy.usage_kwh is not None
+                    and sector and candidates[0].grid_id == sector.grid_id):
+                observed_sets.setdefault((energy.energy_type, energy.use_ym), set()).add(candidates[0].kapt_code)
+                if candidates[0].gross_floor_area_m2 is None:
+                    baseline_area_complete = False
+            continue
         if len(candidates) == 1 and "외" not in (candidates[0].parcel_address or ""):
             complex_row = candidates[0]
             energy.grid_id = complex_row.grid_id

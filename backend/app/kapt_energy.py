@@ -240,18 +240,89 @@ def _fetch_month(session: Any, url: str, key: str, code: str, month: str, attemp
     raise TransientProviderError("K-apt 제공기관 일시 오류")
 
 
-def _unsync_observation(db: Any, complex_row: Any, month: str) -> None:
-    """Remove a K-apt electricity observation that is no longer a valid SUCCESS value."""
+def _lot_part(value: Any) -> str:
+    return str(value or "0").strip().zfill(4)
+
+
+def _lot_complexes(db: Any, complex_row: Any, cache: dict | None = None) -> list[Any]:
+    """The K-apt complexes on the same parcel (법정동 · 본번 · 부번) as ``complex_row``, by code.
+
+    energy_monthly keeps one row per parcel-month, so complexes sharing a parcel share that row (2026-11-19:
+    24 parcels with 50 complexes; before, the last complex written replaced the others)."""
+    from .kapt import ApartmentComplex
+    key = (complex_row.bjd_code, _lot_part(complex_row.bun), _lot_part(complex_row.ji))
+    if cache is not None and key in cache:
+        return cache[key]
+    rows = db.scalars(select(ApartmentComplex).where(ApartmentComplex.bjd_code == complex_row.bjd_code)).all()
+    group = sorted((c for c in rows if c.bun and (c.bjd_code, _lot_part(c.bun), _lot_part(c.ji)) == key), key=lambda c: c.kapt_code)
+    if not any(c.kapt_code == complex_row.kapt_code for c in group):   # not stored yet (collection of a new complex)
+        group = sorted([*group, complex_row], key=lambda c: c.kapt_code)
+    if cache is not None:
+        cache[key] = group
+    return group
+
+
+def _sync_lot_observation(db: Any, complex_row: Any, month: str, cache: dict | None = None) -> None:
+    """Keep the parcel-month K-apt electricity observation equal to the sum over the parcel's complexes.
+
+    Rule (DATA_STANDARD 4절, 2026-11-19): the row holds the sum of the complexes that have a K-apt month row, only
+    when every one of them is SUCCESS with electricity; one NOT_REPORTED/SUSPECT/FAILED complex leaves the parcel
+    month empty (a partial sum would count the missing complex as 0). A complex without a row that month (not
+    approved yet, or out of the collected range) is not counted. A 건축HUB observation of the parcel is left as is.
+    Complexes on different grid cells: the row is kept but placed on no cell (``AMBIGUOUS_KAPT_PARCEL``, as for
+    건축HUB rows of such parcels in ``kapt.link_energy``)."""
     if not complex_row.bjd_code or not complex_row.bun:
         return
-    observation = db.scalar(select(EnergyMonthly).filter_by(
-        sigungu_code=complex_row.bjd_code[:5], bjdong_code=complex_row.bjd_code[5:], lot_type="0",
-        bun=str(complex_row.bun).zfill(4), ji=str(complex_row.ji or "0").zfill(4), use_ym=month, energy_type="ELECTRICITY"))
-    if observation is not None and observation.source == "K-apt":
-        db.delete(observation)
+    identity = {
+        "sigungu_code": complex_row.bjd_code[:5], "bjdong_code": complex_row.bjd_code[5:],
+        "lot_type": "0", "bun": _lot_part(complex_row.bun), "ji": _lot_part(complex_row.ji),
+        "use_ym": month, "energy_type": "ELECTRICITY",
+    }
+    observation = db.scalar(select(EnergyMonthly).filter_by(**identity))
+    if observation is not None and observation.source != "K-apt":
+        return
+    group = _lot_complexes(db, complex_row, cache)
+    by_code = {c.kapt_code: c for c in group}
+    months = db.scalars(select(ApartmentEnergyMonthly).where(
+        ApartmentEnergyMonthly.source == "K-apt", ApartmentEnergyMonthly.year_month == month,
+        ApartmentEnergyMonthly.complex_code.in_(sorted(by_code)))).all()
+    if not months or any(m.quality_status != "SUCCESS" or m.electricity_quantity is None for m in months):
+        if observation is not None:
+            db.delete(observation)
+        return
+    months = sorted(months, key=lambda m: m.complex_code)
+    used = [by_code[m.complex_code] for m in months]
+    grids = {c.grid_id for c in used}
+    if observation is None:
+        observation = EnergyMonthly(source="K-apt", **identity)
+    observation.usage_kwh = float(sum(m.electricity_quantity for m in months))
+    if len(grids) > 1:
+        observation.grid_id, observation.match_method = None, "AMBIGUOUS_KAPT_PARCEL"
+    else:
+        observation.grid_id = next(iter(grids))
+        observation.match_method = "KAPT_COMPLEX_CENTROID" if observation.grid_id else "UNMATCHED_KAPT_POINT"
+    areas = [c.gross_floor_area_m2 for c in used]
+    if len(used) == 1:
+        observation.raw_record = {
+            "kapt_code": used[0].kapt_code, "quantity_unit": "kWh",
+            "matched_gross_floor_area_m2": used[0].gross_floor_area_m2,
+            "raw_source_id": months[0].raw_source_id,
+        }
+    else:
+        # A combined code matches no single complex: the parcel's kWh counts in cell totals, and ratios that need one
+        # complex's floor area or households leave it out (they use only parcels that have their denominator).
+        observation.raw_record = {
+            "kapt_code": "+".join(c.kapt_code for c in used), "kapt_codes": [c.kapt_code for c in used],
+            "quantity_unit": "kWh",
+            "matched_gross_floor_area_m2": float(sum(areas)) if all(isinstance(a, (int, float)) for a in areas) else None,
+            "raw_source_id": [m.raw_source_id for m in months],
+            "parcel_rule": "같은 지번 단지 합(모든 단지 SUCCESS인 달만, DATA_STANDARD 4절)",
+        }
+    db.add(observation)
 
 
-def _apply_month(db: Any, complex_row: Any, row: "ApartmentEnergyMonthly", row_data: dict[str, Any] | None) -> str:
+def _apply_month(db: Any, complex_row: Any, row: "ApartmentEnergyMonthly", row_data: dict[str, Any] | None,
+                 lot_cache: dict | None = None) -> str:
     """Store one complex-month with its classification and keep energy_monthly in sync."""
     if row_data is None:
         row.quality_status = "EMPTY_VALID"
@@ -276,10 +347,7 @@ def _apply_month(db: Any, complex_row: Any, row: "ApartmentEnergyMonthly", row_d
     row.electricity_carbon_kg = row.electricity_quantity * factor if row.quality_status == "SUCCESS" and row.electricity_quantity is not None and factor else None
     db.add(row)
     db.flush()
-    if row.quality_status == "SUCCESS" and row.electricity_quantity is not None:
-        _sync_electricity_observation(db, complex_row, row)
-    else:
-        _unsync_observation(db, complex_row, row.year_month)
+    _sync_lot_observation(db, complex_row, row.year_month, lot_cache)
     return row.quality_status
 
 
@@ -301,6 +369,7 @@ def reclassify_existing(db: Any, complex_codes: Any = None, year: int | None = N
         query = query.where(ApartmentComplex.kapt_code.in_(codes))
     complexes = {row.kapt_code: row for row in db.scalars(query)}
     counts: dict[str, int] = {}
+    lot_cache: dict = {}
     last = ""
     while True:
         page_query = select(ApartmentEnergyMonthly).where(ApartmentEnergyMonthly.source == "K-apt", ApartmentEnergyMonthly.id > last)
@@ -320,7 +389,7 @@ def reclassify_existing(db: Any, complex_codes: Any = None, year: int | None = N
             data = {"raw_record": raw, "units": row.units}
             for upstream, normalized in FIELD_MAP.items():
                 data[normalized] = _number(raw.get(upstream))
-            status = _apply_month(db, complex_row, row, data)
+            status = _apply_month(db, complex_row, row, data, lot_cache)
             counts[status] = counts.get(status, 0) + 1
         db.commit()
         if len(page) < RECLASSIFY_PAGE:
@@ -369,28 +438,6 @@ def _record_raw(db: Any, source: DataSource, raw_path: Path, result: dict[str, A
     return digest
 
 
-def _sync_electricity_observation(db: Any, complex_row: Any, row: ApartmentEnergyMonthly) -> None:
-    if row.quality_status != "SUCCESS" or row.electricity_quantity is None or not complex_row.bjd_code or not complex_row.bun:
-        return
-    identity = {
-        "sigungu_code": complex_row.bjd_code[:5], "bjdong_code": complex_row.bjd_code[5:],
-        "lot_type": "0", "bun": str(complex_row.bun).zfill(4), "ji": str(complex_row.ji or "0").zfill(4),
-        "use_ym": row.year_month, "energy_type": "ELECTRICITY",
-    }
-    observation = db.scalar(select(EnergyMonthly).filter_by(**identity))
-    if observation and observation.source != "K-apt":
-        return
-    if observation is None:
-        observation = EnergyMonthly(source="K-apt", **identity)
-    observation.usage_kwh = row.electricity_quantity
-    observation.grid_id = complex_row.grid_id
-    observation.match_method = "KAPT_COMPLEX_CENTROID" if complex_row.grid_id else "UNMATCHED_KAPT_POINT"
-    observation.raw_record = {
-        "kapt_code": complex_row.kapt_code, "quantity_unit": "kWh",
-        "matched_gross_floor_area_m2": complex_row.gross_floor_area_m2,
-        "raw_source_id": row.raw_source_id,
-    }
-    db.add(observation)
 
 
 def approval_month(complex_row: Any) -> str | None:
