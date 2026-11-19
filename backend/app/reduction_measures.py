@@ -21,7 +21,7 @@ EMBODIED_KG_PER_M2 = 445.4
 EMBODIED_RANGE_KG_PER_M2 = (340.3, 586.0)
 EMBODIED_READYMIX_SHARE = 0.149   # 같은 논문의 주요 자재 평균: 레미콘 66.358 ÷ 아파트 445.412 kgCO2/m²
 
-S_PAIR = ("K-apt 개별난방 단지 78쌍 짝 비교(이 도구)", "docs/REDUCTION_INDICATORS.md")
+S_PAIR = ("K-apt 개별난방 단지 117쌍 짝 비교(이 도구, 2026-11-20 다시 계산)", "docs/REDUCTION_INDICATORS.md")
 S_ZEB_RULE = ("민간 공동주택 에너지 성능 기준 강화(2025-06-30 시행), 칸(kharn) 2025", "https://www.kharn.kr/mobile/article.html?no=28053")
 S_ZEB_COST = ("제로에너지 아파트 적용 기술과 공사비, 한국경제 2025-05", "https://www.hankyung.com/article/202505204728i")
 S_AGE = ("준공 시기·효율등급별 공동주택 실사용량 분석, 2016", "https://koreascience.kr/article/JAKO201610235351582.pdf")
@@ -31,10 +31,10 @@ S_FORUM = ("ZEB·그린리모델링 제도와 실적 정리, 칸(kharn) 2026-09"
 MEASURES: tuple[dict[str, Any], ...] = (
     # ------------------------------------------------------------------ 설계·외피
     {"key": "envelope", "group": "설계·외피", "title": "단열·창호 기준 강화", "use": "ladder", "phase": "operation",
-     "base": "gas", "value": 0.236, "range": (0.205, 0.258), "evidence": "measured", "n": "국내 78쌍", "apply": "신축·재개발",
+     "base": "gas", "value": 0.137, "range": (0.098, 0.173), "evidence": "measured", "n": "국내 117쌍", "apply": "신축·재개발",
      "what": "외벽·지붕 단열, 로이 복층·삼중 창호, 기밀 문을 지금 기준(2017년 이후 준공 수준)으로 짓는다.",
      "cost": "민간 30세대 이상은 2025-06-30부터 의무(에너지 120 → 100 kWh/m²·년 미만, 창 단열·문 기밀 1등급). 84 m² 세대당 추가 공사비 약 130만 원(국토부 추산)·293만 원 이상(업계 추산), 에너지비 연 약 22만 원 절감(회수 5~6년, 정부 추정).",
-     "note": "같은 지역·난방 방식·규모에서 준공 시기만 다른 단지의 차이라 보일러·환기 변화도 섞여 있다. 같은 비교에서 전기는 5.2% 많았다.",
+     "note": "같은 시군구·세대수 구간에서 준공 시기만 다른 단지의 차이라 보일러·환기 변화도 섞여 있다. 관리비 부과 면적당 값이다(연면적당 −33.9%는 새 단지의 난방하지 않는 면적 때문에 과대). 짝의 86%가 전북이고, 같은 비교에서 전기는 방향이 분명하지 않았다.",
      "sources": (S_PAIR, S_ZEB_RULE, S_ZEB_COST)},
     {"key": "new_build_package", "group": "설계·외피", "title": "신축 통합 기준(ZEB 5등급 수준·효율등급 인증)", "use": "alone", "phase": "operation",
      "base": "total", "value": 0.113, "range": (-0.067, 0.46), "evidence": "measured", "n": "14건(국내 11)", "apply": "신축·재개발",
@@ -65,12 +65,12 @@ MEASURES: tuple[dict[str, Any], ...] = (
      "sources": (("외부·내부 블라인드 냉방 부하 계산, 2012", "https://koreascience.or.kr/article/JAKO201223451901408.page"),
                  ("외부 수평 차양 길이별 냉난방 계산, 2017", "https://koreascience.kr/article/JAKO201719363528372.pdf"))},
     # ------------------------------------------------------------------ 설비
-    {"key": "heat_recovery_ventilation", "group": "설비", "title": "열회수 환기장치(전열교환기) 운전", "use": "alone", "phase": "operation",
-     "base": "total", "value": 0.035, "range": (0.01, 0.06), "evidence": "measured", "n": "국내 1건", "apply": "신축·재개발",
-     "what": "환기로 버리는 열을 되찾는다. 자연환기 단지 대비 총에너지 −1~−6%(현장 비교).",
+    {"key": "heat_recovery_ventilation", "indicator": "총에너지 −3.5% (−6~−1%, ECO2 계산)", "group": "설비", "title": "열회수 환기장치(전열교환기) 운전", "use": "indicator", "phase": "operation",
+     "base": None, "value": 0.035, "range": (0.01, 0.06), "evidence": "calc", "n": "국내 1건(ECO2 계산)", "apply": "신축·재개발",
+     "what": "환기로 버리는 열을 되찾는다. 자연환기 대비 −1~−6%(실제 단지 사양을 넣은 ECO2 계산, 등급용 1차에너지 소요량. 실측 아님).",
      "cost": "민간 30세대 이상은 2025-06-30부터 설치 의무.",
      "note": "세대가 끄면 효과가 없다. 실제 운전에서 잰 전열교환효율은 35~83%였다(국내 실험주택). 단열·창호 단계와 겹칠 수 있다.",
-     "sources": (("전열교환 환기와 자연환기 단지의 에너지 사용 현장 비교, 2015", "https://koreascience.or.kr/article/JAKO201506050646242.pdf"),
+     "sources": (("전열교환 · 바닥 · 자연환기 공동주택의 ECO2 1차에너지 소요량 비교, 2015", "https://koreascience.or.kr/article/JAKO201506050646242.pdf"),
                  ("공동주택 환기시스템 실제 운전 전열교환성능, 2017", "https://koreascience.kr/article/JAKO201718851432631.pdf"), S_ZEB_RULE)},
     {"key": "home_energy_display", "group": "설비", "title": "세대 에너지 표시장치·스마트미터(IHD·HEMS)", "use": "alone", "phase": "operation",
      "base": "electricity", "value": 0.117, "range": (0.075, 0.159), "evidence": "measured", "n": "국내 2개 지역", "apply": "신축·재개발·기존",

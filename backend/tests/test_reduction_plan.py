@@ -13,35 +13,35 @@ def test_ladder_from_no_measures_through_envelope_operation_rooftop_pv_and_green
     keys = [s["key"] for s in p["steps"]]
     assert keys == ["envelope", "operation", "rooftop_pv", "greenery"]   # 히트펌프 단계는 2026-11-11부터 기본에서 뺌
     env, op, pv, green = p["steps"]
-    # 단열·창호: 가스 500,000 × (1 − 0.236) = 382,000 kWh, 전력은 그대로
-    assert env["electricity_kwh"] == 1_000_000 and env["gas_kwh"] == 382_000 and env["carbon_kg"] == 476_400 and env["cumulative_pct"] == 4.7
+    # 단열·창호: 가스 500,000 × (1 − 0.137) = 431,500 kWh, 전력은 그대로
+    assert env["electricity_kwh"] == 1_000_000 and env["gas_kwh"] == 431_500 and env["carbon_kg"] == 486_300 and env["cumulative_pct"] == 2.7
     # 에너지 절약 운영: 전력 1,000,000 × (1 − 0.048) = 952,000 kWh
-    assert op["electricity_kwh"] == 952_000 and op["gas_kwh"] == 382_000 and op["carbon_kg"] == 457_200 and op["reduction_kg"] == 19_200
+    assert op["electricity_kwh"] == 952_000 and op["gas_kwh"] == 431_500 and op["carbon_kg"] == 467_100 and op["reduction_kg"] == 19_200
     # 옥상 1,000 × 0.6 = 600 m² → 60 kW × 1,200 = 72,000 kWh
     assert p["pv"]["roof_m2"] == 600 and p["pv"]["kw"] == 60 and p["pv"]["kwh"] == 72_000
-    assert pv["carbon_kg"] == 428_400 and pv["cumulative_pct"] == 14.3
+    assert pv["carbon_kg"] == 438_300 and pv["cumulative_pct"] == 12.3
     # 녹지 3,000 m² × 1.0 kg = 3,000 kg 흡수(상쇄): 전력·가스는 그대로, 탄소만 줄어든다
-    assert green["electricity_kwh"] == 880_000 and green["carbon_kg"] == 425_400 and green["reduction_kg"] == 3000
+    assert green["electricity_kwh"] == 880_000 and green["carbon_kg"] == 435_300 and green["reduction_kg"] == 3000
     assert p["green"] == {"area_m2": 3000, "uptake_kg": 3000, "range_kg": [2640.0, 4770.0]}
-    # 지표의 실측 범위: 계산은 중앙값, 범위는 그 단계 감축량이 움직일 수 있는 폭 (가스 500,000 × 20.5~25.8% × 0.2, 전력 1,000,000 × 1.95~17.0% × 0.4)
-    assert env["range_pct"] == [20.5, 25.8] and env["reduction_range_kg"] == [20_500, 25_800]
+    # 지표의 실측 범위: 계산은 중앙값, 범위는 그 단계 감축량이 움직일 수 있는 폭 (가스 500,000 × 9.8~17.3% × 0.2, 전력 1,000,000 × 1.95~17.0% × 0.4)
+    assert env["range_pct"] == [9.8, 17.3] and env["reduction_range_kg"] == [9_800, 17_300]
     assert op["range_pct"] == [1.95, 17.0] and op["reduction_range_kg"] == [7_800, 68_000]
     assert pv["range_pct"] is None and pv["reduction_range_kg"] is None
     assert green["range_pct"] is None and green["reduction_range_kg"] == [2640.0, 4770.0]
-    assert p["final_carbon_kg"] == 425_400 and p["final_pct"] == 14.9
-    assert p["self_sufficiency_pct"] == 6.5 and p["zeb_grade"] is None
+    assert p["final_carbon_kg"] == 435_300 and p["final_pct"] == 12.9
+    assert p["self_sufficiency_pct"] == 6.4 and p["zeb_grade"] is None
     assert p["residual"]["electricity_kwh"] == 880_000 and p["residual"]["offsite_pv_kw"] == 733.3
     assert p["plan"] == {"carbon_kg": 450_000, "pct": 10.0}
-    assert "425.4 t" in plan_text(p) and "구역 밖 재생에너지" in plan_text(p)
-    # 녹지 흡수는 상쇄라 감축 수단만의 비율을 따로 둔다: (500,000 − 428,400) ÷ 500,000 = 14.3%
-    assert p["reduction_pct"] == 14.3 and "감축 수단만으로는 −14.3%" in plan_text(p)
-    # 남는 425,400 kg = 전력 880,000 × 0.4 + 가스 382,000 × 0.2 − 녹지 3,000. 구역 밖 태양광 733.3 kW는 전력분(352 t)만 덮는다
+    assert "435.3 t" in plan_text(p) and "구역 밖 재생에너지" in plan_text(p)
+    # 녹지 흡수는 상쇄라 감축 수단만의 비율을 따로 둔다: (500,000 − 438,300) ÷ 500,000 = 12.3%
+    assert p["reduction_pct"] == 12.3 and "감축 수단만으로는 −12.3%" in plan_text(p)
+    # 남는 435,300 kg = 전력 880,000 × 0.4 + 가스 431,500 × 0.2 − 녹지 3,000. 구역 밖 태양광 733.3 kW는 전력분(352 t)만 덮는다
     r = p["residual"]
-    assert r["electricity_carbon_kg"] == 352_000 and r["gas_carbon_kg"] == 76_400 and r["offset_kg"] == 3000
+    assert r["electricity_carbon_kg"] == 352_000 and r["gas_carbon_kg"] == 86_300 and r["offset_kg"] == 3000
     assert r["electricity_carbon_kg"] + r["gas_carbon_kg"] - r["offset_kg"] == r["carbon_kg"]
     assert "전력분은 구역 밖 재생에너지" in plan_text(p) and "가스분은 전력 조달로 줄지 않습니다" in plan_text(p)
     assert "는 구역 밖 재생에너지(태양광 약 733 kW 상당) 조달로 채웁니다" not in plan_text(p)
-    assert any("78쌍" in a for a in p["assumptions"]) and any("히트펌프" in a and "넣지 않았습니다" in a for a in p["assumptions"])
+    assert any("117쌍" in a for a in p["assumptions"]) and any("히트펌프" in a and "넣지 않았습니다" in a for a in p["assumptions"])
 
 
 def test_missing_inputs_drop_the_step_instead_of_using_zero():
