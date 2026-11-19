@@ -39,7 +39,7 @@ jobs:
         working-directory: backend
         env:
           # DB가 없음: 연결 시도(conftest의 정리 단계)가 바로 끝나게 짧은 제한을 둔다
-          DATABASE_URL: postgresql+psycopg://ci:ci@127.0.0.1:5432/ci?connect_timeout=3
+          DATABASE_URL: postgresql+psycopg://127.0.0.1:5432/ci?connect_timeout=3
         run: python -m pytest -q -rs -p no:cacheprovider -m "not db and not local_data"
 
   frontend:
