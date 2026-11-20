@@ -1,6 +1,7 @@
 """VWorld 타일 미리 받기 (2026-11-21): 여러 흐름이 저장 단계와 같은 요청으로 캐시를 채움."""
 import json
 import threading
+import time
 
 from app import vworld
 
@@ -19,6 +20,7 @@ class FakeSession:
     def get(self, provider, operation, url, params):
         with self.lock:
             self.calls.append((threading.current_thread().name, operation, dict(params)))
+        time.sleep(0.05)   # like a network answer: the other flow gets to take a tile meanwhile
         pages = 3 if "-968000-" in operation else 1
         return {"body": body(pages, params["page"]), "status": 200}
 
