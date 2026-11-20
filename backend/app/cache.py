@@ -9,6 +9,8 @@ SECRET_PARAM_NAMES={
 }
 
 ERROR_CACHE_SECONDS = 3600
+# Provider call limit (429 / LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS_ERROR, code 22). Never cached.
+QUOTA_ERROR = '공공데이터 호출 제한'
 
 def _is_secret(name):
     return str(name).replace('-','_').casefold() in SECRET_PARAM_NAMES
@@ -197,7 +199,8 @@ class CachedClient:
         if meta_path.exists() and body_path.exists():
             meta=json.loads(meta_path.read_text(encoding='utf-8'))
             same_credential=not credential_values or meta.get('auth_hash')==auth_hash
-            if same_credential and (not meta.get('error') or (api and time.time()-meta['timestamp']<ERROR_CACHE_SECONDS)):
+            # A call-limit answer is never reused (older caches may hold one): see QUOTA_ERROR below.
+            if same_credential and meta.get('error')!=QUOTA_ERROR and (not meta.get('error') or (api and time.time()-meta['timestamp']<ERROR_CACHE_SECONDS)):
                 result=dict(meta,body=body_path.read_bytes(),cached=True,path=str(body_path),id=digest)
                 if meta.get('error'): raise ExternalError(meta['error'],result)
                 return result
@@ -217,11 +220,15 @@ class CachedClient:
                 error=None
                 if status in (401,403) or (api and (b'SERVICE_KEY_IS_NOT_REGISTERED' in body or b'SERVICE_ACCESS_DENIED' in body)):
                     error='API 인증 실패: 서비스 승인 및 DATA_GO_KR_SERVICE_KEY 확인 필요 (30/20)'
-                elif status==429 or (api and b'LIMITED_NUMBER' in body): error='공공데이터 호출 제한'
+                elif status==429 or (api and b'LIMITED_NUMBER' in body): error=QUOTA_ERROR
                 elif status>=400: error=f'외부 데이터 HTTP {status}'
                 if status>=500 and attempt<2:
                     time.sleep(2**(attempt+1));continue
                 meta=dict(identity,timestamp=time.time(),status=status,error=error,auth_hash=auth_hash)
+                if error==QUOTA_ERROR:
+                    # Not written to the cache: the limit lifts at the provider's reset or right after a traffic
+                    # increase, and a cached answer kept K-apt WAITING for an hour after approval (2026-11-21).
+                    raise ExternalError(error,dict(meta,body=body,cached=False,path=None,id=digest))
                 body_path.write_bytes(body);meta_path.write_text(json.dumps(meta,ensure_ascii=False),encoding='utf-8')
                 if error:_index_error(self.root,meta_path.name,meta);_forget_error_scan(self.root)
                 result=dict(meta,body=body,cached=False,path=str(body_path),id=digest)
