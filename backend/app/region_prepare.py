@@ -821,11 +821,25 @@ REQUIRES = {step: ("grid",) for step in STEPS if step not in ("grid", "ordinance
 REQUIRES["kapt_energy"] = ("grid", "complexes")
 
 
-def prepare_region(db: Any, code: str, steps: list[str] | None = None, *, log: Log = print, force: bool = False) -> dict[str, Any]:
-    """Run the preparation steps of one region in order. Finished steps are skipped unless ``force``."""
+# K-apt monthly energy (gateway ~1 request/s, 2026-10-18) and the step that needs it. The worker runs these as a separate
+# task under their own lock so the next region's 건축HUB · VWorld · 기상 steps (other providers, other limits) run meanwhile
+# (2026-11-21: a region spent ~45-75 min on K-apt while its other steps waited, and the other way round).
+KAPT_STEPS = ("kapt_energy", "finalize")
+KAPT_QUEUED_MESSAGE = "K-apt 차례 대기 (K-apt 월별 에너지는 한 번에 한 지역씩, 앞 지역이 끝나면 시작)"
+
+
+def prepare_region(db: Any, code: str, steps: list[str] | None = None, *, log: Log = print, force: bool = False,
+                   defer_kapt: bool = False) -> dict[str, Any]:
+    """Run the preparation steps of one region in order. Finished steps are skipped unless ``force``.
+
+    ``defer_kapt``: leave K-apt energy and finalize for a separate run (marked QUEUED, returned as ``kapt_deferred``)."""
     region = create_region(db, code)
     db.refresh(region)
     wanted = [step for step in STEPS if steps is None or step in steps]
+    deferred: list[str] = []
+    if defer_kapt:
+        deferred = [step for step in wanted if step in KAPT_STEPS]
+        wanted = [step for step in wanted if step not in KAPT_STEPS]
     region.status = "PREPARING"
     region.message = "지역 자료를 수집하는 중입니다"
     db.commit()
@@ -853,19 +867,28 @@ def prepare_region(db: Any, code: str, steps: list[str] | None = None, *, log: L
         _mark(db, region, step, status, result.pop("message", None), **{k: v for k, v in result.items() if k in ("rows", "year")})
         log(f"{STEP_LABELS[step]}: {status}")
     region = db.get(StudyRegion, code)
+    if deferred:
+        kapt_state = (region.datasets or {}).get("kapt_energy", {}).get("status")
+        if "kapt_energy" in deferred and (force or kapt_state not in DONE_STATES):
+            _mark(db, region, "kapt_energy", "QUEUED", KAPT_QUEUED_MESSAGE)
+        if "finalize" in deferred:
+            _mark(db, region, "finalize", "QUEUED", "K-apt 단계 뒤에 정리")
     db.refresh(region)  # sessions keep objects after commit: read what other processes wrote
     region.status = overall_status(region.datasets or {})
     waiting = [STEP_LABELS[s] for s in STEPS if (region.datasets or {}).get(s, {}).get("status") == "WAITING"]
     region.message = ("준비 완료" if region.status == "READY"
                       else f"일일 호출 한도로 남은 단계: {', '.join(waiting)} — 한도가 풀리면 이어서 수집합니다" if waiting
                       else "일부 단계가 끝나지 않았습니다 (단계별 상태 참고)")
-    if code == DEFAULT_REGION and not waiting:
+    if deferred:
+        # Still being prepared: the K-apt run of this region is queued behind the other regions' K-apt runs.
+        region.status, region.message = "PREPARING", "K-apt 월별 에너지 차례를 기다리는 중입니다 (다른 단계는 끝남, 단계별 상태 참고)"
+    elif code == DEFAULT_REGION and not waiting:
         # The original study area's layers came from the Jeonju collection, not from these steps.
         region.status, region.message = "READY", "최초 연구 지역 (기존 자료 + 추가 단계)"
     region.updated_at = now()
     db.commit()
     forget_region_cache(code)
-    return {"code": code, "status": region.status, "datasets": region.datasets}
+    return {"code": code, "status": region.status, "datasets": region.datasets, "kapt_deferred": deferred}
 
 
 def open_region(db: Any, code: str, *, log: Log = print) -> StudyRegion:
