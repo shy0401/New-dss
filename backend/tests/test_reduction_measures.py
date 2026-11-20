@@ -42,10 +42,12 @@ def test_each_measure_alone_on_the_plan_and_indicator_only_rows_have_no_value():
     assert rows["operation"]["alone_kg"] is None and rows["new_build_package"]["alone_kg"] is None
     # 열회수 환기는 2026-11-20 원문 대조로 계산(ECO2) 근거로 바뀌어 값을 내지 않는 "지표만"으로 내림
     assert rows["heat_recovery_ventilation"]["alone_kg"] is None
-    assert rows["home_energy_display"]["alone_kg"] == 46_800 and rows["home_energy_display"]["alone_pct"] == 9.4   # 전력 400,000 × 11.7%
+    # 세대 표시장치도 2026-11-20부터 지표만(설비 사양 · 효과는 입주 뒤 행동, 근거 1건 대조군 없음). 전에는 46,800 kg(전력 400,000 × 11.7%)
+    assert rows["home_energy_display"]["alone_kg"] is None and rows["home_energy_display"]["use"] == "indicator" and rows["home_energy_display"]["value_pct"] == 11.7
+    assert not [m["key"] for m in MEASURES if m["use"] == "alone"]   # 따로 본 값을 내는 사다리 밖 수단은 이제 없음
     assert rows["rooftop_pv"]["alone_kg"] == 28_800 and rows["greenery"]["alone_kg"] == 3000
     # 계산 근거가 계획안에 없는 수단: 값을 지어내지 않고 지표와 이유만
-    for key in ("operation", "new_build_package", "passive_package", "window_retrofit", "shading", "heat_recovery_ventilation", "common_lighting", "elevator_regeneration", "condensing_boiler", "district_heating_control"):
+    for key in ("operation", "new_build_package", "home_energy_display", "passive_package", "window_retrofit", "shading", "heat_recovery_ventilation", "common_lighting", "elevator_regeneration", "condensing_boiler", "district_heating_control"):
         assert rows[key]["alone_kg"] is None and rows[key]["alone_range_kg"] is None and rows[key]["reason"]
     assert rows["common_lighting"]["value_pct"] == 40.0 and rows["common_lighting"]["range_pct"] == [10.0, 82.5]
 
