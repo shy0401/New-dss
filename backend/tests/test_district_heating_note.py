@@ -24,14 +24,39 @@ def test_heat_factor_is_the_supplier_branch_value_of_that_year():
     f = district_heat_factor("36110", 2025)   # 세종지사 2025: 40,026 + 0.7199×28 + 0.072×265 kg/TJ
     assert f["branch"] == "세종" and f["co2eq_kg_per_tj"] == 40065.2 and f["kg_per_kwh"] == 0.1442
     assert district_heat_factor("41110", 2025)["kg_per_kwh"] == 0.1302      # 수도권 연계지사(수원 · 광교)
-    assert district_heat_factor("11740", 2025) is None                     # 공급자 확인 전 지역
+    assert district_heat_factor("11740", 2025)["factor_kind"] == "SUBSTITUTE"   # 강동 = 나래(공표 계수 없음 → 대체, 2026-11-21)
+    assert district_heat_factor("47110", 2025) is None                     # 공급자를 모르는 지역
     assert district_heat_factor("36110", 2014) is None                     # 그해 값이 없으면 가까운 해로 채우지 않음
     # 2021 집단에너지사업 편람: 달서 = 대구지사(성서 · 대곡 · 용산 · 장기), 양산 = 양산지사(물금 · 사송)
     assert district_heat_factor("27290", 2025)["branch"] == "대구" and district_heat_factor("27290", 2025)["kg_per_kwh"] == 0.1324
     assert district_heat_factor("48330", 2025)["branch"] == "양산" and district_heat_factor("48330", 2025)["kg_per_kwh"] == 0.1325
     assert district_heat_factor("27290", 2022)["kg_per_kwh"] == 0.2081      # 대구지사는 해마다 크게 다름 → 그해 값
-    # 사업자가 둘(성남: 한난 분당 · 판교 + 나래 위례), 계수 미공표(남양주: 별내에너지), 지정 지역 없음(제주) → 계산 안 함
-    assert all(district_heat_factor(code, 2025) is None for code in ("41130", "41360", "50110"))
+    # 사업자가 둘(성남: 한난 분당 · 판교 + 나래 위례), 공급자 모름(전주), 지정 지역 없음(제주) → 계산 안 함
+    assert all(district_heat_factor(code, 2025) is None for code in ("41130", "52110", "50110"))
+    assert district_heat_factor("27290", 2025)["factor_kind"] == "PUBLISHED"
+
+
+def test_supplier_without_published_factor_uses_the_local_guideline_value_as_substitute():
+    """2026-11-21 (기준 문서 5.16 · 판 1.41): 편람으로 공급자가 확인됐으나 공표 열 계수가 없는 사업자는 지자체 산정지침 공통값
+    0.1226 tCO2eq/Gcal(서울시 인벤토리 · 탄소공간지도로 확인)을 대체로. 1 Gcal = 1,163 kWh → 0.1054 kg/kWh, 연도와 상관없이 같음."""
+    from app.emissions import LOCAL_GUIDELINE_HEAT_KG_PER_KWH, district_heat_factor
+    assert LOCAL_GUIDELINE_HEAT_KG_PER_KWH == 0.1054
+    for code, supplier in (("11740", "나래에너지서비스"), ("26440", "부산도시가스"), ("52140", "전북집단에너지"), ("41360", "별내에너지")):
+        f = district_heat_factor(code, 2025)
+        assert f["factor_kind"] == "SUBSTITUTE" and f["supplier"] == supplier and f["kg_per_kwh"] == 0.1054
+        assert "공급자 값 아님" in f["source"] and "2007 · 2008년" in f["source"]
+        assert district_heat_factor(code, 2014)["kg_per_kwh"] == 0.1054   # 고정값: 해마다 같음
+
+
+def test_substitute_heat_estimate_says_so_in_its_sentence(monkeypatch):
+    import app.service as service
+    month = lambda gas: {"area_m2": 1000.0, "monthly": [{"gas_kwh": gas / 12} for _ in range(12)]}
+    pools = {"individual": month(72_700.0), "district": month(4_100.0)}
+    monkeypatch.setattr(service, "pooled_baseline", lambda db, year, sc, heating: pools[heating])
+    est = service.district_heat_estimate(None, 2025, None, "11740", {"district_share_pct": 50.0, "complexes": 4, "unknown_complexes": 0}, 10_000)
+    assert est["factor_kind"] == "SUBSTITUTE" and est["carbon_kg"] == round(343_000 * 0.1054, 1)   # 10,000 m² × 50% × (72.7 − 4.1)
+    text = service.district_heat_text(est)
+    assert text.startswith("지역난방 열(추정, 대체 계수)") and "공급자 값 아님" in text
 
 
 def test_heat_estimate_uses_individual_minus_district_gas(monkeypatch):
@@ -46,7 +71,7 @@ def test_heat_estimate_uses_individual_minus_district_gas(monkeypatch):
     # 가스 달이 빠지면 값을 내지 않음(0이 아님), 공급자 없는 지역도 None
     pools["district"] = {"area_m2": 1000.0, "monthly": [{"gas_kwh": None}] + [{"gas_kwh": 250.0}] * 11}
     assert service.district_heat_estimate(None, 2025, None, "36110", {"district_share_pct": 50.0}, 10_000) is None
-    assert service.district_heat_estimate(None, 2025, None, "11740", {"district_share_pct": 50.0}, 10_000) is None
+    assert service.district_heat_estimate(None, 2025, None, "47110", {"district_share_pct": 50.0}, 10_000) is None
 
 
 def test_standard_doc_heat_table_matches_the_code():
