@@ -288,6 +288,15 @@ describe('RegionGuidePanel (지역 구분 · 평년 기후 · 방향 가이드 �
     expect(sc.getByTestId('region-guide-heat-stats').textContent).toContain('0이 아니라 빈칸');
   });
 
+  it('stacks rows in the compact form for the narrow 전국 지역 detail', async () => {
+    const { RegionGuidePanel } = await import('../components/RegionGuide');
+    const { render: r, screen: sc } = await import('@testing-library/react');
+    const { container } = r(<RegionGuidePanel guide={guide as never} compact />);
+    expect(container.querySelector('table')).toBeNull();
+    expect(container.querySelector('dl.region-guide-list')).not.toBeNull();
+    expect(sc.getByTestId('region-guide-emission').textContent).toContain('−2.9%');
+  });
+
   it('says no data for a region without a complete solar year instead of zero', async () => {
     const { RegionGuidePanel } = await import('./AreaPage');
     const { render: r, screen: sc } = await import('@testing-library/react');
