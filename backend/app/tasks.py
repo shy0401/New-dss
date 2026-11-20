@@ -270,13 +270,15 @@ def resume_overdue_regions(db):
             queue_region_prepare(db,region,due+['finalize']);queued.append(region.code)
     return queued
 
-# K-apt monthly energy + finalize of a region run under their own lock (one region at a time: the K-apt gateway allows
-# ~1 request/s per key), so the next region's other steps (건축HUB · VWorld · 기상, other providers) run meanwhile. 2026-11-21
+# Collection lanes (region_prepare.LANES, 2026-11-21): basic steps under REGION_LOCK, then K-apt · VWorld lanes start, the
+# 건축HUB lane after the region's VWorld lane, finalize after the last lane. One region at a time per lane (provider
+# limits stay as they were); different regions overlap. Worker concurrency must cover the lanes (compose: 4).
 REGION_KAPT_LOCK='carbon:region-kapt'
+LANE_LOCKS={'basic':REGION_LOCK,'kapt':REGION_KAPT_LOCK,'vworld':'carbon:region-vworld','bldhub':'carbon:region-bldhub'}
 # A task that finds its lock taken asks again after this many seconds (was 120: up to 2 idle minutes between regions).
 LOCK_RETRY_SECONDS=30
 
-def _run_region_locked(task,lock_name,code,steps,force,defer_kapt):
+def _run_region_locked(task,lock_name,code,steps,force):
     """Run ``prepare_region`` while holding ``lock_name``; reschedule quota-bound steps for the next quota day."""
     import redis
     import threading
@@ -295,7 +297,7 @@ def _run_region_locked(task,lock_name,code,steps,force,defer_kapt):
     threading.Thread(target=keep,name='region-lock',daemon=True).start()
     try:
         with Session() as db:
-            result=prepare_region(db,code,steps,log=lambda message:None,force=force,defer_kapt=defer_kapt)
+            result=prepare_region(db,code,steps,log=lambda message:None,force=force)
             waiting=[step for step,item in (result['datasets'] or {}).items() if (item or {}).get('status')=='WAITING']
             if waiting:
                 region=db.get(StudyRegion,code)
@@ -311,17 +313,54 @@ def _run_region_locked(task,lock_name,code,steps,force,defer_kapt):
         try: lock.release()
         except Exception: pass
 
+def lane_plan(steps=None):
+    """Split the requested steps into lanes: (basic, kapt, vworld, bldhub, finalize?)."""
+    from .region_prepare import LANES,STEPS
+    wanted=[s for s in STEPS if steps is None or s in steps]
+    pick=lambda lane:[s for s in wanted if s in LANES[lane]]
+    return pick('basic'),pick('kapt'),pick('vworld'),pick('bldhub'),'finalize' in wanted
+
+def _queue_lane(lane,code,steps,force,finalize,then=None):
+    try: run_region_lane.delay(lane,code,steps,force,finalize,then)
+    except Exception: pass
+
 @celery_app.task(name='prepare_region',bind=True,max_retries=None)
 def run_prepare_region(self,code,steps=None,force=False):
-    result=_run_region_locked(self,REGION_LOCK,code,steps,force,defer_kapt=True)
-    if result.get('kapt_deferred'):
-        try: run_region_kapt.delay(code,result['kapt_deferred'],force)
-        except Exception: pass
+    """Basic steps of one region, then the K-apt and VWorld lanes (the 건축HUB lane follows VWorld)."""
+    basic,kapt,vworld,bldhub,finalize=lane_plan(steps)
+    if basic:
+        _run_region_locked(self,REGION_LOCK,code,basic,force)
+    if kapt:
+        _queue_lane('kapt',code,kapt,force,finalize)
+    if vworld:
+        _queue_lane('vworld',code,vworld,force,finalize,then=bldhub or None)
+    elif bldhub:
+        _queue_lane('bldhub',code,bldhub,force,finalize)
+    if finalize and not (kapt or vworld or bldhub):
+        _queue_lane('kapt',code,[],force,True)   # finalize alone: run it in the K-apt lane (it reads K-apt energy)
+
+@celery_app.task(name='prepare_region_lane',bind=True,max_retries=None)
+def run_region_lane(self,lane,code,steps,force=False,finalize=False,then=None):
+    """One lane of one region under that lane's lock. Afterwards: queue the follow-up lane (건축HUB after VWorld), or run
+    finalize when no other step of the region is still queued or running (the last lane to finish does it)."""
+    from .region_prepare import other_lanes_busy
+    result=_run_region_locked(self,LANE_LOCKS[lane],code,list(steps),force) if steps else None
+    if then:
+        _queue_lane('bldhub',code,then,force,finalize)
+        return
+    if finalize:
+        datasets=(result or {}).get('datasets')
+        if datasets is None:
+            from .regions import StudyRegion
+            with Session() as db:
+                region=db.get(StudyRegion,code);datasets=dict(region.datasets or {}) if region else {}
+        if not other_lanes_busy(datasets):
+            _run_region_locked(self,LANE_LOCKS[lane],code,['finalize'],force)
 
 @celery_app.task(name='prepare_region_kapt',bind=True,max_retries=None)
 def run_region_kapt(self,code,steps,force=False):
-    """K-apt monthly energy + finalize of one region (queued by ``run_prepare_region``)."""
-    _run_region_locked(self,REGION_KAPT_LOCK,code,steps,force,defer_kapt=False)
+    """Kept for tasks queued before the lane split (2026-11-21): hand K-apt energy (+ finalize when asked) to the lane task."""
+    _queue_lane('kapt',code,[s for s in steps if s!='finalize'],force,'finalize' in steps)
 
 @celery_app.task(name='collect_national')
 def run_national(datasets):

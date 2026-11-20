@@ -113,13 +113,16 @@ REGISTER_PAGE=100
 # 제공기관이 짧게 몰아서 실패함(503 · 빈 응답이 몇 초~수십 초 이어짐) → 대기를 늘려 다시 물음(합계 59초, 2026-11-21)
 RETRY_WAITS_S=(2,4,8,15,30)
 
-def _register_request(url,params,attempts=len(RETRY_WAITS_S)+1):
-    """One 표제부 page; temporary provider failures are retried without keeping the cached failure."""
+def _register_request(url,params,attempts=len(RETRY_WAITS_S)+1,session=None):
+    """One 표제부 page; temporary provider failures are retried without keeping the cached failure.
+
+    ``session``: another CachedClient on the same cache folder (the parallel prefetch gives each flow its own)."""
+    client_=session or client
     for attempt in range(attempts):
         response=None
         try:
-            response=client.get('MOLIT','getBrTitleInfo',url,params)
-            return response,parse_cached_response(client,response,parse_energy)
+            response=client_.get('MOLIT','getBrTitleInfo',url,params)
+            return response,parse_cached_response(client_,response,parse_energy)
         except (ExternalError,ValueError) as exc:
             message=str(exc);code=message.split(':',1)[0].strip()
             cached=response or getattr(exc,'asset',None)
@@ -130,11 +133,51 @@ def _register_request(url,params,attempts=len(RETRY_WAITS_S)+1):
             transient=code in REGISTER_TRANSIENT or '외부 데이터 HTTP 5' in message or '연결 실패' in message
             if not transient:
                 raise ExternalError(f'건축물대장 응답 오류: {message[:80]}',cached) from None
-            if isinstance(cached,dict):client.forget(cached)
-            if hasattr(client,'reset_connection'):client.reset_connection()   # 게이트웨이가 유지 연결을 한 노드에 묶음(건물 에너지와 같음)
+            if isinstance(cached,dict):client_.forget(cached)
+            if hasattr(client_,'reset_connection'):client_.reset_connection()   # 게이트웨이가 유지 연결을 한 노드에 묶음(건물 에너지와 같음)
             if attempt==attempts-1:
                 raise ExternalError(f'건축물대장 제공기관 일시 오류: {message[:60]}',cached) from None
             time.sleep(RETRY_WAITS_S[min(attempt,len(RETRY_WAITS_S)-1)])
+
+def prefetch_register(regions,flows=None,session_factory=None):
+    """Fill the disk cache with every 표제부 page of ``regions`` using ``flows`` parallel connections (2026-11-21).
+
+    Each flow has its own CachedClient on the shared cache folder (the client keeps its interval and connection
+    per instance), so the sequential ``collect_register`` pass afterwards reads cached pages and writes the DB as
+    before. Same-key measurement 2026-10-15~18: 10 flows no 429, 18 flows 429 → default 4. Failures are left to
+    the sequential pass (it retries and records them). Returns (pages fetched, pages failed)."""
+    import queue,threading
+    from .collectors import client as shared
+    flows=int(flows or os.getenv('BUILDING_REGISTER_FLOWS','4'))
+    key=unquote(os.getenv('DATA_GO_KR_SERVICE_KEY','').strip())
+    if not key or flows<2 or not regions:return 0,0
+    url=verified_operation(official_spec('15134735','building-register'),'getBrTitleInfo')
+    interval=max(float(os.getenv('BUILDING_REGISTER_REQUEST_DELAY_MS','300'))/1000,0)
+    from .cache import CachedClient
+    make=session_factory or (lambda:CachedClient(shared.root,min_interval=interval))
+    jobs=queue.Queue()
+    for region in regions:jobs.put(region)
+    done=[0,0];lock=threading.Lock()
+    def work():
+        try:session=make()
+        except Exception:return   # noqa: BLE001 - no prefetch on this flow; the sequential pass still asks every page
+        while True:
+            try:region=jobs.get_nowait()
+            except queue.Empty:return
+            page=1
+            while True:
+                params=dict(serviceKey=key,sigunguCd=region['sigunguCd'],bjdongCd=region['bjdongCd'],numOfRows=REGISTER_PAGE,pageNo=page,_type='json')
+                try:_,(rows,total)=_register_request(url,params,session=session)
+                except Exception:  # noqa: BLE001 - the sequential pass asks again and records the failure
+                    with lock:done[1]+=1
+                    break
+                with lock:done[0]+=1
+                if not rows or page*REGISTER_PAGE>=total:break
+                page+=1
+    threads=[threading.Thread(target=work,name=f'register-prefetch-{i}',daemon=True) for i in range(flows)]
+    for t in threads:t.start()
+    for t in threads:t.join()
+    return done[0],done[1]
 
 def register_regions(db,scope='full'):
     rows=list(db.scalars(select(Region).where(Region.bjdong_code!='00000').order_by(Region.code)))

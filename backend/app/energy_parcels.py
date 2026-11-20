@@ -208,6 +208,63 @@ def _session(client: Any | None) -> Any:
     return CachedClient(root, min_interval=max(float(os.getenv("BUILDING_ENERGY_REQUEST_DELAY_MS", "200")) / 1000, 0))
 
 
+def prefetch_energy(regions: list[dict[str, str]], year: int, *, flows: int | None = None, months: list[str] | None = None,
+                    session_factory: Callable[[], Any] | None = None, service_key: str | None = None) -> tuple[int, int]:
+    """Fill the disk cache with every 건축HUB energy page of ``regions`` × months × (전기, 가스) in parallel (2026-11-21).
+
+    Each flow has its own CachedClient on the shared cache folder; ``collect_energy_all`` then reads the cached pages
+    and writes the DB in one thread as before. Same-key measurement 2026-10-18: 2 flows 3.8 requests/s without 429,
+    3 flows 429 → default 2. Failures are left to the sequential pass. Returns (pages fetched, failed)."""
+    import queue
+    import threading
+    flows = int(flows or os.getenv("BUILDING_ENERGY_FLOWS", "2"))
+    key = unquote((service_key or os.getenv("DATA_GO_KR_SERVICE_KEY", "")).strip())
+    if not key or flows < 2 or not regions:
+        return 0, 0
+    months = months or [f"{year}{m:02d}" for m in range(1, 13)]
+    make = session_factory or (lambda: _session(None))
+    jobs: "queue.Queue[tuple[dict[str, str], str, str]]" = queue.Queue()
+    for region in regions:
+        for ym in months:
+            for operation in OPERATIONS.values():
+                jobs.put((region, ym, operation))
+    done = [0, 0]
+    lock = threading.Lock()
+
+    def work() -> None:
+        try:
+            session = make()
+        except Exception:  # noqa: BLE001 - no prefetch on this flow; the sequential pass still asks every page
+            return
+        while True:
+            try:
+                region, ym, operation = jobs.get_nowait()
+            except queue.Empty:
+                return
+            page = 1
+            while True:
+                params = dict(serviceKey=key, sigunguCd=request_sigungu(region["sigunguCd"], ym), bjdongCd=region["bjdongCd"], bun="", ji="",
+                              useYm=ym, numOfRows=PAGE, pageNo=page, _type="json")
+                try:
+                    rows, total = _request(session, operation, params)
+                except Exception:  # noqa: BLE001 - the sequential pass asks again and records the failure
+                    with lock:
+                        done[1] += 1
+                    break
+                with lock:
+                    done[0] += 1
+                if not rows or page * PAGE >= total:
+                    break
+                page += 1
+
+    threads = [threading.Thread(target=work, name=f"energy-prefetch-{i}", daemon=True) for i in range(flows)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return done[0], done[1]
+
+
 def probe_year(db: Any, year: int, *, client: Any | None = None, service_key: str | None = None) -> int:
     """Parcels answered for one busy 법정동 in July of ``year`` (2 requests). 0 means not published."""
     from .official import register_regions
