@@ -1,6 +1,10 @@
 # 참조 표 (감축 근거표 · 지역 조건)
 
-서비스와 분석이 함께 쓰는 손정리 · 계산 표. 2026-11-20에 PC 실험 폴더에서 옮겼다. **이 표들은 아직 서비스 계산에 연결되지 않았다**(연결은 다음 PR, 화면이 바뀌면 비포 · 애프터를 먼저 확인).
+서비스와 분석이 함께 쓰는 손정리 · 계산 표. 2026-11-20에 PC 실험 폴더에서 옮겼다. 서비스는 `backend/app/reference_tables.py`로 읽는다(2026-11-20 연결):
+- `design_zone_sigungu.csv` → 표준지표 지역(중부 · 남부, `benchmarks.py`). **계산에 쓰는 유일한 표**
+- `reduction_evidence.csv` → 보고서 화면 '감축 수단 근거표'의 수단별 행 · 출처 · 등급 요약과 도구 수단에 없는 묶음(표시만, 값을 계획안에 곱하지 않음)
+- `regional_climate_guide.csv` · `local_plans_building.csv` → 지역 화면 '지역 기후·지자체 계획 가이드'(표시만, 감축률 보정 · 필요 감축량에 쓰지 않음)
+- `design_zone_uvalue_apartment.csv` · `regional_conditions_sigungu.csv`는 아직 읽지 않는다
 
 - 없는 값은 빈칸(NULL). 0으로 채우지 않는다
 - 값의 성격(관측 · 계산 · 추정 · 계획값)을 열에 함께 적었다. 섞어서 더하지 않는다

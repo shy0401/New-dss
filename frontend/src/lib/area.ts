@@ -110,6 +110,20 @@ export interface AreaHistory {
   estimates?: AreaEstimates | null;
   /** 업계·정부 기준과 대조 (참고 위치, 판정 아님). */
   industry?: AreaIndustry | null;
+  /** 지역 구분 · 평년 기후 · 기준 배출 방향 가이드(추정, 예측 아님) · 지자체 계획 과제 (backend/reference) */
+  region_guide?: AreaRegionGuide | null;
+}
+
+export interface AreaRegionGuide {
+  code: string; name: string; design_zone: string; standard_zone: string | null;
+  /** 기상 지점에 연결되지 않은 지역은 null(0이 아님) */
+  climate: {
+    station: string; mapping: string; summer_mean_c: number | null; winter_mean_c: number | null; hdd_ratio: number | null; cdd_ratio: number | null;
+    sunshine_hours_year: number | null; guide_emission_change_pct: number | null; guide_electricity_change_pct: number | null; guide_gas_change_pct: number | null; within_our_data: boolean;
+  } | null;
+  plans: Array<{ code: string; region: string; plan: string; tasks: number; groups: Array<{ group: string; label: string; tasks: number }>; task_names: string[] }>;
+  sources: { zone: string; climate: string; plans: string };
+  value_kinds: string; check: string;
 }
 
 export interface AreaEstimateBuildingYear {
@@ -151,7 +165,9 @@ export interface AreaEstimates {
 
 export interface AreaIndustry {
   available: boolean;
-  zone: string;
+  /** 표준지표 지역(중부 · 남부). 제주 등 표준지표 값이 없는 지역은 null */
+  zone: string | null;
+  design_zone?: string | null;
   table: Array<{ label: string; value: string; reference: string; source: string }>;
   notes: string[];
 }

@@ -39,7 +39,9 @@ const plan = {
           what: '벽식을 라멘으로 바꾼다.', cost: '초기 공사비 +18%.', note: '전체 내재탄소에 곱할 수 없다.', sources: [{ label: '3개 동 골조 비교', url: 'https://example.org/frame' }], reduction_kg: null, reduction_pct: null, reduction_range_kg: null, reason: '전체 내재탄소에 곱할 수 없는 지표라 값은 계산하지 않습니다.' },
       ] } },
 };
-const catalog = { measures: plan.reduction_plan.measures, embodied_measures: plan.reduction_plan.embodied.options, embodied_basis: { kg_per_m2: 445.4, range_kg_per_m2: [340.3, 586.0], readymix_share_pct: 14.9, source: { label: '공동주택 27개 단지 282동', url: 'https://example.org/embodied' } } };
+const catalog = { measures: plan.reduction_plan.measures.map((m) => m.key === 'envelope' ? { ...m, evidence_table: { rows: 50, sources: 31, grades: [{ grade: '실측_국내', label: '국내 실측', rows: 6 }], exclusion: [{ value: '아니오', rows: 50 }], reasons: [] } } : m),
+  embodied_measures: plan.reduction_plan.embodied.options, embodied_basis: { kg_per_m2: 445.4, range_kg_per_m2: [340.3, 586.0], readymix_share_pct: 14.9, source: { label: '공동주택 27개 단지 282동', url: 'https://example.org/embodied' } },
+  evidence_table: { rows: 645, note: '행 수는 독립된 근거 수가 아닙니다.', unlinked_groups: [{ group: 'heat_pump', label: '히트펌프·난방 전기화', layer: '계획(열원)', rows: 22, sources: 9, grades: [{ grade: '가정', label: '가정', rows: 13 }], exclusion: [{ value: '예', rows: 22 }], reasons: [{ reason: '적용이 거의 불가능', rows: 22 }] }] } };
 const report = {
   id: 'r-0001-abcd', title: '탄소 시뮬레이션 검토 보고서', kind: 'PLAN', place: '전주시 송천1동 일대', year: 2025, grid_id: 'cell_966500_1764500', created_at: '2026-10-14T04:05:00Z', evidence_hash: 'deadbeef0123',
   sector: { name: '선택 격자 cell_966500_1764500' }, summary: { mode: 'TEMPLATE', model: null, paragraphs: ['2025년 전주시 송천1동 일대의 500m 분석 격자를 기준으로 작성했습니다.'], validation: '계산 엔진 근거 문장 사용' },
@@ -100,7 +102,12 @@ describe('ReportsPage', () => {
     expect(embodied).toHaveTextContent('실측 지표가 아닙니다');
     // 보고서를 쓰기 전에도 수단 목록과 근거를 볼 수 있다
     expect(screen.getByTestId('measure-catalog-fold')).toHaveTextContent('운영 단계 4개 · 시공 단계 3개');
-    expect(within(screen.getByTestId('measure-catalog')).getAllByRole('row', { hidden: true })).toHaveLength(8);   // 접힌 구역 안: 머리 1 + 운영 4 + 시공 3
+    expect(within(screen.getByTestId('measure-catalog')).getAllByRole('row', { hidden: true })).toHaveLength(10);   // 접힌 구역 안: 머리 1 + 운영 4 + 시공 3, 근거 묶음 머리 1 + 1
+    // 감축 근거표 요약: 수단마다 행 · 출처 · 등급, 근거표에 행이 없는 수단은 0이 아니라 "행 없음"
+    expect(screen.getByTestId('catalog-evidence-envelope')).toHaveTextContent('행 50 · 출처 31국내 실측 6');
+    expect(screen.getByTestId('catalog-evidence-frame_system')).toHaveTextContent('근거표 행 없음');
+    expect(screen.getByTestId('evidence-unlinked')).toHaveTextContent('히트펌프·난방 전기화');
+    expect(screen.getByTestId('evidence-unlinked')).toHaveTextContent('예 22행');
     expect(screen.getByRole('img', { name: '계획안 A 3D 개념 배치' })).toBeInTheDocument();
     expect(article).toHaveTextContent('송천1동(격자의 100%');
     expect(article).not.toHaveTextContent('cell_966500_1764500');
