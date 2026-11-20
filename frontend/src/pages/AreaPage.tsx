@@ -401,6 +401,15 @@ export function RegionGuidePanel({ analysis }: { analysis: AreaAnalysis }) {
           <td className="num">{g.heating.kinds.map((k) => `${k.kind.replace('난방', '')} ${k.household_share_pct == null ? `${k.complexes}곳(세대수 없음)` : k.household_share_pct > 0 && k.household_share_pct < 0.5 ? '1% 미만' : `${k.household_share_pct.toFixed(0)}%`}`).join(' · ')}</td>
           <td>K-apt 단지 {g.heating.complexes}곳{g.heating.unknown_complexes ? `(난방 방식 미상 ${g.heating.unknown_complexes}곳 제외)` : ''}. {g.heating.reading}</td>
           <td><small>{g.heating.source}</small></td></tr>}
+        {g.solar !== undefined && <tr data-testid="region-guide-solar"><td>지붕 태양광 발전량 (kW당 연)</td>
+          <td className="num">{g.solar ? `${Math.round(g.solar.yield_kwh_per_kw).toLocaleString('ko-KR')} kWh` : '자료 없음'}</td>
+          <td>{g.solar ? `${g.solar.year}년 수평면 일사량 ${Math.round(g.solar.irradiation_kwh_m2).toLocaleString('ko-KR')} kWh/m² × 성능비 ${g.solar.performance_ratio.toFixed(2)}(추정, 경사 보정 없음). 감축 방안의 태양광 용량은 이 값으로 계산합니다` : '이 지역은 12개월이 다 있는 일사 자료가 없어 계산하지 않았습니다'}
+            {c?.sunshine_hours_year != null ? ` · 평년 일조 ${Math.round(c.sunshine_hours_year).toLocaleString('ko-KR')}시간` : ''}{c?.sunshine_hours_year != null && g.reference?.sunshine_hours_year != null ? `(전주 ${Math.round(g.reference.sunshine_hours_year).toLocaleString('ko-KR')}시간)` : ''}</td>
+          <td><small>{g.solar ? g.solar.source : '—'}{c?.sunshine_hours_year != null ? ` · ${g.sources.climate}` : ''}</small></td></tr>}
+        {g.cooling && <tr data-testid="region-guide-cooling"><td>냉방 쪽 수단</td>
+          <td className="num">{g.cooling.items.length}개</td>
+          <td>{g.cooling.items.map((i) => `${i.label}(${i.use})`).join(' · ')}. {g.cooling.reading}</td>
+          <td><small>감축 수단 목록 · 감축 근거표</small></td></tr>}
         {g.plans.map((p) => <tr key={p.code}><td>{p.region} 기본계획 건물 과제</td><td className="num">{p.tasks}개</td><td>{p.groups.slice(0, 4).map((x) => `${x.label} ${x.tasks}`).join(' · ')}{p.groups.length > 4 ? ' 등' : ''}</td><td><small>{p.plan}</small></td></tr>)}
       </tbody>
     </table></div>
@@ -408,6 +417,7 @@ export function RegionGuidePanel({ analysis }: { analysis: AreaAnalysis }) {
     <ul className="area-industry-notes">
       <li>{g.value_kinds}. 감축률 보정이나 필요 감축량 계산에는 쓰지 않습니다.</li>
       <li>{g.check}</li>
+      {g.rate_note && <li data-testid="region-guide-rate-note">{g.rate_note}.</li>}
       <li>지자체 과제의 감축량은 지자체 자체 평가 계획값이고 지역마다 기준(한 해 · 누적)이 달라 더하거나 견주지 않습니다.</li>
     </ul>
   </section>;

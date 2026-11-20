@@ -92,6 +92,14 @@ def test_region_guide_joins_zone_climate_and_plans():
     assert sejong["climate"] is None and sejong["plans"][0]["tasks"] == 33   # 기후는 빈칸(0으로 채우지 않음)
     assert region_guide("99999") is None
     assert "예측 아님" in g["value_kinds"]
+    # 냉방 쪽 수단: 모든 지역에 같은 목록, 읽는 법만 냉방도일 비의 부호로(새 임계값 없음)
+    assert [i["label"] for i in g["cooling"]["items"]] == ["외부 차양·일사 조절", "쿨루프(고반사 지붕)", "옥상·벽면 녹화", "냉방기 효율"]
+    assert g["cooling"]["items"][0]["use"] == "지표만" and g["cooling"]["items"][3]["use"].startswith("설비 사양")
+    assert "1.00배입니다" in g["cooling"]["reading"] and "더 필요한" not in g["cooling"]["reading"]
+    assert "더 필요한 지역" in region_guide("27110")["cooling"]["reading"]   # 대구 중구 CDD 비 1.06
+    assert "견주지 못합니다" in sejong["cooling"]["reading"]
+    assert "2.21 · 2.72%p" in g["rate_note"] and "중부2" in g["rate_note"]
+    assert g["reference"]["station"] == "전주" and g["reference"]["sunshine_hours_year"] == 2063.0
 
 
 def test_regional_conditions_mark_value_kinds_and_keep_gaps_empty():
