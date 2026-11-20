@@ -540,12 +540,28 @@ def step_building_energy(db: Any, region: StudyRegion, log: Log) -> dict[str, An
     if not leaves:
         raise ValueError("이 지역의 법정동·리 코드가 없습니다")
     year = analysis_year()
-    # 여러 흐름으로 쪽을 먼저 캐시에 받아 둠(2026-11-21, 기본 2흐름). 아래 순차 수집은 캐시를 읽고 DB에 씀
-    log("건축HUB 건물 에너지 쪽 미리 받는 중 (여러 흐름)")
-    prefetch_energy(leaves, year)
-    stats = collect_energy_all(db, year, lambda f, m: log(m) if int(f * 100) % 5 == 0 else None, regions=leaves)
+    # 건축HUB 대용량 파일이 있는 달은 파일에서 읽음(2026-11-21, 2025-01 234,340 지번이 API와 모두 같음). 나머지 달만 API
+    from .bulk_energy import complete_months, import_months
+    file_months = complete_months(year)
+    api_months = [m for m in (f"{year}{i:02d}" for i in range(1, 13)) if m not in file_months]
+    rows = 0
+    parts = [f"{year}년 법정동·리 {len(leaves)}곳"]
+    if file_months:
+        log(f"건축HUB 대용량 파일에서 {len(file_months)}개월 읽는 중")
+        bulk = import_months(db, leaves, file_months, progress=log)
+        rows += bulk["inserted"] + bulk["replaced"]
+        parts.append(f"대용량 파일 {len(file_months)}개월 새 행 {bulk['inserted']:,}(이미 있던 값과 같음 {bulk['same']:,} · 다름 {bulk['different']:,})")
+        if bulk["conflicts"]:
+            parts.append(f"한 지번에 값이 다른 줄 {bulk['conflicts']:,}곳은 넣지 않음")
+    if api_months:
+        # 여러 흐름으로 쪽을 먼저 캐시에 받아 둠(2026-11-21, 기본 2흐름). 아래 순차 수집은 캐시를 읽고 DB에 씀
+        log("건축HUB 건물 에너지 쪽 미리 받는 중 (여러 흐름)")
+        prefetch_energy(leaves, year, months=api_months)
+        stats = collect_energy_all(db, year, lambda f, m: log(m) if int(f * 100) % 5 == 0 else None, regions=leaves, months=api_months)
+        rows += stats["inserted"] + stats["updated"]
+        parts.append(f"API {len(api_months)}개월 요청 {stats['requests']:,}회, 새 행 {stats['inserted']:,}")
     build_parcel_grid(db, region.legal_codes)
-    return {"rows": stats["inserted"] + stats["updated"], "message": f"{year}년 법정동·리 {len(leaves)}곳, 요청 {stats['requests']:,}회, 새 행 {stats['inserted']:,}", "year": year}
+    return {"rows": rows, "message": ", ".join(parts), "year": year, "file_months": len(file_months)}
 
 
 def collect_energy_years(db: Any, code: str, years: list[int], *, log: Log = print) -> dict[str, Any]:
