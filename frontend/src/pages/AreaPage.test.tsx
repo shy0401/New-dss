@@ -224,3 +224,32 @@ describe('EstimatesPanel·IndustryPanel (추정은 관측과 따로, 업계 기�
     expect(panel.textContent).toContain('판정이 아닙니다');
   });
 });
+
+describe('RegionGuidePanel (지역 구분 · 평년 기후 · 방향 가이드 · 지자체 과제)', () => {
+  const guide = { code: '27110', name: '대구광역시 중구', design_zone: '남부', standard_zone: '남부',
+    climate: { station: '대구', mapping: '광역시 지점', summer_mean_c: 25.5, winter_mean_c: 2.5, hdd_ratio: 0.89, cdd_ratio: 1.06, sunshine_hours_year: 2300,
+      guide_emission_change_pct: -2.9, guide_electricity_change_pct: 0.0, guide_gas_change_pct: -7.2, within_our_data: true },
+    plans: [{ code: '27', region: '대구광역시', plan: '제1차 대구광역시 기본계획', tasks: 11, groups: [{ group: 'rooftop_pv', label: '태양광', tasks: 3 }], task_names: ['공공건물 태양광'] }],
+    sources: { zone: '고시', climate: '기상청 평년값', plans: '기본계획' }, value_kinds: '배출 방향 = 추정 가이드(예측 아님)', check: "점검에서 '맞지 않음'이었습니다." };
+
+  it('shows the guide as a direction with its failed check, not as a forecast', async () => {
+    const { RegionGuidePanel } = await import('./AreaPage');
+    const { render: r, screen: sc } = await import('@testing-library/react');
+    r(<RegionGuidePanel analysis={{ history: { region_guide: guide } } as never} />);
+    const panel = sc.getByTestId('area-region-guide');
+    expect(sc.getByTestId('region-guide-emission').textContent).toContain('−2.9%');
+    expect(sc.getByTestId('region-guide-emission').textContent).toContain('전주보다 낮은 쪽');
+    expect(panel.textContent).toContain('0.89배 · 1.06배');
+    expect(panel.textContent).toContain('예측 아님');
+    expect(panel.textContent).toContain('맞지 않음');
+    expect(panel.textContent).toContain('대구광역시 기본계획 건물 과제');
+  });
+
+  it('keeps an unmapped climate empty instead of zero', async () => {
+    const { RegionGuidePanel } = await import('./AreaPage');
+    const { render: r, screen: sc } = await import('@testing-library/react');
+    r(<RegionGuidePanel analysis={{ history: { region_guide: { ...guide, climate: null } } } as never} />);
+    expect(sc.getByTestId('area-region-guide').textContent).toContain('기상 지점에 연결하지 못했습니다');
+    expect(sc.queryByTestId('region-guide-emission')).toBeNull();
+  });
+});

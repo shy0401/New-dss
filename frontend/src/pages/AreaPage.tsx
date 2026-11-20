@@ -223,6 +223,7 @@ export function AreaPage() {
       </div>
       <FoldStack title="근거 자료 더 보기" hint="기상, 인구, 건물 전체 에너지, 추정, 외부 기준과의 대조입니다. 눌러서 펼칩니다.">
         <Fold title="기상 추이"><section className="panel"><div className="panel-title"><h3>기상 (난방도일·냉방도일)</h3><ProvenanceBadge kind={region ? 'estimated' : 'observed'} detail={region ? 'ERA5-Land 재분석' : 'ASOS 전주'} /></div><WeatherYearsChart history={analysis.history} /><p className="muted">12개월이 모두 있는 해만 그립니다. 전후 사용량 차이의 일부는 기상 차이일 수 있습니다.</p></section></Fold>
+        {analysis.history.region_guide && <Fold title="지역 기후·지자체 계획 가이드"><RegionGuidePanel analysis={analysis} /></Fold>}
         <Fold title="인구·가구 추이"><PopulationPanel analysis={analysis} /></Fold>
         <Fold title="건축물대장 개발 이력"><RegisterPanel analysis={analysis} eventYear={activeEvent} /></Fold>
         <Fold title="건물 전체 에너지 표"><BuildingEnergyPanel analysis={analysis} /></Fold>
@@ -374,6 +375,37 @@ export function IndustryPanel({ analysis }: { analysis: AreaAnalysis }) {
       <tbody>{ind.table.map((r) => <tr key={r.label}><td>{r.label}</td><td className="num">{r.value}</td><td>{r.reference}</td><td><small>{r.source}</small></td></tr>)}</tbody>
     </table></div>
     <ul className="area-industry-notes">{ind.notes.map((n) => <li key={n}>{n}</li>)}</ul>
+  </section>;
+}
+
+/** 지역 가이드: 설계기준 지역 구분(고시) · 평년 기후(전주 대비) · 기준 배출 방향(추정, 예측 아님) · 지자체 기본계획 건물 과제(계획값). 감축률 보정에는 쓰지 않는다. */
+export function RegionGuidePanel({ analysis }: { analysis: AreaAnalysis }) {
+  const g = analysis.history.region_guide;
+  if (!g) return null;
+  const c = g.climate;
+  const signed = (v: number | null | undefined) => (v == null ? '자료 없음' : `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(1)}%`);
+  const ratio = (v: number | null | undefined) => (v == null ? '자료 없음' : `${v.toFixed(2)}배`);
+  const direction = (v: number | null | undefined) => (v == null ? '' : v > 0 ? '전주보다 높은 쪽' : v < 0 ? '전주보다 낮은 쪽' : '기준 지역(전주)');
+  return <section className="panel area-region-guide" aria-label="지역 기후·지자체 계획 가이드" data-testid="area-region-guide">
+    <div className="panel-title"><h3>지역 기후·지자체 계획 가이드 ({g.name})</h3><ProvenanceBadge kind="estimated" detail="방향 참고, 예측 아님" /></div>
+    <div className="table-wrap"><table>
+      <thead><tr><th>항목</th><th className="num">이 지역</th><th>읽는 법</th><th>출처</th></tr></thead>
+      <tbody>
+        <tr><td>설계기준 지역 구분</td><td className="num">{g.design_zone}</td><td>표준지표 지역 {g.standard_zone ?? '없음(맞대지 않음)'} · 지역 구분마다 외벽·창 단열 기준이 다릅니다</td><td><small>{g.sources.zone}</small></td></tr>
+        {c ? <>
+          <tr><td>평년 여름·겨울 평균기온</td><td className="num">{c.summer_mean_c?.toFixed(1)}℃ · {c.winter_mean_c?.toFixed(1)}℃</td><td>기상 지점 {c.station} ({c.mapping})</td><td><small>{g.sources.climate}</small></td></tr>
+          <tr><td>난방도일 · 냉방도일 (전주 = 1)</td><td className="num">{ratio(c.hdd_ratio)} · {ratio(c.cdd_ratio)}</td><td>1보다 크면 전주보다 난방(냉방)이 더 필요합니다. 평년 일평균으로 계산해 비로만 읽습니다</td><td><small>{g.sources.climate}</small></td></tr>
+          <tr data-testid="region-guide-emission"><td>공동주택 기준 배출 방향 (가이드)</td><td className="num">{signed(c.guide_emission_change_pct)}</td><td>{direction(c.guide_emission_change_pct)} · 전기 {signed(c.guide_electricity_change_pct)}, 가스 {signed(c.guide_gas_change_pct)}{c.within_our_data ? '' : ' · 우리 단지 자료 범위 밖의 기후'}</td><td><small>추정(전주 단지 용도 몫 × 도일 비)</small></td></tr>
+        </> : <tr><td>평년 기후</td><td className="num">자료 없음</td><td>이 지역은 기상 지점에 연결하지 못했습니다(확인 필요). 0이 아니라 빈칸입니다</td><td><small>{g.sources.climate}</small></td></tr>}
+        {g.plans.map((p) => <tr key={p.code}><td>{p.region} 기본계획 건물 과제</td><td className="num">{p.tasks}개</td><td>{p.groups.slice(0, 4).map((x) => `${x.label} ${x.tasks}`).join(' · ')}{p.groups.length > 4 ? ' 등' : ''}</td><td><small>{p.plan}</small></td></tr>)}
+      </tbody>
+    </table></div>
+    {g.plans.length > 0 && <details className="method-note"><summary>과제 이름 보기</summary>{g.plans.map((p) => <div key={p.code}><b>{p.region}</b><ul>{p.task_names.map((t, i) => <li key={`${p.code}-${i}`}>{t}</li>)}</ul></div>)}</details>}
+    <ul className="area-industry-notes">
+      <li>{g.value_kinds}. 감축률 보정이나 필요 감축량 계산에는 쓰지 않습니다.</li>
+      <li>{g.check}</li>
+      <li>지자체 과제의 감축량은 지자체 자체 평가 계획값이고 지역마다 기준(한 해 · 누적)이 달라 더하거나 견주지 않습니다.</li>
+    </ul>
   </section>;
 }
 

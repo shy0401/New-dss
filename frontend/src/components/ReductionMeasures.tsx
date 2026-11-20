@@ -8,12 +8,23 @@ export interface MeasureRow {
   what: string; cost?: string | null; note?: string | null; sources: MeasureSource[];
   alone_kg?: number | null; alone_pct?: number | null; alone_range_kg?: number[] | null; reason?: string | null;
   reduction_kg?: number | null; reduction_pct?: number | null; reduction_range_kg?: number[] | null;
+  /** 감축 근거표(backend/reference) 요약. 근거표에 행이 없으면 null(0이 아님) */
+  evidence_table?: EvidenceSummary | null;
 }
+/** 근거표 행 묶음 요약: 행 수 · 출처 수 · 등급별 행 · 추천 판단(제외 여부)과 까닭 */
+export interface EvidenceSummary {
+  rows: number; sources: number; grades: Array<{ grade: string; label: string; rows: number }>;
+  exclusion: Array<{ value: string; rows: number }>; reasons: Array<{ reason: string; rows: number }>;
+}
+export interface EvidenceGroup extends EvidenceSummary { group: string; label: string; layer: string }
 export interface EmbodiedBlock {
   floor_area_m2: number; kg_per_m2: number; carbon_kg: number; range_kg: number[]; years_of_operation: number | null; readymix_share_pct: number;
   options: MeasureRow[]; basis: string; source: MeasureSource;
 }
-export interface MeasureCatalog { measures: MeasureRow[]; embodied_measures: MeasureRow[]; embodied_basis: { kg_per_m2: number; range_kg_per_m2: number[]; readymix_share_pct: number; source: MeasureSource } }
+export interface MeasureCatalog {
+  measures: MeasureRow[]; embodied_measures: MeasureRow[]; embodied_basis: { kg_per_m2: number; range_kg_per_m2: number[]; readymix_share_pct: number; source: MeasureSource };
+  evidence_table?: { rows: number; unlinked_groups: EvidenceGroup[]; note: string } | null;
+}
 
 const number = (value: number, digits = 1) => new Intl.NumberFormat('ko-KR', { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(value);
 /** 범위(kg 두 값)를 톤으로, 작은 감축부터. 음수는 늘어남(+). */
@@ -64,13 +75,30 @@ export function EmbodiedSection({ embodied: e }: { embodied: EmbodiedBlock }) {
   </div>;
 }
 
+/** 근거표 한 칸: '행 50 · 출처 12' + 등급별 행 + (추천에서 뺀 판단이 있으면) 그 까닭. */
+function EvidenceTableCell({ e }: { e?: EvidenceSummary | null }) {
+  if (!e) return <span className="muted">근거표 행 없음</span>;
+  const judged = e.exclusion.filter((x) => x.value !== '아니오');
+  return <>{`행 ${e.rows} · 출처 ${e.sources}`}<small>{e.grades.map((g) => `${g.label} ${g.rows}`).join(' · ')}</small>
+    {judged.map((x) => <small key={x.value} className="evidence-judgment">근거표 판단 “{x.value}” {x.rows}행{e.reasons[0] ? `: ${e.reasons[0].reason}` : ''}</small>)}</>;
+}
+
 /** 감축 수단 근거표: 계획안과 무관한 목록(지표·근거·적용 대상·출처). 보고서를 쓰기 전에 무엇이 들어가는지 본다. */
 export function MeasureCatalogTable({ catalog }: { catalog: MeasureCatalog }) {
   const rows = [...catalog.measures, ...catalog.embodied_measures];
+  const ev = catalog.evidence_table;
   return <div data-testid="measure-catalog">
-    <div className="table-wrap report-table"><table><thead><tr><th>수단</th><th>지표</th><th>근거</th><th>적용 대상</th><th>보고서에서</th></tr></thead><tbody>
-      {rows.map((m) => <tr key={m.key}><th scope="row">{m.title}<small>{m.group}</small></th><td>{m.indicator_text}</td><td><span className={evidenceClass(m)}>{evidenceText(m)}</span></td><td>{m.apply}</td><td>{m.use_label}</td></tr>)}
+    <div className="table-wrap report-table"><table><thead><tr><th>수단</th><th>지표</th><th>근거</th><th>감축 근거표</th><th>적용 대상</th><th>보고서에서</th></tr></thead><tbody>
+      {rows.map((m) => <tr key={m.key}><th scope="row">{m.title}<small>{m.group}</small></th><td>{m.indicator_text}</td><td><span className={evidenceClass(m)}>{evidenceText(m)}</span></td><td data-testid={`catalog-evidence-${m.key}`}><EvidenceTableCell e={m.evidence_table} /></td><td>{m.apply}</td><td>{m.use_label}</td></tr>)}
     </tbody></table></div>
     <p className="muted">내재탄소 기준: 지상 연면적 1 m²에 {number(catalog.embodied_basis.kg_per_m2)} kgCO₂({number(catalog.embodied_basis.range_kg_per_m2[0])}~{number(catalog.embodied_basis.range_kg_per_m2[1])}, 자재 생산 단계). 실측·기관 실적이 아닌 값(설계·계산, 가정)은 흐리게 적었고 기본 방안의 합계에 넣지 않습니다.</p>
+    {ev && ev.unlinked_groups.length > 0 && <>
+      <h4>도구 수단으로 쓰지 않는 근거 묶음 (감축 근거표 {ev.rows}행 중)</h4>
+      <div className="table-wrap report-table" data-testid="evidence-unlinked"><table><thead><tr><th>묶음</th><th>층</th><th>근거표</th><th>추천 판단</th><th>까닭</th></tr></thead><tbody>
+        {ev.unlinked_groups.map((g) => <tr key={g.group}><th scope="row">{g.label}</th><td>{g.layer}</td><td>{`행 ${g.rows} · 출처 ${g.sources}`}<small>{g.grades.map((x) => `${x.label} ${x.rows}`).join(' · ')}</small></td>
+          <td>{g.exclusion.map((x) => `${x.value === '아니오' ? '빼지 않음(아직 지표 아님)' : x.value} ${x.rows}행`).join(' · ')}</td><td>{g.reasons.length ? g.reasons.map((r) => r.reason).join(' / ') : '—'}</td></tr>)}
+      </tbody></table></div>
+      <p className="muted">{ev.note} ‘빼지 않음(아직 지표 아님)’은 근거표 규칙상 추천에서 뺄 까닭은 없지만 아직 도구 수단(지표)으로 만들지 않은 묶음입니다.</p>
+    </>}
   </div>;
 }

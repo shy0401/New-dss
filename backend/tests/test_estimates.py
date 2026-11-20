@@ -156,6 +156,9 @@ def test_benchmarks():
     history = {"building_energy": {"years": {2025: {"kwh_per_m2": 60.0, "gas_kwh_per_m2": 50.0, "complete": True}}}}
     effort = {"available": True, "new_load_kwh": 100000.0, "added_floor_area_m2": 2000.0, "mix": {"pv_counted": True, "pv_kwh": 25000.0, "new_efficiency_pct": 0}}
     block = industry_block(history, effort, "52110")
-    assert block["zone"] == "중부"
+    assert block["zone"] == "중부" and block["design_zone"] == "중부2"
+    assert industry_block(history, effort, "48120")["buildings"]["standard_apartment"] == 111.0   # 경남 창원 = 남부
+    jeju = industry_block(history, effort, "50110")
+    assert jeju["zone"] is None and jeju["buildings"]["standard_apartment"] is None and "맞대지 않습니다" in jeju["table"][0]["reference"]
     assert block["buildings"]["primary_kwh_m2"] == round(60 * 2.75 + 50 * 1.1, 1)
     assert block["zeb"]["self_sufficiency_pct"] == 25.0 and block["zeb"]["grade"] == "5등급" and block["zeb"]["mandatory_scale"]

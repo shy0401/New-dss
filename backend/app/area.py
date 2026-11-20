@@ -910,12 +910,12 @@ def _effort_result(history: dict[str, Any], plan: dict[str, Any], target_pct: fl
         "target_kgco2eq": round(target_c, 1), "required_reduction_kgco2eq": round(need_c, 1),
         "already_met": need_c <= 0, "feasible_with_new_only": feasible_new_only or need_c <= 0,
         "options": options, "curve": curve, "factor_kgco2eq_per_kwh": factor,
-        "scope": "전력 운영탄소 기준 (가스는 배출계수 확정 후 추가)",
+        "scope": "전력 운영탄소 기준 (가스는 이 계산에 넣지 않음)",
         "assumptions": [
             load_text,
             *(["기준 부하는 구역 격자에 배치된 건축HUB 12개월 계측 지번 전체의 전력입니다(단독주택·200세대 미만 공동주택 등 제공 범위 밖 제외)"] if basis == "buildings" else []),
             "기상은 기준 연도와 같다고 가정합니다 (별도 기상 보정 없음)",
-            "가스는 이 계산에 넣지 않았습니다 (가스 배출계수 기준 확정 후 추가)",
+            "가스는 이 계산에 넣지 않았습니다 (필요 감축량은 전력 운영탄소로만 셉니다. 가스 사용량은 '건물 전체 에너지 표'에 따로 있습니다)",
             "태양광 설비 용량은 사용자가 입력한 kW당 연 발전량 가정으로만 환산합니다" if pv_yield_kwh_per_kw else "태양광은 연간 상쇄 전력량(kWh)으로만 표시합니다 (설비 용량 환산에는 지역 발전량 근거 필요)",
         ],
     }
@@ -1613,6 +1613,8 @@ def analyze(db: Any, spec: dict[str, Any], from_year: int, to_year: int, event_y
     effort_result = effort(history, plan or {}, target_pct, pv_yield, effort_basis, measures) if target_pct is not None else None
     from .benchmarks import industry_block
     history["industry"] = industry_block(history, effort_result, (inputs.get("region") or {}).get("code"))
+    from .reference_tables import region_guide
+    history["region_guide"] = region_guide((inputs.get("region") or {}).get("code") or "52110")
     members = set(area["grid_ids"])
     grid_features = {"type": "FeatureCollection", "features": [
         {"type": "Feature", "id": g["id"], "geometry": g["geometry"], "properties": {"id": g["id"]}}

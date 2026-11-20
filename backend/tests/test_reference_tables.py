@@ -59,6 +59,41 @@ def test_regional_climate_guide_is_a_marked_estimate_against_jeonju():
     assert len(daegu) == 9 and {x["station_name"] for x in daegu} == {"대구"}
 
 
+def test_zone_lookup_uses_the_notice_table_not_the_sido_prefix():
+    from app.reference_tables import design_zone, standard_zone
+    assert design_zone("52110") == "중부2" and standard_zone("52110") == "중부"
+    assert standard_zone("48120") == "남부"          # 경남 창원: 시도 앞자리 방식에서는 중부였다
+    assert standard_zone("47110") == "남부"          # 경북 포항(시군 예외)
+    assert standard_zone("27720") == "중부"          # 대구 군위(중부2)
+    assert design_zone("50110") == "제주" and standard_zone("50110") is None   # 표준지표에 제주 값 없음
+    assert design_zone("99999") is None and standard_zone(None) is None
+
+
+def test_evidence_summary_links_rows_to_tool_measures():
+    from app.reference_tables import evidence_summary
+    ev = evidence_summary()
+    env = ev["by_measure"]["envelope"]
+    assert env["rows"] == 50 and env["sources"] <= env["rows"]          # 단열 28 + 창호 18 + 짝 비교 4
+    assert "keep_structure" not in ev["by_measure"]                      # 근거표 행 없음(0이 아님)
+    assert ev["by_measure"]["operation"]["exclusion"] == [{"value": "예", "rows": 16}]
+    groups = {g["group"]: g for g in ev["unlinked_groups"]}
+    assert groups["heat_pump"]["exclusion"][0]["value"] == "예" and groups["heat_pump"]["reasons"]
+    assert groups["layout_form"]["rows"] == 38 and groups["layout_form"]["exclusion"][0]["value"] == "아니오"
+    assert sum(g["rows"] for g in ev["unlinked_groups"]) == 224
+
+
+def test_region_guide_joins_zone_climate_and_plans():
+    from app.reference_tables import region_guide
+    g = region_guide("52110")
+    assert g["design_zone"] == "중부2" and g["standard_zone"] == "중부"
+    assert g["climate"]["station"] == "전주" and g["climate"]["guide_emission_change_pct"] == 0.0
+    assert [(p["code"], p["tasks"]) for p in g["plans"]] == [("52110", 32), ("52", 14)]   # 시 계획 먼저, 그다음 도 계획
+    sejong = region_guide("36110")
+    assert sejong["climate"] is None and sejong["plans"][0]["tasks"] == 33   # 기후는 빈칸(0으로 채우지 않음)
+    assert region_guide("99999") is None
+    assert "예측 아님" in g["value_kinds"]
+
+
 def test_regional_conditions_mark_value_kinds_and_keep_gaps_empty():
     r = rows("regional_conditions_sigungu.csv")
     assert len(r) == 23

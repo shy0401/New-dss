@@ -201,8 +201,14 @@ def _public(m: dict[str, Any]) -> dict[str, Any]:
 
 
 def catalog() -> dict[str, Any]:
-    """수단 목록 전체(운영 단계 + 시공 단계)와 내재탄소 기준값."""
-    return {"measures": [_public(m) for m in MEASURES], "embodied_measures": [_public(m) for m in EMBODIED_MEASURES],
+    """수단 목록 전체(운영 단계 + 시공 단계)와 내재탄소 기준값, 감축 근거표 요약(수단별 행 · 출처 · 등급, 도구 수단에 없는 묶음)."""
+    from .reference_tables import evidence_summary
+    ev = evidence_summary()
+
+    def with_evidence(m: dict[str, Any]) -> dict[str, Any]:
+        return {**_public(m), "evidence_table": ev["by_measure"].get(m["key"])}
+    return {"measures": [with_evidence(m) for m in MEASURES], "embodied_measures": [with_evidence(m) for m in EMBODIED_MEASURES],
+            "evidence_table": {"rows": ev["rows"], "unlinked_groups": ev["unlinked_groups"], "note": ev["note"]},
             "embodied_basis": {"kg_per_m2": EMBODIED_KG_PER_M2, "range_kg_per_m2": list(EMBODIED_RANGE_KG_PER_M2), "readymix_share_pct": round(EMBODIED_READYMIX_SHARE * 100, 1),
                                "source": {"label": S_EMBODIED[0], "url": S_EMBODIED[1]}},
             "evidence_labels": EVIDENCE_LABEL, "use_labels": USE_LABEL}
