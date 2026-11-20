@@ -972,8 +972,10 @@ def _progress_logger(db: Any, region: StudyRegion, step: str, log: Log) -> Log:
             datasets = dict(region.datasets or {})
             item = dict(datasets.get(step) or {})
             item["message"] = str(message)[:200]
+            item["progress_at"] = now().isoformat(timespec="seconds")   # heartbeat (region_watchdog, screens)
             datasets[step] = item
             region.datasets = datasets
+            region.updated_at = now()
             db.commit()
         except Exception:  # noqa: BLE001
             db.rollback()

@@ -279,6 +279,7 @@ LANE_LOCKS={'basic':REGION_LOCK,'kapt':REGION_KAPT_LOCK,'vworld':'carbon:region-
 LOCK_RETRY_SECONDS=30
 
 LANE_OF_LOCK={lock:lane for lane,lock in LANE_LOCKS.items()}
+LANE_HOLDER_KEY='carbon:lane-holder:{lane}'
 
 def _run_region_locked(task,lock_name,code,steps,force,ordered=True):
     """Run ``prepare_region`` while holding ``lock_name``; reschedule quota-bound steps for the next quota day.
@@ -300,10 +301,14 @@ def _run_region_locked(task,lock_name,code,steps,force,ordered=True):
         raise task.retry(countdown=LOCK_RETRY_SECONDS)
     if ordered:
         leave(connection,lane,code)
+    # Which region holds the lane (region_watchdog: a RUNNING step whose region does not hold its lane is orphaned).
+    holder=LANE_HOLDER_KEY.format(lane=lane)
+    try: connection.set(holder,code,ex=600)
+    except Exception: pass
     stop=threading.Event()
     def keep():
         while not stop.wait(150):
-            try: lock.reacquire()
+            try: lock.reacquire();connection.expire(holder,600)
             except Exception: pass
     threading.Thread(target=keep,name='region-lock',daemon=True).start()
     try:
@@ -321,8 +326,14 @@ def _run_region_locked(task,lock_name,code,steps,force,ordered=True):
             return result
     finally:
         stop.set()
+        try:
+            if _text(connection.get(holder))==code:connection.delete(holder)
+        except Exception: pass
         try: lock.release()
         except Exception: pass
+
+def _text(value):
+    return value.decode() if isinstance(value,bytes) else ('' if value is None else str(value))
 
 def lane_plan(steps=None):
     """Split the requested steps into lanes: (basic, kapt, vworld, bldhub, finalize?)."""
@@ -382,6 +393,32 @@ def run_region_lane(self,lane,code,steps,force=False,finalize=False,then=None):
 def run_region_kapt(self,code,steps,force=False):
     """Kept for tasks queued before the lane split (2026-11-21): hand K-apt energy (+ finalize when asked) to the lane task."""
     _queue_lane('kapt',code,[s for s in steps if s!='finalize'],force,'finalize' in steps)
+
+@celery_app.task(name='region_watchdog')
+def run_region_watchdog():
+    """Every region_watchdog.INTERVAL_S: requeue orphaned / overdue / failed region steps and write data/ops/watchdog.json.
+    One chain only: a second chain (e.g. scheduled again at a worker start) finds the run key and stops."""
+    import redis
+    from .region_watchdog import INTERVAL_S,RUN_KEY,check,write_report
+    connection=redis.Redis.from_url(os.getenv('REDIS_URL','redis://redis:6379/0'))
+    if not connection.set(RUN_KEY,'1',nx=True,ex=INTERVAL_S-60):
+        return
+    try:
+        with Session() as db:
+            write_report(check(db,connection))
+    except Exception as exc:  # noqa: BLE001 - the next pass tries again
+        write_report({'error':str(exc)[:300]})
+    finally:
+        try: run_region_watchdog.apply_async(countdown=INTERVAL_S)
+        except Exception: pass
+
+from celery.signals import worker_ready
+
+@worker_ready.connect
+def _start_region_watchdog(**kwargs):
+    if os.getenv('REGION_WATCHDOG','1')!='0':
+        try: run_region_watchdog.apply_async(countdown=60)
+        except Exception: pass
 
 @celery_app.task(name='collect_national')
 def run_national(datasets):
