@@ -42,11 +42,18 @@ describe('SimulationPage', () => {
         annual: { current: { carbon_kg: 10321305 }, scenario: { electricity_kwh: 3320137.9, gas_kwh: 4339656.2, carbon_kg: 2230040.9, electricity_carbon_kg: 1437619.7 }, reference: { electricity_kwh: 4150172.4, gas_kwh: 5424570.2, carbon_kg: 2787551.1, electricity_carbon_kg: 1797024.6 }, difference: { carbon_kg: -8091264.1 } },
         savings_pct: { electricity_kwh: 20.0, gas_kwh: 20.0, carbon_kg: 20.0 }, baseline_intensity: { electricity_kwh_per_m2: 36.9, gas_kwh_per_m2: 48.2 }, legal_status: '조례 기본 상한 이내 (1차 확인)',
         assumptions: ['PV 비율은 전기 수요 상쇄율 가정이며 설비 발전량 예측이 아닙니다.'],
+        district_heat: { data_class: 'ESTIMATED', heat_kwh: 4115369.7, carbon_kg: 593436.3, heat_kwh_per_m2: 57.2, individual_gas_kwh_per_m2: 60.3, district_gas_kwh_per_m2: 3.1,
+          district_share_pct: 100, floor_area_m2: 72000, year: 2025, factor_kg_per_kwh: 0.1442, branch: '세종', source: '한국지역난방공사 세종지사 2025년 공표 열 배출계수' },
       } : {};
       return new Response(JSON.stringify(body), { status: 200 });
     });
     page();
     await userEvent.click(screen.getByRole('button', { name: '시나리오 계산' }));
+    // 지역난방 열(추정)은 운영탄소(전력+가스)에 섞지 않고 따로, 더한 값은 '약'으로
+    const heat = await screen.findByTestId('district-heat-note');
+    expect(heat).toHaveTextContent(/지역난방 열\(추정\) 연 593\.4\s?tCO₂eq/);
+    expect(heat).toHaveTextContent(/더하면 약 2,823\.5\s?tCO₂eq/);
+    expect(heat).toHaveTextContent('세종지사 2025년 0.1442');
     const hero = await screen.findByTestId('plan-hero');
     expect(hero).toHaveTextContent('연간 운영탄소');
     expect(hero).toHaveTextContent(/2,230\.0\s?tCO₂eq/);

@@ -87,7 +87,7 @@ def summarize(facts,use_local):
         return dict(default,mode='TEMPLATE_FALLBACK',reason='로컬 모델에 연결할 수 없거나 응답 검증에 실패하여 검증된 서식으로 작성했습니다.')
 
 def create_snapshot(db,year,grid_id,scenario_ids,region=None):
-    from .regions import region_for_grid
+    from .regions import DEFAULT_REGION,region_for_grid
     from .overlays import context_facts,grid_context,place_label
     if grid_id and not db.get(Grid,grid_id):raise ValueError('격자를 찾을 수 없습니다')
     region=region or region_for_grid(db,grid_id)
@@ -110,8 +110,13 @@ def create_snapshot(db,year,grid_id,scenario_ids,region=None):
         if reduction.get('available') and actual_grid:
             # 대상지 지역난방 비중(지금 DB 단지로 다시 셈): 지역난방 열 탄소가 계산 밖임을 사다리 가정에 적는다(2026-11-20)
             from .kapt import ApartmentComplex
-            from .service import district_heating_note,heating_share
-            note=district_heating_note(heating_share(db.scalars(select(ApartmentComplex).where(ApartmentComplex.grid_id==actual_grid)).all()))
+            from .regions import scope as region_scope
+            from .service import district_heat_estimate,district_heat_text,district_heating_note,heating_share
+            share=heating_share(db.scalars(select(ApartmentComplex).where(ApartmentComplex.grid_id==actual_grid)).all())
+            # 지역난방 열(추정, 기준 문서 5.16): 사다리 합계에 섞지 않고 따로. 공급 지사 계수가 없으면 빠졌다는 문장만
+            heat=district_heat_estimate(db,year,region_scope(db,region),region or DEFAULT_REGION,share,r.result.get('gross_floor_area'))
+            reduction['district_heat']=heat
+            note=district_heat_text(heat) if heat else district_heating_note(share)
             if note:reduction['assumptions'].append(note)
         scenarios.append({'id':sid,'label':label,'inputs':s.inputs,'result':r.result,'created_at':s.created_at.isoformat(),'reduction_plan':reduction})
         plan_facts+=plan_sentence_facts(n,label,s.inputs,r.result)
