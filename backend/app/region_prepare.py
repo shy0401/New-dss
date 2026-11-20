@@ -523,20 +523,26 @@ def step_ordinance(db: Any, region: StudyRegion, log: Log) -> dict[str, Any]:
 
 
 def step_register(db: Any, region: StudyRegion, log: Log) -> dict[str, Any]:
-    from .official import collect_register
+    from .official import collect_register, prefetch_register
     leaves = legal_leaves(db, region.legal_codes or [])
     if not leaves:
         raise ValueError("이 지역의 법정동·리 코드가 없습니다 (전국 법정 행정구역 자료 필요)")
+    # 여러 흐름으로 쪽을 먼저 캐시에 받아 둠(2026-11-21, 기본 4흐름). 아래 순차 수집은 캐시를 읽고 DB에 씀
+    log("건축물대장 쪽 미리 받는 중 (여러 흐름)")
+    prefetch_register(leaves)
     result = collect_register(db, "full", lambda f, m: log(m) if int(f * 100) % 10 == 0 else None, regions=leaves, update=False)
     return {"rows": result["rows"], "message": f"표제부 {result['rows']:,}건 (법정동·리 {len(leaves)}곳, 격자 연결 {result['linked']:,}건, 일시 오류 {result['failed']}건)"}
 
 
 def step_building_energy(db: Any, region: StudyRegion, log: Log) -> dict[str, Any]:
-    from .energy_parcels import build_parcel_grid, collect_energy_all
+    from .energy_parcels import build_parcel_grid, collect_energy_all, prefetch_energy
     leaves = legal_leaves(db, region.legal_codes or [])
     if not leaves:
         raise ValueError("이 지역의 법정동·리 코드가 없습니다")
     year = analysis_year()
+    # 여러 흐름으로 쪽을 먼저 캐시에 받아 둠(2026-11-21, 기본 2흐름). 아래 순차 수집은 캐시를 읽고 DB에 씀
+    log("건축HUB 건물 에너지 쪽 미리 받는 중 (여러 흐름)")
+    prefetch_energy(leaves, year)
     stats = collect_energy_all(db, year, lambda f, m: log(m) if int(f * 100) % 5 == 0 else None, regions=leaves)
     build_parcel_grid(db, region.legal_codes)
     return {"rows": stats["inserted"] + stats["updated"], "message": f"{year}년 법정동·리 {len(leaves)}곳, 요청 {stats['requests']:,}회, 새 행 {stats['inserted']:,}", "year": year}
@@ -821,25 +827,32 @@ REQUIRES = {step: ("grid",) for step in STEPS if step not in ("grid", "ordinance
 REQUIRES["kapt_energy"] = ("grid", "complexes")
 
 
-# K-apt monthly energy (gateway ~1 request/s, 2026-10-18) and the step that needs it. The worker runs these as a separate
-# task under their own lock so the next region's 건축HUB · VWorld · 기상 steps (other providers, other limits) run meanwhile
-# (2026-11-21: a region spent ~45-75 min on K-apt while its other steps waited, and the other way round).
-KAPT_STEPS = ("kapt_energy", "finalize")
-KAPT_QUEUED_MESSAGE = "K-apt 차례 대기 (K-apt 월별 에너지는 한 번에 한 지역씩, 앞 지역이 끝나면 시작)"
+# Collection lanes (2026-11-21). Each provider group runs as its own worker task under its own lock (one region at a
+# time per lane), so different regions' providers overlap: K-apt (gateway ~1 request/s per key) · VWorld · 건축HUB.
+# 건축HUB follows the region's VWorld lane: building energy links parcels to cells through the cadastral layer
+# (``build_parcel_grid``) and the register through ``link_register_grids``. finalize runs after the last lane.
+# Measured before the split (2026-11-21, 제주시): VWorld ~60 min, then 대장 ~45 min, then building energy, all one at a time.
+LANES = {
+    "basic": ("grid", "sgis_admin", "complexes", "weather", "ordinance"),
+    "vworld": ("zoning", "zoning_other", "special_areas", "buildings", "cadastral"),
+    "bldhub": ("register", "building_energy"),
+    "kapt": ("kapt_energy",),
+}
+ACTIVE_STATES = ("QUEUED", "RUNNING")
 
 
-def prepare_region(db: Any, code: str, steps: list[str] | None = None, *, log: Log = print, force: bool = False,
-                   defer_kapt: bool = False) -> dict[str, Any]:
+def other_lanes_busy(datasets: dict[str, Any]) -> list[str]:
+    """Steps other than finalize that are still queued or running (another lane of the region)."""
+    return [s for s in STEPS if s != "finalize" and (datasets.get(s) or {}).get("status") in ACTIVE_STATES]
+
+
+def prepare_region(db: Any, code: str, steps: list[str] | None = None, *, log: Log = print, force: bool = False) -> dict[str, Any]:
     """Run the preparation steps of one region in order. Finished steps are skipped unless ``force``.
 
-    ``defer_kapt``: leave K-apt energy and finalize for a separate run (marked QUEUED, returned as ``kapt_deferred``)."""
+    Steps of other lanes that are still QUEUED/RUNNING keep the region PREPARING (see ``LANES``)."""
     region = create_region(db, code)
     db.refresh(region)
     wanted = [step for step in STEPS if steps is None or step in steps]
-    deferred: list[str] = []
-    if defer_kapt:
-        deferred = [step for step in wanted if step in KAPT_STEPS]
-        wanted = [step for step in wanted if step not in KAPT_STEPS]
     region.status = "PREPARING"
     region.message = "지역 자료를 수집하는 중입니다"
     db.commit()
@@ -867,28 +880,24 @@ def prepare_region(db: Any, code: str, steps: list[str] | None = None, *, log: L
         _mark(db, region, step, status, result.pop("message", None), **{k: v for k, v in result.items() if k in ("rows", "year")})
         log(f"{STEP_LABELS[step]}: {status}")
     region = db.get(StudyRegion, code)
-    if deferred:
-        kapt_state = (region.datasets or {}).get("kapt_energy", {}).get("status")
-        if "kapt_energy" in deferred and (force or kapt_state not in DONE_STATES):
-            _mark(db, region, "kapt_energy", "QUEUED", KAPT_QUEUED_MESSAGE)
-        if "finalize" in deferred:
-            _mark(db, region, "finalize", "QUEUED", "K-apt 단계 뒤에 정리")
     db.refresh(region)  # sessions keep objects after commit: read what other processes wrote
     region.status = overall_status(region.datasets or {})
     waiting = [STEP_LABELS[s] for s in STEPS if (region.datasets or {}).get(s, {}).get("status") == "WAITING"]
+    busy = other_lanes_busy(region.datasets or {}) + [s for s in ("finalize",) if (region.datasets or {}).get(s, {}).get("status") in ACTIVE_STATES]
     region.message = ("준비 완료" if region.status == "READY"
                       else f"일일 호출 한도로 남은 단계: {', '.join(waiting)} — 한도가 풀리면 이어서 수집합니다" if waiting
                       else "일부 단계가 끝나지 않았습니다 (단계별 상태 참고)")
-    if deferred:
-        # Still being prepared: the K-apt run of this region is queued behind the other regions' K-apt runs.
-        region.status, region.message = "PREPARING", "K-apt 월별 에너지 차례를 기다리는 중입니다 (다른 단계는 끝남, 단계별 상태 참고)"
+    if busy:
+        # Other lanes of this region are still queued or running (each lane waits for its own lock).
+        region.status = "PREPARING"
+        region.message = f"다른 차선 단계 진행 · 대기 중: {', '.join(STEP_LABELS[s] for s in busy)}"
     elif code == DEFAULT_REGION and not waiting:
         # The original study area's layers came from the Jeonju collection, not from these steps.
         region.status, region.message = "READY", "최초 연구 지역 (기존 자료 + 추가 단계)"
     region.updated_at = now()
     db.commit()
     forget_region_cache(code)
-    return {"code": code, "status": region.status, "datasets": region.datasets, "kapt_deferred": deferred}
+    return {"code": code, "status": region.status, "datasets": region.datasets}
 
 
 def open_region(db: Any, code: str, *, log: Log = print) -> StudyRegion:

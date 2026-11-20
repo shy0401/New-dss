@@ -128,7 +128,8 @@ def _stale(region: StudyRegion) -> bool:
         import os
 
         import redis
-        if redis.Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0")).exists("carbon:region-prepare", "carbon:region-kapt"):
+        if redis.Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0")).exists(
+                "carbon:region-prepare", "carbon:region-kapt", "carbon:region-vworld", "carbon:region-bldhub"):
             return False
     except Exception:  # noqa: BLE001 - no Redis: trust the timestamp
         pass

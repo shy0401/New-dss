@@ -374,34 +374,81 @@ def _fake_region_db(monkeypatch):
     return db, called
 
 
-def test_region_run_leaves_kapt_for_its_own_run_and_the_kapt_run_finishes_it(monkeypatch):
-    """2026-11-21: K-apt 월별 에너지(초당 약 1회)와 정리 단계는 따로 된 작업(자체 잠금)으로 넘기고, 지역의 다른 단계
-    (건축HUB · VWorld · 기상)는 그동안 다음 지역에서 돈다. 넘긴 단계는 QUEUED, 지역 상태는 PREPARING으로 남는다."""
+def test_a_lane_run_keeps_the_region_preparing_while_other_lanes_are_queued(monkeypatch):
+    """2026-11-21 차선 나누기(region_prepare.LANES): 한 차선이 끝나도 다른 차선 단계가 QUEUED/RUNNING이면 지역은 PREPARING."""
     from app import region_prepare
     db, called = _fake_region_db(monkeypatch)
-    result = region_prepare.prepare_region(db, "48330", log=lambda m: None, defer_kapt=True)
-    assert result["kapt_deferred"] == ["kapt_energy", "finalize"]
-    assert "kapt_energy" not in called and "finalize" not in called and "building_energy" in called
-    assert result["datasets"]["kapt_energy"]["status"] == "QUEUED" and "K-apt 차례 대기" in result["datasets"]["kapt_energy"]["message"]
-    assert result["datasets"]["finalize"]["status"] == "QUEUED" and result["status"] == "PREPARING"
+    region = db.get(region_prepare.StudyRegion, "48330")
+    for step in ("kapt_energy", "zoning", "register", "finalize"):
+        region_prepare._mark(db, region, step, "QUEUED", "대기 중")
+    result = region_prepare.prepare_region(db, "48330", list(region_prepare.LANES["basic"]), log=lambda m: None)
+    assert called == list(region_prepare.LANES["basic"])
+    assert result["status"] == "PREPARING" and result["datasets"]["kapt_energy"]["status"] == "QUEUED"
+    assert region_prepare.other_lanes_busy(result["datasets"]) == ["zoning", "register", "kapt_energy"]   # finalize는 세지 않음
     called.clear()
-    result = region_prepare.prepare_region(db, "48330", result["kapt_deferred"], log=lambda m: None)   # K-apt 작업
-    assert called == ["kapt_energy", "finalize"] and result["status"] == "READY" and result["kapt_deferred"] == []
-    # 이미 받은 K-apt는 다시 QUEUED로 되돌리지 않음(정리만 다시)
-    result = region_prepare.prepare_region(db, "48330", ["complexes", "kapt_energy", "finalize"], log=lambda m: None, defer_kapt=True, force=False)
-    assert result["datasets"]["kapt_energy"]["status"] == "DONE" and result["kapt_deferred"] == ["kapt_energy", "finalize"]
+    rest = [s for s in region_prepare.STEPS if s not in region_prepare.LANES["basic"]]
+    result = region_prepare.prepare_region(db, "48330", rest, log=lambda m: None)
+    assert result["status"] == "READY" and region_prepare.other_lanes_busy(result["datasets"]) == []
 
 
-def test_region_task_queues_the_kapt_task_under_its_own_lock(monkeypatch):
+def test_lane_plan_and_order(monkeypatch):
+    """기본 단계 뒤 K-apt · VWorld 차선을 넣고, 건축HUB는 VWorld 뒤, 정리는 마지막 차선이 함."""
     from app import tasks
     runs, queued = [], []
-    def fake_run(task, lock_name, code, steps, force, defer_kapt):
-        runs.append((lock_name, code, steps, defer_kapt))
-        return {"kapt_deferred": ["kapt_energy", "finalize"] if defer_kapt else []}
-    monkeypatch.setattr(tasks, "_run_region_locked", fake_run)
-    monkeypatch.setattr(tasks.run_region_kapt, "delay", lambda *a: queued.append(a))
+    monkeypatch.setattr(tasks, "_run_region_locked", lambda task, lock, code, steps, force: runs.append((lock, steps)) or {"datasets": {}})
+    monkeypatch.setattr(tasks.run_region_lane, "delay", lambda *a: queued.append(a))
     tasks.run_prepare_region.run("48330", None, False)
-    assert runs == [("carbon:region-prepare", "48330", None, True)] and queued == [("48330", ["kapt_energy", "finalize"], False)]
-    tasks.run_region_kapt.run("48330", ["kapt_energy", "finalize"], False)
-    assert runs[-1] == ("carbon:region-kapt", "48330", ["kapt_energy", "finalize"], False)
-    assert tasks.LOCK_RETRY_SECONDS == 30
+    assert runs == [("carbon:region-prepare", ["grid", "sgis_admin", "complexes", "weather", "ordinance"])]
+    assert queued == [("kapt", "48330", ["kapt_energy"], False, True, None),
+                      ("vworld", "48330", ["zoning", "zoning_other", "special_areas", "buildings", "cadastral"], False, True, ["register", "building_energy"])]
+    # VWorld 차선이 끝나면 건축HUB 차선을 넣고 정리는 하지 않음
+    runs.clear(); queued.clear()
+    tasks.run_region_lane.run("vworld", "48330", ["zoning"], False, True, ["register", "building_energy"])
+    assert runs == [("carbon:region-vworld", ["zoning"])] and queued == [("bldhub", "48330", ["register", "building_energy"], False, True, None)]
+    # 건축HUB 차선 끝: 다른 차선(K-apt)이 아직 돌면 정리 안 함, 다 끝났으면 정리
+    runs.clear()
+    monkeypatch.setattr(tasks, "_run_region_locked", lambda task, lock, code, steps, force: runs.append((lock, steps)) or {"datasets": {"kapt_energy": {"status": "RUNNING"}}})
+    tasks.run_region_lane.run("bldhub", "48330", ["register"], False, True, None)
+    assert runs == [("carbon:region-bldhub", ["register"])]
+    runs.clear()
+    monkeypatch.setattr(tasks, "_run_region_locked", lambda task, lock, code, steps, force: runs.append((lock, steps)) or {"datasets": {"kapt_energy": {"status": "DONE"}}})
+    tasks.run_region_lane.run("kapt", "48330", ["kapt_energy"], False, True, None)
+    assert runs == [("carbon:region-kapt", ["kapt_energy"]), ("carbon:region-kapt", ["finalize"])]
+    # 일부 단계만 다시: 건축HUB만 → VWorld 없이 바로 건축HUB 차선
+    queued.clear(); runs.clear()
+    tasks.run_prepare_region.run("27290", ["complexes", "register", "building_energy", "finalize"], True)
+    assert runs[0] == ("carbon:region-prepare", ["complexes"]) and queued == [("bldhub", "27290", ["register", "building_energy"], True, True, None)]
+    assert tasks.LOCK_RETRY_SECONDS == 30 and set(tasks.LANE_LOCKS) == {"basic", "kapt", "vworld", "bldhub"}
+
+
+def test_parallel_prefetch_fills_every_page_with_one_session_per_flow(monkeypatch):
+    """S1(2026-11-21): 대장 · 건물 에너지 쪽을 여러 흐름으로 미리 받음. 흐름마다 자기 세션, 모든 쪽을 한 번씩."""
+    import threading
+    from app import energy_parcels, official
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "k")
+    monkeypatch.setattr(official, "official_spec", lambda *a: {})
+    monkeypatch.setattr(official, "verified_operation", lambda spec, op: "u")
+    seen, sessions, lock = [], [], threading.Lock()
+
+    class Session:
+        def __init__(self):
+            with lock:
+                sessions.append(1)
+        def get(self, provider, operation, url, params):
+            with lock:
+                seen.append((params.get("bjdongCd"), params.get("useYm"), operation, params["pageNo"]))
+            total = 250 if params.get("bjdongCd") == "10100" else 50   # 10100 = 3쪽, 나머지 1쪽
+            body = ('{"response":{"header":{"resultCode":"00"},"body":{"items":{"item":[{"a":1}]},"totalCount":%d}}}' % total).encode()
+            return {"body": body, "status": 200, "id": "x"}
+        def forget(self, r): pass
+        def reset_connection(self): pass
+        def record_error(self, r, m): pass
+
+    regions = [{"sigunguCd": "48330", "bjdongCd": b} for b in ("10100", "10200", "10300", "10400", "10500")]
+    done, failed = official.prefetch_register(regions, flows=4, session_factory=Session)
+    assert (done, failed) == (3 + 4, 0) and len(sessions) == 4
+    assert sorted(p for b, _, _, p in seen if b == "10100") == [1, 2, 3]
+    seen.clear(); sessions.clear()
+    done, failed = energy_parcels.prefetch_energy(regions[:2], 2025, flows=2, months=["202501", "202502"], session_factory=Session)
+    assert (done, failed) == (2 * 2 * (3 + 1), 0) and len(sessions) == 2   # (10100: 3쪽 + 10200: 1쪽) × 2달 × 전기 · 가스
+    assert official.prefetch_register(regions, flows=1, session_factory=Session) == (0, 0)   # 1흐름이면 미리 받지 않음(순차 그대로)
