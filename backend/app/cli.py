@@ -24,7 +24,7 @@ def init_tables():
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('command',choices=['demo','online','status','enrich','collect','collect-history','collect-missing','validate-models','snapshot','llm-dataset','llm-eval','import-sgis-grid','import-sgis-grid500','import-regional-stats','import-team-grid','import-kcsm100',
         'national-admin','national-sgis','national-complexes','national-grid500','national-ordinances','national-all','prepare-region','regions',
-        'check-standard','apply-standard','backfill-solar','region-energy-history','region-kapt-history','region-sgis-history','verify-cases','place-parcels','estimate-gaps','fetch-kea-rating']);parser.add_argument('--year',type=int,default=DEFAULT_YEAR)
+        'check-standard','apply-standard','backfill-solar','region-energy-history','region-kapt-history','region-sgis-history','verify-cases','place-parcels','estimate-gaps','fetch-kea-rating','prepare-national']);parser.add_argument('--year',type=int,default=DEFAULT_YEAR)
     parser.add_argument('--from',dest='from_year',type=int,default=2015);parser.add_argument('--to',dest='to_year',type=int,default=DEFAULT_YEAR)
     parser.add_argument('--datasets',default='',help='comma-separated: sgis,kma_asos,kapt_energy,energy,vworld_zoning,vworld_buildings,vworld_cadastral,building_register');parser.add_argument('--force',action='store_true')
     parser.add_argument('--source',choices=['energy','weather','kapt-energy','kma','sgis','vworld-zoning','vworld-cadastral'])
@@ -41,6 +41,10 @@ def main():
     parser.add_argument('--record',default=None,help='verify-cases: write this PC\'s results as the expected values to this file (reference PC only)')
     parser.add_argument('--out',default=None,help='verify-cases: write the full comparison (JSON) to this file')
     parser.add_argument('--note',default=None,help='verify-cases --record: data version note stored in the file')
+    parser.add_argument('--until',type=int,default=None,help='prepare-national: queue regions ranked up to this (backend/reference/region_priority.csv)')
+    parser.add_argument('--start',type=int,default=1,help='prepare-national: first rank to queue (default 1)')
+    parser.add_argument('--dry-run',action='store_true',help='prepare-national: list what would be queued')
+    parser.add_argument('--cancel',action='store_true',help='prepare-national: stop — regions not started yet are not run (started ones finish)')
     args=parser.parse_args();init_tables()
     with Session() as db:
         seed_sources(db)
@@ -146,6 +150,19 @@ def main():
             steps=[s.strip() for s in args.steps.split(',') if s.strip()] or None
             result=prepare_region(db,args.region,steps,log=lambda m:print(m,flush=True),force=args.force)
             print(json.dumps({'code':result['code'],'status':result['status'],'datasets':{k:{'status':v.get('status'),'message':v.get('message')} for k,v in (result['datasets'] or {}).items()}},ensure_ascii=False,indent=1))
+        elif args.command=='prepare-national':
+            # 전국 수집을 순위대로(2026-11-21): --until 34 = 3단계까지. --cancel = 시작 안 한 지역은 돌리지 않음
+            from .region_priority import cancel_queued,plan,queue_national
+            if args.cancel:
+                import os,redis
+                connection=redis.Redis.from_url(os.getenv('REDIS_URL','redis://redis:6379/0'))
+                print(json.dumps({'stopped':cancel_queued(db,connection,log=lambda m:print(m,flush=True))},ensure_ascii=False))
+            else:
+                if args.until is None:raise SystemExit('--until 순위가 필요합니다 (예: --until 34 = 3단계까지)')
+                if args.dry_run:
+                    for row in plan(db,args.until,start=args.start):print(row['rank'],row['tier'],row['region_code'],row['name'],row['complexes'],row['status'],flush=True)
+                result=queue_national(db,args.until,start=args.start,dry_run=args.dry_run,log=lambda m:print(m,flush=True))
+                print(json.dumps({k:len(v) for k,v in result.items()}|{'missing':result['missing']},ensure_ascii=False))
         elif args.command=='region-energy-history':
             # 준비한 지역의 건축HUB 전 지번 과거 연도 (지역 준비는 분석 연도만 받음). --region 11740,26440 --years 2024,2022
             from .region_prepare import collect_energy_years
