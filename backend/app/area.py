@@ -921,6 +921,57 @@ def _effort_result(history: dict[str, Any], plan: dict[str, Any], target_pct: fl
     }
 
 
+HEATING_KINDS = ("개별난방", "지역난방", "중앙난방", "기타")
+
+
+def heating_kind(heating_type: Any) -> str | None:
+    """K-apt 난방 방식 글 → 개별난방 · 지역난방 · 중앙난방 · 기타. '-'나 빈칸은 None(미상, 0이 아님)."""
+    text = str(heating_type or "").strip()
+    if not text or text == "-":
+        return None
+    if "지역" in text:
+        return "지역난방"
+    if text.startswith("개별"):
+        return "개별난방"
+    if text.startswith("중앙"):
+        return "중앙난방"
+    return "기타"
+
+
+def heating_mix(complexes: Any) -> dict[str, Any] | None:
+    """지역(분석 지역의 K-apt 단지 전체)의 공동주택 난방 방식 구성 (2026-11-20, 관측: K-apt 단지 기본정보).
+
+    세대 비율은 난방 방식을 알고 세대수가 있는 단지만으로 낸다. 미상은 따로 센다. 단지가 없으면 None.
+    """
+    rows = list(complexes)
+    if not rows:
+        return None
+    kinds = {k: {"kind": k, "complexes": 0, "households": 0, "_with_households": 0} for k in HEATING_KINDS}
+    unknown = 0
+    for c in rows:
+        kind = heating_kind(c.get("heating_type"))
+        if kind is None:
+            unknown += 1
+            continue
+        kinds[kind]["complexes"] += 1
+        if c.get("households"):
+            kinds[kind]["households"] += int(c["households"])
+            kinds[kind]["_with_households"] += 1
+    from .reduction_plan import ENVELOPE_GAS_SAVING
+    known_households = sum(k["households"] for k in kinds.values())
+    for k in kinds.values():
+        # 세대수가 있는 단지가 하나도 없는 방식은 비율을 비운다(0 %로 채우지 않음)
+        has_households = k.pop("_with_households") > 0
+        k["household_share_pct"] = round(k["households"] / known_households * 100, 1) if known_households and has_households else None
+        if not has_households:
+            k["households"] = None
+    return {"complexes": len(rows), "unknown_complexes": unknown, "households": known_households or None,
+            "kinds": [k for k in kinds.values() if k["complexes"]], "source": "K-apt 단지 기본정보(난방 방식), 이 도구에 받아 둔 단지",
+            "reading": f"단열·창호 가스 지표(−{ENVELOPE_GAS_SAVING * 100:g}%)는 개별난방 단지 짝 비교에서 나온 값이고, 지역난방 단지의 난방 열 탄소는 "
+                       "이 도구 계산에 들어가지 않습니다(지역난방 열 배출계수 없음)",
+            "value_kind": "관측(K-apt 등록 값). K-apt에 등록된 단지만이라 소규모 공동주택 · 단독주택은 빠집니다"}
+
+
 def building_stock(area: dict[str, Any], complexes: dict[str, dict[str, Any]], years: list[int]) -> dict[int, dict[str, Any]]:
     """Apartment stock in the area at the end of each year (by 사용승인일). Only plausible floor areas count."""
     members = [complexes[c] for c in area["complex_codes"] if c in complexes]
@@ -1615,6 +1666,8 @@ def analyze(db: Any, spec: dict[str, Any], from_year: int, to_year: int, event_y
     history["industry"] = industry_block(history, effort_result, (inputs.get("region") or {}).get("code"))
     from .reference_tables import region_guide
     history["region_guide"] = region_guide((inputs.get("region") or {}).get("code") or "52110")
+    if history["region_guide"] is not None:
+        history["region_guide"]["heating"] = heating_mix(inputs["complexes"].values())
     members = set(area["grid_ids"])
     grid_features = {"type": "FeatureCollection", "features": [
         {"type": "Feature", "id": g["id"], "geometry": g["geometry"], "properties": {"id": g["id"]}}
