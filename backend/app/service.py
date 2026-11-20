@@ -98,11 +98,13 @@ def district_heat_estimate(db,year,sc,region_code,share,floor_area_m2):
     return {'data_class':'ESTIMATED','heat_kwh':round(heat_kwh,1),'carbon_kg':round(heat_kwh*factor['kg_per_kwh'],1),
             'heat_kwh_per_m2':round(intensity,1),'individual_gas_kwh_per_m2':round(individual,1),'district_gas_kwh_per_m2':round(district,1),
             'district_share_pct':share['district_share_pct'],'floor_area_m2':round(float(floor_area_m2),1),'year':year,
-            'factor_kg_per_kwh':factor['kg_per_kwh'],'branch':factor['branch'],'source':factor['source']}
+            'factor_kg_per_kwh':factor['kg_per_kwh'],'branch':factor['branch'],'source':factor['source'],
+            'supplier':factor.get('supplier'),'factor_kind':factor.get('factor_kind')}
 
 def district_heat_text(est):
     """계산 엔진 문장(숫자는 est에서만)."""
-    return (f"지역난방 열(추정): 연 {est['heat_kwh']:,.0f} kWh = 계획 연면적 {est['floor_area_m2']:,.0f} m² × 지역난방 비중 {est['district_share_pct']:.0f}% × "
+    label='지역난방 열(추정, 대체 계수)' if est.get('factor_kind')=='SUBSTITUTE' else '지역난방 열(추정)'
+    return (f"{label}: 연 {est['heat_kwh']:,.0f} kWh = 계획 연면적 {est['floor_area_m2']:,.0f} m² × 지역난방 비중 {est['district_share_pct']:.0f}% × "
             f"열 원단위 {est['heat_kwh_per_m2']:.1f} kWh/m²({est['year']}년 같은 지역 개별난방 단지 가스 {est['individual_gas_kwh_per_m2']:.1f} − "
             f"지역난방 단지 가스 {est['district_gas_kwh_per_m2']:.1f}, 가정). 탄소는 연 {est['carbon_kg']/1000:,.1f} tCO2eq"
             f"({est['source']} {est['factor_kg_per_kwh']:.4f} kgCO2eq/kWh). 관측 전력·가스 합계에 섞지 않고 따로 적으며, 감축 단계(단열·창호 등)는 열에 적용하지 않았습니다.")

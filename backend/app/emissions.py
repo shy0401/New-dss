@@ -55,17 +55,38 @@ KDHC_HEAT_KG_PER_TJ = {
 # 사업자(남양주: 별내에너지)인 곳, 지정 지역이 없는 곳(제주)은 없음(None) → 열 탄소를 계산하지 않고 가정 문장만
 HEAT_SUPPLIER_BRANCH = {"36110": "세종", "41110": "수도권연계", "27290": "대구", "48330": "양산"}
 
+# 공급자가 편람으로 확인됐으나 공표 열 배출계수가 없는 사업자(기준 문서 5.16, 2026-11-21): 지자체 온실가스 배출량 산정지침 Ver4.1의
+# 지역난방 열 간접배출계수 공통값 0.1226 tCO2eq/Gcal(2007 · 2008년 전국 집단에너지시설 평균, 한국환경공단)을 대체(SUBSTITUTE)로.
+# 값 · 뜻은 서울시 온실가스 인벤토리 2021 · 2022년도분 표와 탄소공간지도(국토교통부) 산정방법으로 확인(지침 원문 공식 사본은 확인 필요).
+HEAT_SUPPLIER_OTHER = {"11740": "나래에너지서비스", "26440": "부산도시가스", "52140": "전북집단에너지", "41360": "별내에너지"}
+LOCAL_GUIDELINE_HEAT_TCO2EQ_PER_GCAL = 0.1226
+KWH_PER_GCAL = 1163.0                       # 1 Gcal = 4.1868 GJ = 1,163 kWh
+LOCAL_GUIDELINE_HEAT_KG_PER_KWH = round(LOCAL_GUIDELINE_HEAT_TCO2EQ_PER_GCAL * 1000 / KWH_PER_GCAL, 4)   # 0.1054
+
 
 def district_heat_factor(region_code: str | None, year: int) -> dict | None:
-    """지역난방 열 1 kWh의 kgCO2eq (공급 지사 · 그해 공표값). 지사나 그해 값이 없으면 None(가까운 해로 채우지 않음)."""
-    branch = HEAT_SUPPLIER_BRANCH.get(str(region_code or ""))
-    values = (KDHC_HEAT_KG_PER_TJ.get(branch) or {}).get(int(year)) if branch else None
-    if not values:
-        return None
-    co2, ch4, n2o = values
-    per_tj = co2 + ch4 * GWP_CH4 + n2o * GWP_N2O
-    return {"branch": branch, "year": int(year), "kg_per_kwh": round(per_tj * 3.6e-6, 4), "co2eq_kg_per_tj": round(per_tj, 1),
-            "source": f"한국지역난방공사 {branch}지사 {int(year)}년 공표 열 배출계수(공공데이터포털 15090320)"}
+    """지역난방 열 1 kWh의 kgCO2eq.
+
+    한국지역난방공사 지사가 공급하면 그 지사 · 그해 공표값(그해 값이 없으면 None, 가까운 해로 채우지 않음). 공표 계수가 없는
+    사업자(``HEAT_SUPPLIER_OTHER``)는 지자체 산정지침 공통값을 대체로(연도와 상관없이 같은 값). 공급자를 모르면 None."""
+    code = str(region_code or "")
+    branch = HEAT_SUPPLIER_BRANCH.get(code)
+    if branch:
+        values = (KDHC_HEAT_KG_PER_TJ.get(branch) or {}).get(int(year))
+        if not values:
+            return None
+        co2, ch4, n2o = values
+        per_tj = co2 + ch4 * GWP_CH4 + n2o * GWP_N2O
+        return {"branch": branch, "supplier": "한국지역난방공사", "factor_kind": "PUBLISHED", "year": int(year),
+                "kg_per_kwh": round(per_tj * 3.6e-6, 4), "co2eq_kg_per_tj": round(per_tj, 1),
+                "source": f"한국지역난방공사 {branch}지사 {int(year)}년 공표 열 배출계수(공공데이터포털 15090320)"}
+    supplier = HEAT_SUPPLIER_OTHER.get(code)
+    if supplier:
+        return {"branch": supplier, "supplier": supplier, "factor_kind": "SUBSTITUTE", "year": int(year),
+                "kg_per_kwh": LOCAL_GUIDELINE_HEAT_KG_PER_KWH, "co2eq_kg_per_tj": None,
+                "source": (f"대체 계수: {supplier}의 공표 열 배출계수가 없어 지자체 온실가스 배출량 산정지침 공통값 "
+                           f"{LOCAL_GUIDELINE_HEAT_TCO2EQ_PER_GCAL} tCO2eq/Gcal(2007 · 2008년 전국 평균, 공급자 값 아님)")}
+    return None
 
 
 def ensure_gas_factor(db):
