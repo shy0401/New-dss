@@ -1668,6 +1668,8 @@ def analyze(db: Any, spec: dict[str, Any], from_year: int, to_year: int, event_y
     history["region_guide"] = region_guide((inputs.get("region") or {}).get("code") or "52110")
     if history["region_guide"] is not None:
         history["region_guide"]["heating"] = heating_mix(inputs["complexes"].values())
+        # 감축 방안의 태양광 용량에 쓰는 지역 발전량(solar.py 추정, 기준 문서 5.13). 없으면 None(0이 아님)
+        history["region_guide"]["solar"] = history.get("solar")
     members = set(area["grid_ids"])
     grid_features = {"type": "FeatureCollection", "features": [
         {"type": "Feature", "id": g["id"], "geometry": g["geometry"], "properties": {"id": g["id"]}}

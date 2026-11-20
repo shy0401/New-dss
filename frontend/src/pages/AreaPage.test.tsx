@@ -259,6 +259,29 @@ describe('RegionGuidePanel (지역 구분 · 평년 기후 · 방향 가이드 �
     expect(row.textContent).toContain('개별난방 단지 짝 비교');
   });
 
+  it('shows the regional PV yield next to normal sunshine, the cooling measures with their use and the rate note', async () => {
+    const { RegionGuidePanel } = await import('./AreaPage');
+    const { render: r, screen: sc } = await import('@testing-library/react');
+    const extra = { reference: { station: '전주', sunshine_hours_year: 2063 }, rate_note: '감축률은 지역에 따라 크게 다르지 않다고 봅니다: 2.21 · 2.72%p',
+      solar: { year: 2025, yield_kwh_per_kw: 1199.9, irradiation_kwh_m2: 1499.9, performance_ratio: 0.8, source: 'ERA5-Land', source_type: 'FALLBACK' },
+      cooling: { items: [{ label: '외부 차양·일사 조절', use: '지표만', indicator: '냉방 부하 −34.5%' }, { label: '쿨루프(고반사 지붕)', use: '범위 참고(근거표, 값으로 쓰지 않음)', indicator: null }],
+        reading: '냉방도일이 전주의 1.06배로 냉방이 전주보다 더 필요한 지역입니다. 냉방 수단의 효과는 냉방 에너지에 대한 %' } };
+    r(<RegionGuidePanel analysis={{ history: { region_guide: { ...guide, ...extra } } } as never} />);
+    expect(sc.getByTestId('region-guide-solar').textContent).toContain('1,200 kWh');
+    expect(sc.getByTestId('region-guide-solar').textContent).toContain('(대체 자료: 재분석)');   // 관측 · 대체를 섞지 않음
+    expect(sc.getByTestId('region-guide-solar').textContent).toContain('평년 일조 2,300시간(전주 2,063시간)');
+    expect(sc.getByTestId('region-guide-cooling').textContent).toContain('쿨루프(고반사 지붕)(범위 참고');
+    expect(sc.getByTestId('region-guide-cooling').textContent).toContain('더 필요한 지역');
+    expect(sc.getByTestId('region-guide-rate-note').textContent).toContain('2.21 · 2.72%p');
+  });
+
+  it('says no data for a region without a complete solar year instead of zero', async () => {
+    const { RegionGuidePanel } = await import('./AreaPage');
+    const { render: r, screen: sc } = await import('@testing-library/react');
+    r(<RegionGuidePanel analysis={{ history: { region_guide: { ...guide, solar: null } } } as never} />);
+    expect(sc.getByTestId('region-guide-solar').textContent).toContain('자료 없음');
+  });
+
   it('keeps an unmapped climate empty instead of zero', async () => {
     const { RegionGuidePanel } = await import('./AreaPage');
     const { render: r, screen: sc } = await import('@testing-library/react');

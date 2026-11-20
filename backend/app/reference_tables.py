@@ -117,6 +117,35 @@ def _plan_block(code: str, rows: list[dict[str, str]]) -> dict[str, Any] | None:
             "task_names": [r["과제_이름"] for r in rows]}
 
 
+# 감축률의 지역 차이(지역 보정 관문 G2, docs/records/2026-11-20-regional-adjustment-gates.md). 숫자는 그 기록 그대로
+RATE_NOTE = ("감축률은 지역에 따라 크게 다르지 않다고 봅니다: 단열·창호 가스 절감률이 기후에 따라 달라지는 폭이 2.21 · 2.72%p로, "
+             "보정할 기준(지표 범위 폭의 절반 3.75%p)에 못 미쳤습니다. 다만 근거 단지가 모두 중부2(13개 시군구)라 남부 · 제주는 확인하지 못했습니다")
+# 전주 단지 공동주택 전기 중 냉방 몫(지역 기후 가이드 표 README, 추정)
+COOLING_SHARE_NOTE = "냉방 수단의 효과는 냉방 에너지에 대한 %라 냉방이 적은 지역일수록 작게 나타납니다(전주 공동주택 전기 중 냉방 몫 약 6%, 추정)"
+COOLING_GROUPS = ("cool_roof", "building_greening", "cooling_efficiency")   # 근거표의 냉방 쪽 묶음(도구 수단 아님)
+
+
+def cooling_measures(cdd_ratio: float | None) -> dict[str, Any]:
+    """냉방 쪽 수단 목록과 그 지역에서의 읽는 법. 수단의 쓰임은 서비스 수단 목록(차양)과 근거표 판단에서 가져온다(새 값 없음)."""
+    from .reduction_measures import MEASURES, USE_LABEL
+    shading = next(m for m in MEASURES if m["key"] == "shading")
+    groups = {g["group"]: g for g in evidence_summary()["unlinked_groups"]}
+    items = [{"label": shading["title"], "use": USE_LABEL[shading["use"]], "indicator": shading["indicator"]}]
+    for gid in COOLING_GROUPS:
+        g = groups.get(gid)
+        if g:
+            top = g["exclusion"][0]["value"]
+            items.append({"label": g["label"], "use": "설비 사양(따로 추천 안 함)" if top == "따로 추천 안 함" else "범위 참고(근거표, 값으로 쓰지 않음)",
+                          "indicator": None})
+    if cdd_ratio is None:
+        where = "이 지역은 냉방도일이 없어(기상 지점 연결 안 됨) 전주와 견주지 못합니다"
+    elif cdd_ratio > 1:
+        where = f"냉방도일이 전주의 {cdd_ratio:.2f}배로 냉방이 전주보다 더 필요한 지역입니다"
+    else:
+        where = f"냉방도일이 전주의 {cdd_ratio:.2f}배입니다"
+    return {"items": items, "reading": f"{where}. {COOLING_SHARE_NOTE}"}
+
+
 def region_guide(code: str | None) -> dict[str, Any] | None:
     """한 시군구의 지역 구분 · 평년 기후(전주 대비) · 기준 배출 방향 가이드(추정) · 지자체 계획 건물 과제. 표에 없으면 None."""
     code = str(code or "")
@@ -136,8 +165,11 @@ def region_guide(code: str | None) -> dict[str, Any] | None:
                    "guide_electricity_change_pct": _num(c["guide_electricity_change_pct"]),
                    "guide_gas_change_pct": _num(c["guide_gas_change_pct"]),
                    "within_our_data": c.get("within_our_data_hdd_range") == "예"}
+    ref = _by_code("regional_climate_guide.csv", "52110") or {}
     return {"code": code, "name": zone_row["sigungu_name"], "design_zone": zone_row["design_zone"], "standard_zone": STANDARD_ZONE.get(zone_row["design_zone"]),
             "climate": climate, "plans": [p for p in (city_plans, sido_plans) if p],
+            "reference": {"station": ref.get("station_name"), "sunshine_hours_year": _num(ref.get("sunshine_hours_year"))},
+            "cooling": cooling_measures(climate["cdd_ratio"] if climate else None), "rate_note": RATE_NOTE,
             "sources": {"zone": DESIGN_ZONE_SOURCE, "climate": CLIMATE_SOURCE, "plans": PLAN_SOURCE},
             "value_kinds": "지역 구분 = 고시, 기후 = 평년값, 배출 방향 = 추정 가이드(예측 아님), 과제 = 지자체 계획값(자체 평가)",
             "check": "정부 표준베이스라인의 남부 ÷ 중부2 차이(−11.9%)보다 이 가이드의 남부 중앙값(에너지 −4.3%)이 작아, 미리 정한 점검에서 '맞지 않음'이었습니다. 방향만 참고하세요."}
