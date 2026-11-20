@@ -1,11 +1,18 @@
 """건축HUB 대용량 건물에너지 파일 (2026-11-21): reading, storing next to API rows, and the region step using it."""
 import zipfile
 
+import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app import bulk_energy
 from app.models import EnergyMonthly
+
+
+@pytest.fixture(autouse=True)
+def cache_in_tmp(tmp_path, monkeypatch):
+    """The 시군구 cut goes under DATA_DIR/cache: keep it in the test folder."""
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
 
 
 def line(ym, seq, sg, bd, bun, ji, qty, lot="0", road="", road_main="", road_sub="", under="0", dong="호평동"):
@@ -27,6 +34,23 @@ def make_db():
     engine = create_engine("sqlite+pysqlite:///:memory:")
     EnergyMonthly.__table__.create(engine)
     return sessionmaker(engine)()
+
+
+def test_file_is_cut_once_per_sigungu_and_reads_like_the_whole_file(tmp_path, monkeypatch):
+    lines = [line("202501", 1, "41360", "10100", "0001", "0000", 1), line("202501", 1, "52113", "11600", "0002", "0000", 2),
+             line("202501", 1, "41360", "10200", "0003", "0000", 3)]
+    path = tmp_path / "MART_KEY_ELCTY_ENERGY_DATA_202501.zip"
+    with zipfile.ZipFile(path, "w") as archive:   # the provider's text starts with a BOM
+        archive.writestr("eais_elcty_202501.txt", ("\n".join(lines) + "\n").encode("utf-8-sig"))
+    wanted = {("41360", "10100"), ("41360", "10200"), ("52113", "11600")}
+    cut = bulk_energy.read_month(path, "ELECTRICITY", wanted)
+    folder = bulk_energy.ensure_split(path)
+    assert sorted(p.name for p in folder.iterdir()) == [".done", "41360.txt.gz", "52113.txt.gz"]
+    assert cut == bulk_energy.read_month(path, "ELECTRICITY", None) and len(cut) == 3   # the first line (BOM) is kept
+    opened = []
+    monkeypatch.setattr(bulk_energy.zipfile, "ZipFile", lambda *a, **k: opened.append(a) or (_ for _ in ()).throw(AssertionError("zip read again")))
+    again = bulk_energy.read_month(path, "ELECTRICITY", {("52113", "11600")})        # only that piece, no zip
+    assert opened == [] and list(again) == [("52113", "11600", "0", "0002", "0000", "202501", "ELECTRICITY")]
 
 
 def test_month_files_take_the_newest_folder_and_need_both_types(tmp_path):
