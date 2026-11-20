@@ -397,6 +397,10 @@ export function RegionGuidePanel({ analysis }: { analysis: AreaAnalysis }) {
           <tr><td>난방도일 · 냉방도일 (전주 = 1)</td><td className="num">{ratio(c.hdd_ratio)} · {ratio(c.cdd_ratio)}</td><td>1보다 크면 전주보다 난방(냉방)이 더 필요합니다. 평년 일평균으로 계산해 비로만 읽습니다</td><td><small>{g.sources.climate}</small></td></tr>
           <tr data-testid="region-guide-emission"><td>공동주택 기준 배출 방향 (가이드)</td><td className="num">{signed(c.guide_emission_change_pct)}</td><td>{direction(c.guide_emission_change_pct)} · 전기 {signed(c.guide_electricity_change_pct)}, 가스 {signed(c.guide_gas_change_pct)}{c.within_our_data ? '' : ' · 우리 단지 자료 범위 밖의 기후'}</td><td><small>추정(전주 단지 용도 몫 × 도일 비)</small></td></tr>
         </> : <tr><td>평년 기후</td><td className="num">자료 없음</td><td>이 지역은 기상 지점에 연결하지 못했습니다(확인 필요). 0이 아니라 빈칸입니다</td><td><small>{g.sources.climate}</small></td></tr>}
+        {g.heating && <tr data-testid="region-guide-heating"><td>공동주택 난방 방식 (세대 비율)</td>
+          <td className="num">{g.heating.kinds.map((k) => `${k.kind.replace('난방', '')} ${k.household_share_pct == null ? '자료 없음' : `${k.household_share_pct.toFixed(0)}%`}`).join(' · ')}</td>
+          <td>K-apt 단지 {g.heating.complexes}곳{g.heating.unknown_complexes ? `(난방 방식 미상 ${g.heating.unknown_complexes}곳 제외)` : ''}. {g.heating.reading}</td>
+          <td><small>{g.heating.source}</small></td></tr>}
         {g.plans.map((p) => <tr key={p.code}><td>{p.region} 기본계획 건물 과제</td><td className="num">{p.tasks}개</td><td>{p.groups.slice(0, 4).map((x) => `${x.label} ${x.tasks}`).join(' · ')}{p.groups.length > 4 ? ' 등' : ''}</td><td><small>{p.plan}</small></td></tr>)}
       </tbody>
     </table></div>

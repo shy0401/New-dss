@@ -347,3 +347,16 @@ def test_before_after_names_the_observed_years_and_flags_a_thinner_before_period
     # the original fixture (the same complex before and after) stays comparable
     plain = before_after(build_history(resolve_area({'type': 'admin', 'code': '35012650'}, GRIDS, POINTS, ADMIN, ZONING), YEARS, inputs()), 2020, 3)
     assert plain['coverage']['comparable'] is True
+
+
+def test_heating_mix_counts_kinds_and_keeps_unknown_apart():
+    from app.area import heating_kind, heating_mix
+    assert [heating_kind(t) for t in ("개별난방", "개별난방+기타", "지역난방", "중앙난방", "기타", "-", None)] == ["개별난방", "개별난방", "지역난방", "중앙난방", "기타", None, None]
+    mix = heating_mix([{"heating_type": "지역난방", "households": 900}, {"heating_type": "개별난방", "households": 100},
+                       {"heating_type": "개별난방", "households": None}, {"heating_type": "-", "households": 500}])
+    kinds = {k["kind"]: k for k in mix["kinds"]}
+    assert mix["complexes"] == 4 and mix["unknown_complexes"] == 1 and mix["households"] == 1000   # 미상 500세대는 비율에 넣지 않음
+    assert kinds["지역난방"]["household_share_pct"] == 90.0 and kinds["개별난방"]["complexes"] == 2 and kinds["개별난방"]["household_share_pct"] == 10.0
+    assert "중앙난방" not in kinds                         # 없는 방식은 0행으로 만들지 않음
+    assert "−13.7%" in mix["reading"] and "지역난방 열 배출계수 없음" in mix["reading"]   # 사다리 상수에서 만든 문장
+    assert heating_mix([]) is None
