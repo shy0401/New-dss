@@ -419,8 +419,16 @@ export interface ScenarioSeries {
   [key: string]: unknown;
 }
 
+/** 지역난방 열(추정, 기준 문서 5.16): 관측 전력·가스 합계와 따로. 공급 지사 계수가 없는 지역은 null */
+export interface DistrictHeat {
+  data_class: 'ESTIMATED'; heat_kwh: number; carbon_kg: number; heat_kwh_per_m2: number; individual_gas_kwh_per_m2: number; district_gas_kwh_per_m2: number;
+  district_share_pct: number; floor_area_m2: number; year: number; factor_kg_per_kwh: number; branch: string; source: string;
+}
+
 export interface ScenarioResult {
   id?: string;
+  /** 지역난방 열(추정): 공급 지사 계수가 있는 지역의 지역난방 대상지만 */
+  district_heat?: DistrictHeat | null;
   /** Grid the scenario was saved for (the selected one, or the default sector). */
   grid_id?: string | null;
   calculations?: Record<string, unknown>;

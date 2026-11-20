@@ -176,6 +176,7 @@ function PlanResult({ result, chart, reporting, sceneSaved, onReport }: { result
       <div><span>조례 상한 1차 확인</span><strong className={`legal ${zoningTone(legal ?? undefined)}`}>{legal ?? '판단 보류'}</strong><small>{limits?.bcr_limit != null && limits?.far_limit != null ? `상한 건폐율 ${limits.bcr_limit}% · 용적률 ${limits.far_limit}%` : '대지 위치를 지정하면 확인'}</small></div>
     </div>
     <div className="result-actions"><button type="button" className="button primary" onClick={onReport} disabled={!result.id || reporting}><FileText size={15} />{reporting ? '3D 장면 저장 중…' : sceneSaved ? '보고서 작성 (3D 장면 포함)' : '보고서 작성'}</button><small>3D 장면을 저장한 뒤 이 계획안의 검토 보고서를 엽니다.</small></div>
+    {result.district_heat && <p className="estimate-note" role="note" data-testid="district-heat-note"><Info size={15} aria-hidden="true" /><span><b>지역난방 열(추정) 연 {tonnes(result.district_heat.carbon_kg)}</b>은 위 운영탄소(전력+가스)에 들어 있지 않아 따로 적습니다. 더하면 약 {tonnes((plan?.carbon_kg ?? 0) + result.district_heat.carbon_kg)}입니다. 열 {formatMetric(result.district_heat.heat_kwh, 'kWh')} = 지역난방 비중 {formatMetric(result.district_heat.district_share_pct, '%', 0)} × 열 원단위 {formatMetric(result.district_heat.heat_kwh_per_m2, 'kWh/m²', 1)}(같은 지역 개별난방 가스 − 지역난방 가스, 가정), 계수 {result.district_heat.branch}지사 {result.district_heat.year}년 {result.district_heat.factor_kg_per_kwh} kgCO₂eq/kWh.</span></p>}
     {result.baseline_estimate && <p className="estimate-note" role="note"><Info size={15} aria-hidden="true" /><span>이 격자에는 12개월 관측과 연면적이 모두 있는 지번이 없어 <b>{result.baseline_estimate.label}</b>(관측 지번 {result.baseline_estimate.parcels}곳, 연면적 {formatMetric(result.baseline_estimate.area_m2, 'm²')})로 추정했습니다.</span></p>}
     {chart && <Chart option={chart.option} height={250} ariaLabel="계획안과 기준안의 월별 운영탄소" />}
     <Fold className="slim" title="계획 규모와 전력·가스 내역 표" hint="펼치기">
@@ -185,6 +186,7 @@ function PlanResult({ result, chart, reporting, sceneSaved, onReport }: { result
       <tr><th>가스</th><td className="num">{formatMetric(plan?.gas_kwh, 'kWh')}</td><td className="num">{formatMetric(reference?.gas_kwh, 'kWh')}</td><td className="num">{savingsText(result.savings_pct?.gas_kwh)}</td></tr>
       <tr><th>전력 탄소</th><td className="num">{tonnes(plan?.electricity_carbon_kg)}</td><td className="num">{tonnes(reference?.electricity_carbon_kg)}</td><td className="num"></td></tr>
       <tr><th>가스 탄소</th><td className="num">{tonnes(gasCarbon(plan))}</td><td className="num">{tonnes(gasCarbon(reference))}</td><td className="num"></td></tr>
+      {result.district_heat && <tr className="is-estimated-row"><th>지역난방 열 탄소 (추정, 따로)</th><td className="num">{tonnes(result.district_heat.carbon_kg)}<small> 열 {formatMetric(result.district_heat.heat_kwh, 'kWh')}</small></td><td className="num"></td><td className="num"></td></tr>}
     </tbody></table>
     </Fold>
     <details className="method-note"><summary>산정 방법과 가정</summary><p>{methodText(result)}</p><p>{result.limitation ?? '원단위 기반 1차 추정이며, 설계·인허가 수치로 사용할 수 없습니다.'}</p>{result.assumptions?.length ? <ul>{result.assumptions.map((a) => <li key={a}>{a}</li>)}</ul> : null}<ConfidenceGrades compact ids={['cell', 'measure']} /></details>

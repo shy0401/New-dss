@@ -668,9 +668,12 @@ def compute_scenario(db,request):
     # 대상지 지역난방 비중: 지역난방 열의 탄소는 계산 밖이라 가정 문장으로 알린다(숫자는 바꾸지 않음, 2026-11-20)
     if result['grid_id']:
         from .kapt import ApartmentComplex
-        from .service import district_heating_note,heating_share
+        from .regions import scope as region_scope
+        from .service import district_heat_estimate,district_heat_text,district_heating_note,heating_share
         result['site_heating']=heating_share(db.scalars(select(ApartmentComplex).where(ApartmentComplex.grid_id==result['grid_id'])).all())
-        note=district_heating_note(result['site_heating'])
+        # 공급 지사 계수가 있는 지역은 지역난방 열(추정)을 따로 계산(기준 문서 5.16), 없으면 빠졌다는 문장만
+        result['district_heat']=district_heat_estimate(db,request.year,region_scope(db,region),region or DEFAULT_REGION,result['site_heating'],result.get('gross_floor_area'))
+        note=district_heat_text(result['district_heat']) if result['district_heat'] else district_heating_note(result['site_heating'])
         if note:result['assumptions'].append(note)
     # A reader's name for the site (전주시 송천1동 일대), used by the result panel and the report instead of the cell id.
     from .overlays import grid_admin_rows,place_label

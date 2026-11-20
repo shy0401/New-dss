@@ -17,7 +17,7 @@ const plan = {
     steps: [{ key: 'envelope', title: '단열·창호 기준 강화', detail: '가스 사용을 13.7% 줄임', electricity_kwh: 3320137.9, gas_kwh: 3745123.3, carbon_kg: 2121479.2, reduction_kg: 108561.7, cumulative_pct: 4.9, range_pct: [9.8, 17.3], reduction_range_kg: [77657.3, 137088.9] },
       { key: 'rooftop_pv', title: '지붕 태양광', detail: '옥상 3,600 m²에 360.0 kW', electricity_kwh: 2888173.9, gas_kwh: 3745123.3, carbon_kg: 1934446.5, reduction_kg: 187032.7, cumulative_pct: 13.3 }],
     final_carbon_kg: 1934446.5, final_pct: 13.3, pv: { roof_m2: 3600, kw: 360, kwh: 431964 }, self_sufficiency_pct: 11.2, zeb_grade: null,
-    residual: { carbon_kg: 1934446.5, offsite_pv_kw: 1853.6 }, plan: { carbon_kg: 2230040.9, pct: 0 }, assumptions: ['가정 문장.'],
+    residual: { carbon_kg: 1934446.5, offsite_pv_kw: 1853.6 }, plan: { carbon_kg: 2230040.9, pct: 0 }, assumptions: ['가정 문장.'], district_heat: { data_class: 'ESTIMATED', heat_kwh: 4115369.7, carbon_kg: 593436.3, heat_kwh_per_m2: 57.2, individual_gas_kwh_per_m2: 60.3, district_gas_kwh_per_m2: 3.1, district_share_pct: 100, floor_area_m2: 72000, year: 2025, factor_kg_per_kwh: 0.1442, branch: '세종', source: '한국지역난방공사' },
     // 2026-11-16: 사다리에 넣지 않은 수단까지 하나씩 따로 본 값, 시공 단계 내재탄소(참고 계산)
     measures: [
       { key: 'envelope', group: '설계·외피', title: '단열·창호 기준 강화', use: 'ladder', use_label: '기본 방안(사다리)', indicator_text: '가스 사용량 −13.7% (−17.3~−9.8%)', evidence: 'measured', evidence_label: '실측', n: '국내 117쌍', apply: '신축·재개발', base: 'gas',
@@ -100,6 +100,9 @@ describe('ReportsPage', () => {
     expect(option('모듈러')).toHaveTextContent('값 없음국내 준공 사례가 13층까지라 15층 계획안에는 값을 계산하지 않습니다.');
     expect(option('구조 방식 전환')).toHaveTextContent('지표만');
     expect(embodied).toHaveTextContent('실측 지표가 아닙니다');
+    // 지역난방 열(추정)은 사다리 합계에 섞지 않고 따로 적는다
+    expect(screen.getByTestId('reduction-district-heat')).toHaveTextContent(/연 593\.4\s?tCO₂eq/);
+    expect(screen.getByTestId('reduction-district-heat')).toHaveTextContent('감축 단계로 줄지 않아 따로');
     // 보고서를 쓰기 전에도 수단 목록과 근거를 볼 수 있다
     expect(screen.getByTestId('measure-catalog-fold')).toHaveTextContent('운영 단계 4개 · 시공 단계 3개');
     expect(within(screen.getByTestId('measure-catalog')).getAllByRole('row', { hidden: true })).toHaveLength(10);   // 접힌 구역 안: 머리 1 + 운영 4 + 시공 3, 근거 묶음 머리 1 + 1

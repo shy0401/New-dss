@@ -30,6 +30,35 @@ GAS_FACTOR_NOTE=(f'GIR 2021 승인 국가 고유 배출계수 도시가스(LNG) 
                  '건축HUB 가스 kWh(에너지 사용량, 총발열량 기준)에 에너지열량환산기준 순/총발열량 38.5/42.7 MJ/Nm3로 맞춤. '
                  f'순발열량 기준 kWh이면 {GAS_NCV_FACTOR:.4f}.')
 
+# 지역난방 열 배출계수 (기준 문서 5.16, 2026-11-20). 한국지역난방공사 공표 지사별 계수(kg/TJ, "지역난방용 열 사용에 대한 온실가스
+# 배출량 산정시 사용"), 원본 data/raw/kdhc_emission_factors/2026-11-20/ (공공데이터포털 15090320, sha256 6c45b8f2…).
+# 값은 원본 그대로 (CO2, CH4, N2O). CO2eq = CO2 + CH4×28 + N2O×265 (AR5, 가스와 같음), kg/kWh = kg/TJ × 3.6e-6.
+KDHC_URL='https://www.data.go.kr/data/15090320/fileData.do'
+KDHC_HEAT_KG_PER_TJ = {
+    "세종": {2025: (40026, 0.7199, 0.072), 2024: (42672, 0.7667, 0.0767), 2023: (41305, 0.742, 0.0742), 2022: (42750, 0.766, 0.0766),
+             2021: (41356, 0.7436, 0.0743), 2020: (41478, 0.7449, 0.0745), 2019: (44477, 0.7987, 0.0798), 2018: (43105, 0.7753, 0.0775),
+             2017: (43811, 0.793, 0.0793), 2016: (46025, 0.8254, 0.0826), 2015: (45105, 0.8102, 0.0815)},
+    "수도권연계": {2025: (36136, 0.6569, 0.0667), 2024: (35058, 0.634, 0.064), 2023: (35991, 0.6519, 0.0661), 2022: (37317, 0.6777, 0.0689),
+               2021: (35936, 0.6534, 0.0661), 2020: (34771, 0.6316, 0.0638), 2019: (35257, 0.6466, 0.0662), 2018: (35825, 0.665, 0.0701),
+               2017: (37003, 0.7323, 0.086), 2016: (36912, 0.7479, 0.0904), 2015: (37697, 0.7608, 0.0894)},
+}
+# 분석 지역 → 열 공급 지사. 공급자가 원문으로 확인된 곳만(세종 = 세종지사, 수원 = 수도권 연계지사에 수원 · 광교 지사 포함: 공사 온실가스
+# 통계 페이지). 그 밖의 지역은 공급자 확인 전이라 없음(None) → 열 탄소를 계산하지 않고 가정 문장만
+HEAT_SUPPLIER_BRANCH = {"36110": "세종", "41110": "수도권연계"}
+
+
+def district_heat_factor(region_code: str | None, year: int) -> dict | None:
+    """지역난방 열 1 kWh의 kgCO2eq (공급 지사 · 그해 공표값). 지사나 그해 값이 없으면 None(가까운 해로 채우지 않음)."""
+    branch = HEAT_SUPPLIER_BRANCH.get(str(region_code or ""))
+    values = (KDHC_HEAT_KG_PER_TJ.get(branch) or {}).get(int(year)) if branch else None
+    if not values:
+        return None
+    co2, ch4, n2o = values
+    per_tj = co2 + ch4 * GWP_CH4 + n2o * GWP_N2O
+    return {"branch": branch, "year": int(year), "kg_per_kwh": round(per_tj * 3.6e-6, 4), "co2eq_kg_per_tj": round(per_tj, 1),
+            "source": f"한국지역난방공사 {branch}지사 {int(year)}년 공표 열 배출계수(공공데이터포털 15090320)"}
+
+
 def ensure_gas_factor(db):
     """Register the city-gas factor (GIR national CO2 factor) and drop the earlier assumed rule row."""
     for old in OLD_GAS_FACTOR_IDS:

@@ -74,6 +74,39 @@ def district_heating_note(share):
             "(지역난방 단지의 건축HUB 가스 원단위는 개별난방 단지의 약 20분의 1). "
             f"단열·창호 가스 절감({ENVELOPE_GAS_SAVING*100:.1f}%)의 근거도 개별난방 단지입니다.")
 
+def _gas_per_m2(base):
+    """평균 원단위의 연 가스 kWh/m². 12개월 가스가 다 있어야 값(아니면 None, 0이 아님)."""
+    if not base or not base.get('area_m2'):return None
+    gas=[r.get('gas_kwh') for r in base.get('monthly') or []]
+    if len(gas)<12 or any(g is None for g in gas):return None
+    return sum(gas)/base['area_m2']
+
+def district_heat_estimate(db,year,sc,region_code,share,floor_area_m2):
+    """지역난방 열(추정, 기준 문서 5.16): 계획 연면적 × 대상지 지역난방 연면적 비중 × 열 원단위 × 공급 지사 계수.
+
+    열 원단위 = 같은 지역 · 같은 해 개별난방 단지 평균 가스 원단위 − 지역난방 단지 평균 가스 원단위(가정: 지역난방 단지가 사는 열 ≈
+    개별난방 단지가 가스로 쓰는 열). 지사 계수 · 두 원단위 · 비중 중 하나라도 없으면 None(가정 문장만)."""
+    from .emissions import district_heat_factor
+    if not share or not share.get('district_share_pct') or not floor_area_m2:return None
+    factor=district_heat_factor(region_code,year)
+    if not factor:return None
+    individual=_gas_per_m2(pooled_baseline(db,year,sc,'individual'))
+    district=_gas_per_m2(pooled_baseline(db,year,sc,'district'))
+    if individual is None or district is None or individual<=district:return None
+    intensity=individual-district
+    heat_kwh=float(floor_area_m2)*share['district_share_pct']/100*intensity
+    return {'data_class':'ESTIMATED','heat_kwh':round(heat_kwh,1),'carbon_kg':round(heat_kwh*factor['kg_per_kwh'],1),
+            'heat_kwh_per_m2':round(intensity,1),'individual_gas_kwh_per_m2':round(individual,1),'district_gas_kwh_per_m2':round(district,1),
+            'district_share_pct':share['district_share_pct'],'floor_area_m2':round(float(floor_area_m2),1),'year':year,
+            'factor_kg_per_kwh':factor['kg_per_kwh'],'branch':factor['branch'],'source':factor['source']}
+
+def district_heat_text(est):
+    """계산 엔진 문장(숫자는 est에서만)."""
+    return (f"지역난방 열(추정): 연 {est['heat_kwh']:,.0f} kWh = 계획 연면적 {est['floor_area_m2']:,.0f} m² × 지역난방 비중 {est['district_share_pct']:.0f}% × "
+            f"열 원단위 {est['heat_kwh_per_m2']:.1f} kWh/m²({est['year']}년 같은 지역 개별난방 단지 가스 {est['individual_gas_kwh_per_m2']:.1f} − "
+            f"지역난방 단지 가스 {est['district_gas_kwh_per_m2']:.1f}, 가정). 탄소는 연 {est['carbon_kg']/1000:,.1f} tCO2eq"
+            f"({est['source']} {est['factor_kg_per_kwh']:.4f} kgCO2eq/kWh). 관측 전력·가스 합계에 섞지 않고 따로 적으며, 감축 단계(단열·창호 등)는 열에 적용하지 않았습니다.")
+
 def pooled_baseline(db,year,sc=None,heating=None):
     """Consistent baseline over every K-apt-linked parcel of a region (``sc``; None = all regions).
 

@@ -16,7 +16,7 @@ import { PLAN_COLORS } from '../theme/palette';
 import { ConfidenceGrades } from '../components/ConfidenceGrades';
 import { Fold } from '../components/Fold';
 import { EmbodiedSection, MeasureCatalogTable, MeasuresTable, type EmbodiedBlock, type MeasureCatalog, type MeasureRow } from '../components/ReductionMeasures';
-import type { ScenarioResult } from '../types';
+import type { DistrictHeat, ScenarioResult } from '../types';
 
 /** 탄소 감축 방안 (서버 reduction_plan, 기준 문서 5.15): 같은 계획을 대책 없음에서 수단을 차례로 더해 줄인다. */
 interface ReductionStep { key: string; title: string; detail: string; electricity_kwh: number; gas_kwh: number | null; carbon_kg: number; reduction_kg: number; cumulative_pct: number | null; range_pct?: number[] | null; reduction_range_kg?: number[] | null }
@@ -25,6 +25,8 @@ interface ReductionPlan {
   final_carbon_kg?: number; final_pct?: number | null; reduction_pct?: number | null; pv?: { roof_m2: number; kw: number; kwh: number | null; surplus_kwh?: number } | null;
   green?: { area_m2: number; uptake_kg: number; range_kg: number[] } | null; self_sufficiency_pct?: number | null; zeb_grade?: string | null; residual?: { carbon_kg: number; offsite_pv_kw: number | null; electricity_carbon_kg?: number; gas_carbon_kg?: number | null; offset_kg?: number };
   plan?: { carbon_kg: number; pct: number | null } | null; assumptions?: string[];
+  /** 지역난방 열(추정): 사다리 합계와 따로(2026-11-20) */
+  district_heat?: DistrictHeat | null;
   /** 사다리에 넣지 않은 수단까지 하나씩 따로 본 값과, 시공 단계 내재탄소(참고 계산). 2026-11-16 이전 보고서에는 없다. */
   measures?: MeasureRow[]; embodied?: EmbodiedBlock | null;
 }
@@ -175,6 +177,7 @@ function ReductionSection({ plan, n, named }: { plan: SavedScenario; n: number; 
       {p.green && p.green.uptake_kg > 0 && <li>녹지·조경 흡수: 녹지 {formatMetric(p.green.area_m2, 'm²')} · 연 {tonnes(p.green.uptake_kg)} (수종·수령에 따라 {tonnes(p.green.range_kg[0])}~{tonnes(p.green.range_kg[1])}, 상쇄로 따로 적음)</li>}
       {p.self_sufficiency_pct != null && <li>에너지자립률(1차에너지, 참고): {formatMetric(p.self_sufficiency_pct, '%', 1)} — {p.zeb_grade ? `ZEB ${p.zeb_grade} 구간` : 'ZEB 5등급(20%) 미만'}</li>}
       {p.residual && p.residual.carbon_kg > 0 && <li data-testid="reduction-residual">남는 연간 {tonnes(p.residual.carbon_kg)}{residualParts(p.residual)}{p.residual.offsite_pv_kw ? `. 전력분은 구역 밖 재생에너지(태양광 약 ${formatMetric(p.residual.offsite_pv_kw, 'kW')} 상당, PPA·REC) 조달로 채울 수 있습니다${p.residual.gas_carbon_kg ? '. 가스분은 전력 조달로 줄지 않습니다' : ''}` : ''}</li>}
+      {p.district_heat && <li data-testid="reduction-district-heat"><b>지역난방 열(추정)</b>: 연 {tonnes(p.district_heat.carbon_kg)}(열 {formatMetric(p.district_heat.heat_kwh, 'kWh')})은 위 단계의 운영탄소(전력+가스)에 들어 있지 않고 감축 단계로 줄지 않아 따로 적습니다. 대책 없음에 더하면 약 {tonnes(start + p.district_heat.carbon_kg)}, 모든 단계 뒤에 더하면 약 {tonnes((p.final_carbon_kg ?? 0) + p.district_heat.carbon_kg)}입니다.</li>}
     </ul>
     {p.assumptions?.length ? <details className="method-note" open><summary>근거와 가정</summary><ul>{p.assumptions.map((a) => <li key={a}>{a}</li>)}</ul></details> : null}
     {p.measures?.length ? <MeasuresTable rows={p.measures} /> : null}
