@@ -14,6 +14,7 @@
 | `design_zone_sigungu.csv` | 269 | 시군구 → 설계기준 지역 구분(중부1 · 중부2 · 남부 · 제주) | `regional_adjust/design_zone_sigungu.csv` | (나) |
 | `design_zone_uvalue_apartment.csv` | 11 | 공동주택 부위별 열관류율 기준(지역 구분별) | `regional_adjust/design_zone_uvalue_apartment.csv` | (나) |
 | `regional_conditions_sigungu.csv` | 23 | 지역 조건표: DB에 기상 · 단지가 있는 시군구의 지역 구분 · 평년 도일 · 단지 수 · 용도 몫 · 2025 통계 원단위 | `regional_adjust/regional_conditions_sigungu.csv` | (나) |
+| `regional_climate_guide.csv` | 269 | 지역 기후 가이드: 전국 시군구의 기상청 평년값(1991~2020) 기후 값 · 전주 대비 냉난방도일 비 · 기준 배출 방향 가이드(추정) · 지자체 과제 수 | `regional_guide/out/regional_climate_guide.csv` | (나) |
 
 ## `reduction_evidence.csv`
 | 열 | 뜻 |
@@ -45,3 +46,13 @@
 - `design_zone_uvalue_apartment.csv`: 같은 별표 1의 공동주택 열관류율(W/m²K)
 - `regional_conditions_sigungu.csv`: `value_kinds` 열에 값마다 성격을 적었다(지역 구분 = 고시, 도일 · 용도 몫 = 계산, 2025 통계 kWh = TOE 환산 추정). 가스 용도 몫은 분해 관문(G3)을 못 넘어 참고, `envelope_saving_adjusted_ref_pct_v2`는 지역 보정 관문(G2)을 못 넘어 **계산에 쓰지 않는다**. 평년 도일은 DB 2015~2025 평균(전국 평년값이 아님)
 - 열 뜻 · 만드는 차례: PC `project/tools/experiments/regional_adjust/README.md`, 판정: [지역 보정 관문 기록](../../docs/records/2026-11-20-regional-adjustment-gates.md)
+
+## `regional_climate_guide.csv` (지역 기후 가이드, 2026-11-20)
+- **가이드이고 예측이 아니다.** 지역마다 "기준 지역(전주)보다 난방 · 냉방이 얼마나 더(덜) 필요하고, 공동주택 기준 배출이 대략 어느 방향으로 얼마나 다를 수 있는지"를 보인다. 감축률 보정에는 쓰지 않는다(지역 보정 관문 실패)
+- 기후 값: 기상청 기후평년값 1991~2020 일별 평년값(원본 PC `data/raw/kma_normals/2026-11-20/`). HDD18 · CDD24는 평년 일평균으로 계산해 해마다 도일보다 작으므로 **비(`*_ratio_vs_jeonju`)로만** 읽는다
+- 지점 → 시군구: 지점 이름 = 시군구 이름, 광역시 지점은 그 시의 모든 구 · 군, 없으면 같은 시도 · 같은 지역 구분 대표 지점(`mapping` 열). 세종은 지점 이름이 '세종연서'라 연결 안 됨(빈칸, 확인 필요)
+- 배출 가이드: 전주 단지 용도 몫(전기 냉방 6.0% · 전기 난방 3.1% · 가스 난방 65.4%, 가스는 분해 관문을 못 넘은 참고값) × 도일 비, 전주 2025 아파트 원단위 · 배출계수로 전기 · 가스를 합침
+- 설계 지역 구분별 중앙값(전주 대비 배출): 중부1 +6.6% · 중부2 +2.0% · 남부 −3.3% · 제주 −11.4%
+- **정부 기준과의 점검(미리 정한 규칙): 맞지 않음.** 남부 에너지 중앙값 −4.3% 대 표준베이스라인 남부 ÷ 중부2 −11.9%(차이 7.6%p, 기준 ±5%p). 가이드는 정부 기준보다 지역 차이를 작게 본다 — 정부 값에는 단지 구성(면적 · 연식) 차이도 섞여 있고, 평년 일평균 도일은 지역 차이를 줄인다(까닭은 확인 필요)
+- `within_our_data_hdd_range`: 우리 단지 자료가 있는 시군구의 평년값 HDD 범위(1,818~3,091) 밖이면 "자료 범위 밖"(16곳: 제주 · 철원 등)
+- 규칙(결과 전에 적음) · 결과: PC `project/tools/experiments/regional_guide/README.md`
