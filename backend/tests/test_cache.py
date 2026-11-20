@@ -96,20 +96,20 @@ def test_a_provider_description_page_listing_error_codes_is_not_an_api_failure(t
 def test_error_index_replaces_the_folder_scan(tmp_path, monkeypatch):
     """Errors are found through the small index; a later success on the same request clears them."""
     import app.cache as cache
-    answers = [httpx.Response(200, content=b'LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS_ERROR'), httpx.Response(200, content=b'<ok/>')]
+    answers = [httpx.Response(200, content=b'SERVICE_KEY_IS_NOT_REGISTERED_ERROR'), httpx.Response(200, content=b'<ok/>')]
     client = CachedClient(tmp_path, httpx.Client(transport=httpx.MockTransport(lambda request: answers.pop(0))), min_interval=0)
     try:
         client.get('data.go.kr', 'op', 'https://example.org/api', {'serviceKey': 'k1'})
-        raise AssertionError('the rate-limit answer must raise')
+        raise AssertionError('the key rejection must raise')
     except ExternalError as exc:
-        assert '호출 제한' in str(exc)
+        assert '인증 실패' in str(exc)
         failed = exc.asset
     index = tmp_path / cache.ERROR_INDEX
     assert index.exists() and 'serviceKey' not in index.read_text(encoding='utf-8') and 'k1' not in index.read_text(encoding='utf-8')
     scanned = []
     monkeypatch.setattr(cache, '_scan_error_metas', lambda *a: scanned.append(a) or [])
     cache._forget_error_scan(tmp_path)
-    assert recent_credential_error(tmp_path, 'k1') == '공공데이터 호출 제한'
+    assert '인증 실패' in recent_credential_error(tmp_path, 'k1')
     assert scanned == []  # the index was used, not a directory listing
     # the same request succeeds later (after forget): the stale index line must not report an error
     client.forget(failed)
@@ -127,3 +127,29 @@ def test_folder_without_index_is_scanned_once_and_indexed(tmp_path):
     assert recent_credential_error(tmp_path, 'k2') == 'API 인증 실패'
     lines = (tmp_path / cache.ERROR_INDEX).read_text(encoding='utf-8').splitlines()
     assert len(lines) == 1 and json.loads(lines[0])['file'] == 'abc.json'
+
+
+def test_a_call_limit_answer_is_not_cached_so_the_next_call_asks_again(tmp_path):
+    """2026-11-21: K-apt 하루 한도(코드 22) 응답이 1시간 캐시되어, 운영계정 승인 직후 다시 넣은 수집이 실제로 묻지 않고
+    캐시의 '호출 제한'을 읽어 WAITING으로 돌아감. 이제 호출 제한 응답은 캐시에 쓰지 않고, 예전에 써 둔 것도 다시 쓰지 않는다."""
+    import json as _json
+    import app.cache as cache
+    answers = [httpx.Response(200, content=b'<returnReasonCode>22</returnReasonCode>LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS_ERROR'),
+               httpx.Response(429, content=b'too many'), httpx.Response(200, content=b'<ok/>')]
+    calls = []
+    def send(request):
+        calls.append(request)
+        return answers.pop(0)
+    client = CachedClient(tmp_path, httpx.Client(transport=httpx.MockTransport(send)), min_interval=0)
+    for _ in range(2):
+        with pytest.raises(ExternalError, match='호출 제한'):
+            client.get('data.go.kr', 'op', 'https://example.org/api', {'serviceKey': 'k1'})
+    assert not list(tmp_path.glob('*.body'))          # 아무것도 캐시하지 않음
+    assert client.get('data.go.kr', 'op', 'https://example.org/api', {'serviceKey': 'k1'})['body'] == b'<ok/>'
+    assert len(calls) == 3                              # 매번 실제로 물음
+    # 예전 판이 써 둔 호출 제한 캐시는 읽지 않고 다시 물음
+    old = next(tmp_path.glob('*.json'))
+    meta = _json.loads(old.read_text(encoding='utf-8')); meta.update(error=cache.QUOTA_ERROR, timestamp=__import__('time').time())
+    old.write_text(_json.dumps(meta), encoding='utf-8')
+    answers.append(httpx.Response(200, content=b'<ok2/>'))
+    assert client.get('data.go.kr', 'op', 'https://example.org/api', {'serviceKey': 'k1'})['body'] == b'<ok2/>'
