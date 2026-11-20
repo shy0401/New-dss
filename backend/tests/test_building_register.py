@@ -111,3 +111,35 @@ def test_register_floor_area_typing_errors_are_dropped_not_summed():
     # impossible for 20 floors on 500 m²
     assert register_areas({'gross_floor_area_m2': 90000.0, 'building_area_m2': 500.0, 'floors': 20})[0] is None
     assert register_areas({'gross_floor_area_m2': 12000.0, 'far_assessment_floor_area_m2': 9800.0, 'building_area_m2': 700.0, 'floors': 15, 'underground_floors': 2}) == (12000.0, 9800.0, [])
+
+
+def test_register_retries_an_empty_body_burst_instead_of_stopping_the_step(monkeypatch):
+    """2026-11-21: 달서 10200 5쪽 · 양산 10200 7쪽이 HTTP 200 빈 본문 → 대장 단계가 바로 멈춤(EMPTY_RESPONSE를 일시 오류로 안 봄).
+    같은 쪽을 다시 물으면 정상 · 503 · 빈 응답이 섞여 나옴. 이제 빈 응답도 새 연결로 다시 묻고, 5번 연속 실패까지 넘김."""
+    from app import official
+    waits, calls = [], []
+    monkeypatch.setattr(official.time, "sleep", waits.append)
+
+    class Flaky:
+        def __init__(self, empty):
+            self.empty, self.forgotten, self.resets = empty, 0, 0
+        def get(self, provider, operation, url, params):
+            calls.append(params["pageNo"])
+            if self.empty:
+                self.empty -= 1
+                return {"body": b"", "status": 200, "id": "x"}
+            return {"body": b'{"response":{"header":{"resultCode":"00"},"body":{"items":{"item":[]},"totalCount":0}}}', "status": 200, "id": "y"}
+        def forget(self, result): self.forgotten += 1
+        def reset_connection(self): self.resets += 1
+        def record_error(self, result, message): pass
+
+    flaky = Flaky(5)
+    monkeypatch.setattr(official, "client", flaky)
+    official._register_request("u", {"pageNo": 7})
+    assert len(calls) == 6 and waits == [2, 4, 8, 15, 30] and flaky.forgotten == 5 and flaky.resets == 5
+    calls.clear(); waits.clear()
+    monkeypatch.setattr(official, "client", Flaky(6))
+    import pytest
+    from app.cache import ExternalError
+    with pytest.raises(ExternalError, match="일시 오류"):   # 6번 다 빈 응답: 그 쪽만 실패로 적고 단계는 이어감(collect_register)
+        official._register_request("u", {"pageNo": 7})

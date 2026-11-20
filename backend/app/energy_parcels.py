@@ -170,7 +170,12 @@ def request_sigungu(sigungu: str, use_ym: str) -> str:
     return str(sigungu)
 
 
-def _request(session: Any, operation: str, params: dict[str, Any], attempts: int = 4) -> tuple[list[dict[str, Any]], int]:
+# 제공기관이 짧게 몰아서 실패함(2026-11-21: 같은 쪽을 다시 물으면 정상 · 503 · 빈 응답이 섞임). 4번 · 대기 합 12초로는 못 넘겨
+# 달서 · 양산의 건물 에너지 단계가 멈춤 → 6번 · 대기 합 59초
+RETRY_WAITS_S = (2, 4, 8, 15, 30)
+
+
+def _request(session: Any, operation: str, params: dict[str, Any], attempts: int = len(RETRY_WAITS_S) + 1) -> tuple[list[dict[str, Any]], int]:
     for attempt in range(attempts):
         response = None
         try:
@@ -192,7 +197,7 @@ def _request(session: Any, operation: str, params: dict[str, Any], attempts: int
                 session.reset_connection()  # the gateway pins a kept-alive connection to one backend node
             if attempt == attempts - 1:
                 raise ExternalError(f"건축HUB 제공기관 일시 오류: {message[:60]}") from None
-            time.sleep(2 * (attempt + 1))
+            time.sleep(RETRY_WAITS_S[min(attempt, len(RETRY_WAITS_S) - 1)])
     raise ExternalError("건축HUB 제공기관 일시 오류")
 
 
