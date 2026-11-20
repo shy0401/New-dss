@@ -552,7 +552,7 @@ def step_building_energy(db: Any, region: StudyRegion, log: Log) -> dict[str, An
         rows += bulk["inserted"] + bulk["replaced"]
         parts.append(f"대용량 파일 {len(file_months)}개월 새 행 {bulk['inserted']:,}(이미 있던 값과 같음 {bulk['same']:,} · 다름 {bulk['different']:,})")
         if bulk["conflicts"]:
-            parts.append(f"한 지번에 값이 다른 줄 {bulk['conflicts']:,}곳은 넣지 않음")
+            parts.append(f"한 지번에 값이 다른 줄 {bulk['conflicts']:,}곳은 API처럼 가장 작은 순번 값")
     if api_months:
         # 여러 흐름으로 쪽을 먼저 캐시에 받아 둠(2026-11-21, 기본 2흐름). 아래 순차 수집은 캐시를 읽고 DB에 씀
         log("건축HUB 건물 에너지 쪽 미리 받는 중 (여러 흐름)")
