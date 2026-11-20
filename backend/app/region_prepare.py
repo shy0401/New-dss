@@ -480,12 +480,15 @@ def _land_point(db: Any, region: StudyRegion) -> tuple[float, float] | None:
 
 def _vworld_step(dataset: str) -> Callable[[Any, StudyRegion, Log], dict[str, Any]]:
     def run(db: Any, region: StudyRegion, log: Log) -> dict[str, Any]:
-        from .vworld import VworldGridCoverage, collect_vworld_cells
+        from .vworld import VworldGridCoverage, collect_vworld_cells, prefetch_vworld_cells
         ids = sorted(region_grid_ids(db, region.code))
         done = set(db.scalars(select(VworldGridCoverage.grid_id).where(VworldGridCoverage.dataset == dataset)))
         todo = [g for g in ids if g not in done]
         if not todo:
             return {"rows": len(ids), "message": f"요청할 격자 없음 (격자 {len(ids):,}개 모두 조회됨)"}
+        # 2흐름으로 타일 쪽을 먼저 캐시에 받아 둠(2026-11-21 실측 초당 3.35 → 6.67회). 아래 저장은 캐시를 읽고 한 줄로
+        log(f"VWorld {dataset} 타일 미리 받는 중 (여러 흐름)")
+        prefetch_vworld_cells(dataset, todo)
         stats = collect_vworld_cells(db, dataset, todo, progress=lambda f, m: log(m) if int(f * 100) % 10 == 0 else None)
         if dataset == "cadastral":
             from .energy_parcels import build_parcel_grid
