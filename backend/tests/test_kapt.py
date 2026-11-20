@@ -119,3 +119,30 @@ def test_exact_parcel_candidates_and_energy_coordinate_match():
         assert mountain.grid_id is None
         assert mountain.match_method == "UNMATCHED_KAPT_MOUNTAIN_PARCEL"
         assert sector.metadata_json["baseline_floor_area_m2"] == 94993.33
+
+
+def test_region_scoped_merge_touches_only_that_region_and_keeps_the_prototype_baseline():
+    """2026-11-21: a region's finalize links only its own complexes and energy rows (the whole-country pass ran over
+    20 minutes per region) and must not clear the prototype sector's baseline held by another region."""
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    ApartmentComplex.__table__.create(engine)
+    EnergyMonthly.__table__.create(engine)
+    Sector.__table__.create(engine)
+    Session = sessionmaker(engine)
+    with Session() as db:
+        for code, bjd, cell in (("A1", "5211311600", "cell_966000_1753000"), ("B1", "4413010100", "cell_900000_1800000")):
+            db.add(ApartmentComplex(kapt_code=code, snapshot_month="202512", name=code, bjd_code=bjd, bun="0001", ji="0000",
+                                    parcel_address="1", grid_id=cell, gross_floor_area_m2=1000.0, detail_collected=True,
+                                    summary_json={}, detail_json={}))
+        db.add(Sector(id="prototype", grid_id="cell_966000_1753000", name="p", reason="test", candidates=[],
+                      metadata_json={"baseline_floor_area_m2": 1000.0}))
+        db.add(EnergyMonthly(id=1, source="MOLIT", sigungu_code="52113", bjdong_code="11600", bun="0001", ji="0000",
+                             use_ym="202501", energy_type="ELECTRICITY", usage_kwh=1.0, raw_record={}))
+        db.add(EnergyMonthly(id=2, source="MOLIT", sigungu_code="44130", bjdong_code="10100", bun="0001", ji="0000",
+                             use_ym="202501", energy_type="ELECTRICITY", usage_kwh=2.0, raw_record={}))
+        db.commit()
+        result = merge_energy_coordinates(db, 2025, sigungu_codes=["44130"])
+        assert result["matched"] == 1
+        assert db.get(EnergyMonthly, 2).grid_id == "cell_900000_1800000"
+        assert db.get(EnergyMonthly, 1).grid_id is None                       # the other region is left alone
+        assert db.get(Sector, "prototype").metadata_json["baseline_floor_area_m2"] == 1000.0   # not cleared

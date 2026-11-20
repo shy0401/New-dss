@@ -84,8 +84,11 @@ def test_failed_steps_are_retried_twice_then_left_and_blocked_ones_are_reported(
 
 
 def test_finalize_left_behind_is_queued_alone():
-    db = db_with(("27260", "PREPARING", steps(finalize="QUEUED"), 40))
-    report, queued = run(db, FakeRedis())
+    db = db_with(("27260", "PREPARING", steps(finalize="QUEUED"), 40),
+                 ("44230", "PREPARING", steps(finalize="RUNNING"), 40))   # finalize running under its 건축HUB lane lock
+    conn = FakeRedis()
+    conn.kv["carbon:lane-holder:bldhub"] = b"44230"
+    report, queued = run(db, conn)
     assert queued == [("27260", ["finalize"])]
 
 
