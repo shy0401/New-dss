@@ -316,3 +316,42 @@ def test_collect_sgis_years_resolves_each_years_codes_by_name_and_marks_unpublis
     assert store["SgisPopulationAdmin:2023:3502001"].population_count == 5
     assert store["SgisPopulationAdmin:2023:35020"].population_count == 20 and store["SgisHouseholdAdmin:2023:35020"].household_count == 9
     assert "SgisPopulationAdmin:2016:3502001" not in store
+
+
+def test_complexes_step_is_failed_when_no_detail_page_could_be_read(monkeypatch, tmp_path):
+    """2026-11-20 대구 달서: 단지 252곳 상세가 모두 실패했는데 단계가 DONE으로 끝나 난방 방식 · 주소가 빈 채로 남았다.
+    상세가 하나도 없으면 FAILED(다시 실행 필요, 첫 오류를 메시지에), 하나라도 읽히면 지금처럼 DONE(실패 수는 메시지에)."""
+    import json as _json
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from app import kapt, region_prepare
+    from app.kapt import ApartmentComplex
+
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    ApartmentComplex.__table__.create(engine)
+    db = sessionmaker(engine)()
+    month_dir = tmp_path / "raw" / "kapt-national" / "202610"
+    month_dir.mkdir(parents=True)
+    rows = [{"kaptCode": c, "kaptName": c, "bjdCode": "2729010100", "bjdName": "대곡동", "addr": "대구광역시 달서구 대곡동 1"} for c in ("A1", "A2")]
+    (month_dir / "list-27290.json").write_text(_json.dumps({"resultList": rows}, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(region_prepare, "_root", lambda: tmp_path)
+    monkeypatch.setattr(region_prepare, "list_codes", lambda codes: ["27290"])
+
+    def broken(client, code):
+        raise RuntimeError(f"K-apt returned no detail for {code}")
+
+    monkeypatch.setattr(kapt, "fetch_complex_detail", broken)
+
+    class Region:
+        code, legal_codes = "27290", ["27290"]
+
+    result = region_prepare.step_complexes(db, Region(), lambda m: None, delay_s=0)
+    assert result["status"] == "FAILED" and result["rows"] == 2 and result["details"] == 0
+    assert "상세 실패 2개" in result["message"] and "다시 실행 필요" in result["message"] and "RuntimeError" in result["message"]
+    assert db.query(ApartmentComplex).count() == 2   # 목록 값은 저장됨
+
+    # 한 곳이라도 읽히면 DONE(상태 키 없음 = DONE), 실패 수는 메시지에
+    detail = {"resultMap_kapt": {"kaptCode": "A1", "codeHeat": "지역난방"}, "resultMap_kapt_addrList": []}
+    monkeypatch.setattr(kapt, "fetch_complex_detail", lambda client, code: detail if code == "A1" else broken(client, code))
+    result = region_prepare.step_complexes(db, Region(), lambda m: None, delay_s=0)
+    assert "status" not in result and result["details"] == 1 and "상세 실패 1개" in result["message"]
