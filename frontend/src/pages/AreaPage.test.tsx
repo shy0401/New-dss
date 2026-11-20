@@ -275,6 +275,28 @@ describe('RegionGuidePanel (지역 구분 · 평년 기후 · 방향 가이드 �
     expect(sc.getByTestId('region-guide-rate-note').textContent).toContain('2.21 · 2.72%p');
   });
 
+  it('takes the guide directly (전국 지역 화면) and shows the statistics district-heat share, blank instead of 0', async () => {
+    const { RegionGuidePanel } = await import('../components/RegionGuide');
+    const { render: r, screen: sc } = await import('@testing-library/react');
+    const stats = { year: 2025, parts: ['경기도 수원시 장안구', '경기도 수원시 권선구'], total_toe: 172186, district_heat_toe: 60009, district_heat_share_pct: 34.9, source: '건물에너지사용량통계 2025 아파트' };
+    const { unmount } = r(<RegionGuidePanel guide={{ ...guide, heat_stats: stats } as never} />);
+    expect(sc.getByTestId('region-guide-heat-stats').textContent).toContain('34.9%');
+    expect(sc.getByTestId('region-guide-heat-stats').textContent).toContain('2개 구를 더함');
+    unmount();
+    r(<RegionGuidePanel guide={{ ...guide, heat_stats: { ...stats, parts: null, district_heat_toe: null, district_heat_share_pct: null } } as never} />);
+    expect(sc.getByTestId('region-guide-heat-stats').textContent).toContain('통계에 없음');
+    expect(sc.getByTestId('region-guide-heat-stats').textContent).toContain('0이 아니라 빈칸');
+  });
+
+  it('stacks rows in the compact form for the narrow 전국 지역 detail', async () => {
+    const { RegionGuidePanel } = await import('../components/RegionGuide');
+    const { render: r, screen: sc } = await import('@testing-library/react');
+    const { container } = r(<RegionGuidePanel guide={guide as never} compact />);
+    expect(container.querySelector('table')).toBeNull();
+    expect(container.querySelector('dl.region-guide-list')).not.toBeNull();
+    expect(sc.getByTestId('region-guide-emission').textContent).toContain('−2.9%');
+  });
+
   it('says no data for a region without a complete solar year instead of zero', async () => {
     const { RegionGuidePanel } = await import('./AreaPage');
     const { render: r, screen: sc } = await import('@testing-library/react');

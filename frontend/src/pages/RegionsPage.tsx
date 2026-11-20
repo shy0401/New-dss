@@ -1,5 +1,6 @@
 import * as maplibregl from 'maplibre-gl';
-import { Note } from '../components/Fold';
+import { Fold, Note } from '../components/Fold';
+import { RegionGuidePanel } from '../components/RegionGuide';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import { CheckCircle2, Clock3, Database, Globe2, Loader2, MapPinned, Play, Search, TriangleAlert } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -190,6 +191,7 @@ function RegionDetail({ props, detail, current, busy, onPrepare, onAnalyse }: { 
       <button type="button" className="button primary" onClick={onAnalyse}><MapPinned size={15} aria-hidden="true" />{hasGrid ? (current ? '이 지역 지도 보기' : '이 지역 분석하기') : '지도 열기 (읍면동 포함)'}</button>
       <button type="button" className="button secondary" onClick={onPrepare} disabled={busy || preparing}>{preparing ? <><Loader2 size={15} className="spin" aria-hidden="true" />준비 중…</> : <><Play size={15} aria-hidden="true" />{detail.status === 'NOT_PREPARED' || detail.level === 'BASIC' ? '상세 자료 수집 (에너지·건물·용도지역)' : '남은 단계 이어서 수집'}</>}</button>
     </div>
+    {detail.guide && <Fold title="지역 기후·지자체 계획 가이드" hint="펼치기" testId="region-detail-guide"><RegionGuidePanel guide={detail.guide} compact /></Fold>}
     {!hasGrid && <Note label="지도 열기 안내"><p className="muted">지도 열기는 전국 기초 자료(SGIS 격자 통계·행정동·K-apt 단지 목록·조례)로 500m 격자와 읍면동 지도를 몇 초 만에 만듭니다. 에너지·건물·용도지역은 '상세 자료 수집'으로 모읍니다.</p></Note>}
     {detail.message && <p className="muted">{detail.message}</p>}
     <ol className="step-list">{steps.map((step) => <li key={step.id} className={`step ${step.status ? step.status.toLowerCase() : 'todo'}`}>

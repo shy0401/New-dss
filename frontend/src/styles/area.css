@@ -197,6 +197,12 @@
 .area-estimates tr.is-estimated-row td { background-image: var(--hatch-image); print-color-adjust: exact; -webkit-print-color-adjust: exact; }
 .area-estimate-note { margin: var(--sp-2) 0 0; color: var(--ink-2); }
 .area-industry-notes { margin: var(--sp-2) 0 0; padding-left: 20px; color: var(--ink-2); font-size: var(--fs-caption); line-height: 1.6; }
+/* 지역 가이드 좁은 모양(전국 지역 화면 상세): 줄마다 항목 → 값 · 읽는 법 · 출처를 위아래로 */
+.region-guide-list { display: grid; gap: var(--sp-2); margin: 0; }
+.region-guide-list > div { border-bottom: 1px solid var(--line); padding-bottom: var(--sp-2); }
+.region-guide-list dt { font-size: var(--fs-caption); color: var(--ink-2); }
+.region-guide-list dd { margin: 2px 0 0; line-height: 1.55; }
+.region-guide-list dd small { display: block; color: var(--ink-3, var(--ink-2)); }
 
 /* 2026-11-12 화면 정보 3단: 접이식 구역 안에서는 윗선·여백을 겹치지 않는다. */
 .area-controls > .fold.slim { margin-top: var(--sp-2); border-top: 1px solid var(--line); border-radius: 0; padding-top: var(--sp-1); }
