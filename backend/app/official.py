@@ -105,11 +105,15 @@ def approval_year_of(value):
     year=int(digits[:4])
     return year if 1900<=year<=now().year else None
 
-REGISTER_TRANSIENT={'01','02','04','05','99'}
+# EMPTY_RESPONSE(HTTP 200 빈 본문)도 일시 오류: 2026-11-21 같은 쪽을 다시 물으면 정상 · 503 · 빈 응답이 섞여 나옴(쪽에 묶인 문제 아님).
+# 건물 에너지(energy_parcels.TRANSIENT_CODES)와 같은 규칙. 전에는 빈 응답 한 번에 단계 전체가 멈춤(달서 · 양산)
+REGISTER_TRANSIENT={'01','02','04','05','99','EMPTY_RESPONSE'}
 REGISTER_AUTH={'20','21','30','31','32'}
 REGISTER_PAGE=100
+# 제공기관이 짧게 몰아서 실패함(503 · 빈 응답이 몇 초~수십 초 이어짐) → 대기를 늘려 다시 물음(합계 59초, 2026-11-21)
+RETRY_WAITS_S=(2,4,8,15,30)
 
-def _register_request(url,params,attempts=3):
+def _register_request(url,params,attempts=len(RETRY_WAITS_S)+1):
     """One 표제부 page; temporary provider failures are retried without keeping the cached failure."""
     for attempt in range(attempts):
         response=None
@@ -127,9 +131,10 @@ def _register_request(url,params,attempts=3):
             if not transient:
                 raise ExternalError(f'건축물대장 응답 오류: {message[:80]}',cached) from None
             if isinstance(cached,dict):client.forget(cached)
+            if hasattr(client,'reset_connection'):client.reset_connection()   # 게이트웨이가 유지 연결을 한 노드에 묶음(건물 에너지와 같음)
             if attempt==attempts-1:
                 raise ExternalError(f'건축물대장 제공기관 일시 오류: {message[:60]}',cached) from None
-            time.sleep(2*(attempt+1))
+            time.sleep(RETRY_WAITS_S[min(attempt,len(RETRY_WAITS_S)-1)])
 
 def register_regions(db,scope='full'):
     rows=list(db.scalars(select(Region).where(Region.bjdong_code!='00000').order_by(Region.code)))
