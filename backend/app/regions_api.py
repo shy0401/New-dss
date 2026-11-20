@@ -121,13 +121,14 @@ def region_detail(code: str) -> dict[str, Any]:
 
 
 def _stale(region: StudyRegion) -> bool:
-    """PREPARING but no worker holds the region lock and nothing was written for 3 minutes (worker restarted)."""
+    """PREPARING but no worker holds a region lock (region steps or K-apt steps) and nothing was written for 3 minutes
+    (worker restarted)."""
     from datetime import datetime, timedelta, timezone
     try:
         import os
 
         import redis
-        if redis.Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0")).exists("carbon:region-prepare"):
+        if redis.Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0")).exists("carbon:region-prepare", "carbon:region-kapt"):
             return False
     except Exception:  # noqa: BLE001 - no Redis: trust the timestamp
         pass

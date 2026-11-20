@@ -270,17 +270,23 @@ def resume_overdue_regions(db):
             queue_region_prepare(db,region,due+['finalize']);queued.append(region.code)
     return queued
 
-@celery_app.task(name='prepare_region',bind=True,max_retries=None)
-def run_prepare_region(self,code,steps=None,force=False):
+# K-apt monthly energy + finalize of a region run under their own lock (one region at a time: the K-apt gateway allows
+# ~1 request/s per key), so the next region's other steps (건축HUB · VWorld · 기상, other providers) run meanwhile. 2026-11-21
+REGION_KAPT_LOCK='carbon:region-kapt'
+# A task that finds its lock taken asks again after this many seconds (was 120: up to 2 idle minutes between regions).
+LOCK_RETRY_SECONDS=30
+
+def _run_region_locked(task,lock_name,code,steps,force,defer_kapt):
+    """Run ``prepare_region`` while holding ``lock_name``; reschedule quota-bound steps for the next quota day."""
     import redis
+    import threading
     from .region_prepare import next_quota_reset,prepare_region
     from .regions import StudyRegion
-    import threading
     connection=redis.Redis.from_url(os.getenv('REDIS_URL','redis://redis:6379/0'))
     # Short lock renewed while the run is alive: a worker killed by a rebuild frees it within 10 minutes.
-    lock=connection.lock(REGION_LOCK,timeout=600,blocking_timeout=1,thread_local=False)
+    lock=connection.lock(lock_name,timeout=600,blocking_timeout=1,thread_local=False)
     if not lock.acquire(blocking=True):
-        raise self.retry(countdown=120)
+        raise task.retry(countdown=LOCK_RETRY_SECONDS)
     stop=threading.Event()
     def keep():
         while not stop.wait(150):
@@ -289,7 +295,7 @@ def run_prepare_region(self,code,steps=None,force=False):
     threading.Thread(target=keep,name='region-lock',daemon=True).start()
     try:
         with Session() as db:
-            result=prepare_region(db,code,steps,log=lambda message:None,force=force)
+            result=prepare_region(db,code,steps,log=lambda message:None,force=force,defer_kapt=defer_kapt)
             waiting=[step for step,item in (result['datasets'] or {}).items() if (item or {}).get('status')=='WAITING']
             if waiting:
                 region=db.get(StudyRegion,code)
@@ -299,10 +305,23 @@ def run_prepare_region(self,code,steps=None,force=False):
                 region.datasets=datasets;db.commit()
                 try: run_prepare_region.apply_async((code,waiting+['finalize'],False),eta=resume)
                 except Exception: pass
+            return result
     finally:
         stop.set()
         try: lock.release()
         except Exception: pass
+
+@celery_app.task(name='prepare_region',bind=True,max_retries=None)
+def run_prepare_region(self,code,steps=None,force=False):
+    result=_run_region_locked(self,REGION_LOCK,code,steps,force,defer_kapt=True)
+    if result.get('kapt_deferred'):
+        try: run_region_kapt.delay(code,result['kapt_deferred'],force)
+        except Exception: pass
+
+@celery_app.task(name='prepare_region_kapt',bind=True,max_retries=None)
+def run_region_kapt(self,code,steps,force=False):
+    """K-apt monthly energy + finalize of one region (queued by ``run_prepare_region``)."""
+    _run_region_locked(self,REGION_KAPT_LOCK,code,steps,force,defer_kapt=False)
 
 @celery_app.task(name='collect_national')
 def run_national(datasets):

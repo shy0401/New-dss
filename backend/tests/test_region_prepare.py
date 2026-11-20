@@ -355,3 +355,53 @@ def test_complexes_step_is_failed_when_no_detail_page_could_be_read(monkeypatch,
     monkeypatch.setattr(kapt, "fetch_complex_detail", lambda client, code: detail if code == "A1" else broken(client, code))
     result = region_prepare.step_complexes(db, Region(), lambda m: None, delay_s=0)
     assert "status" not in result and result["details"] == 1 and "상세 실패 1개" in result["message"]
+
+def _fake_region_db(monkeypatch):
+    """SQLite에 StudyRegion 한 행, 단계 실행기는 가짜(부른 단계만 적음)."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from app import region_prepare
+    from app.regions import StudyRegion
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    StudyRegion.__table__.create(engine)
+    db = sessionmaker(engine)()
+    db.add(StudyRegion(code="48330", name="양산시", sido_name="경상남도", legal_codes=["48330"], sgis_codes=[], datasets={}))
+    db.commit()
+    called = []
+    monkeypatch.setattr(region_prepare, "create_region", lambda db, code: db.get(StudyRegion, code))
+    monkeypatch.setattr(region_prepare, "forget_region_cache", lambda code=None: None)
+    monkeypatch.setattr(region_prepare, "RUNNERS", {s: (lambda s: (lambda db, r, log: called.append(s) or {"message": "ok"}))(s) for s in region_prepare.STEPS})
+    return db, called
+
+
+def test_region_run_leaves_kapt_for_its_own_run_and_the_kapt_run_finishes_it(monkeypatch):
+    """2026-11-21: K-apt 월별 에너지(초당 약 1회)와 정리 단계는 따로 된 작업(자체 잠금)으로 넘기고, 지역의 다른 단계
+    (건축HUB · VWorld · 기상)는 그동안 다음 지역에서 돈다. 넘긴 단계는 QUEUED, 지역 상태는 PREPARING으로 남는다."""
+    from app import region_prepare
+    db, called = _fake_region_db(monkeypatch)
+    result = region_prepare.prepare_region(db, "48330", log=lambda m: None, defer_kapt=True)
+    assert result["kapt_deferred"] == ["kapt_energy", "finalize"]
+    assert "kapt_energy" not in called and "finalize" not in called and "building_energy" in called
+    assert result["datasets"]["kapt_energy"]["status"] == "QUEUED" and "K-apt 차례 대기" in result["datasets"]["kapt_energy"]["message"]
+    assert result["datasets"]["finalize"]["status"] == "QUEUED" and result["status"] == "PREPARING"
+    called.clear()
+    result = region_prepare.prepare_region(db, "48330", result["kapt_deferred"], log=lambda m: None)   # K-apt 작업
+    assert called == ["kapt_energy", "finalize"] and result["status"] == "READY" and result["kapt_deferred"] == []
+    # 이미 받은 K-apt는 다시 QUEUED로 되돌리지 않음(정리만 다시)
+    result = region_prepare.prepare_region(db, "48330", ["complexes", "kapt_energy", "finalize"], log=lambda m: None, defer_kapt=True, force=False)
+    assert result["datasets"]["kapt_energy"]["status"] == "DONE" and result["kapt_deferred"] == ["kapt_energy", "finalize"]
+
+
+def test_region_task_queues_the_kapt_task_under_its_own_lock(monkeypatch):
+    from app import tasks
+    runs, queued = [], []
+    def fake_run(task, lock_name, code, steps, force, defer_kapt):
+        runs.append((lock_name, code, steps, defer_kapt))
+        return {"kapt_deferred": ["kapt_energy", "finalize"] if defer_kapt else []}
+    monkeypatch.setattr(tasks, "_run_region_locked", fake_run)
+    monkeypatch.setattr(tasks.run_region_kapt, "delay", lambda *a: queued.append(a))
+    tasks.run_prepare_region.run("48330", None, False)
+    assert runs == [("carbon:region-prepare", "48330", None, True)] and queued == [("48330", ["kapt_energy", "finalize"], False)]
+    tasks.run_region_kapt.run("48330", ["kapt_energy", "finalize"], False)
+    assert runs[-1] == ("carbon:region-kapt", "48330", ["kapt_energy", "finalize"], False)
+    assert tasks.LOCK_RETRY_SECONDS == 30
