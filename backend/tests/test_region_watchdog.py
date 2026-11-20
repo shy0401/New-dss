@@ -98,3 +98,30 @@ def test_ready_regions_and_live_runs_are_left_alone():
     conn.kv["carbon:lane-holder:kapt"] = b"48250"
     report, queued = run(db, conn)
     assert queued == [] and report["preparing"] == 1
+
+
+def test_worker_start_puts_back_only_the_stopped_workers_unfinished_tasks():
+    """2026-11-21: a rebuild left 267 taken-but-unfinished tasks (acks_late) waiting for the 26 h visibility timeout."""
+    from app.tasks import restore_stale_unacked
+
+    class Client:
+        def zrangebyscore(self, key, low, high):
+            assert key == "unacked_index"
+            return [tag for tag, at in ((b"old-1", 100.0), (b"old-2", 150.0), (b"mine", 300.0)) if low <= at <= high]
+
+    class Qos:
+        def __init__(self):
+            self.restored = []
+
+        def restore_by_tag(self, tag):
+            self.restored.append(tag)
+
+    class Channel:
+        unacked_index_key = "unacked_index"
+
+        def __init__(self):
+            self.client, self.qos = Client(), Qos()
+
+    channel = Channel()
+    assert restore_stale_unacked(channel, 200.0) == 2
+    assert channel.qos.restored == ["old-1", "old-2"]          # the one taken after the start stays with this worker

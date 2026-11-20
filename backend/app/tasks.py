@@ -412,10 +412,35 @@ def run_region_watchdog():
         try: run_region_watchdog.apply_async(countdown=INTERVAL_S)
         except Exception: pass
 
-from celery.signals import worker_ready
+from celery.signals import worker_init,worker_ready
+
+WORKER_STARTED_AT=[None]
+
+@worker_init.connect
+def _mark_worker_start(**kwargs):
+    import time
+    WORKER_STARTED_AT[0]=time.time()
+
+def restore_stale_unacked(channel,before):
+    """Put back on the queue the messages taken (acks_late) but not finished before ``before`` — by a worker that was
+    stopped (a rebuild, a Docker restart). Without this they come back only after visibility_timeout (26 h): on
+    2026-11-21 a rebuild during the national run left 267 tasks (every queued region) waiting, nothing ran. Messages
+    taken after ``before`` belong to the running worker and stay."""
+    client=channel.client
+    tags=client.zrangebyscore(channel.unacked_index_key,0,before)
+    for tag in tags:
+        channel.qos.restore_by_tag(tag.decode() if isinstance(tag,bytes) else tag)
+    return len(tags)
 
 @worker_ready.connect
 def _start_region_watchdog(**kwargs):
+    if os.getenv('RESTORE_UNACKED_ON_START','1')!='0' and WORKER_STARTED_AT[0]:
+        try:
+            with celery_app.connection() as connection:
+                restored=restore_stale_unacked(connection.default_channel,WORKER_STARTED_AT[0])
+            if restored:print(f'restored {restored} unfinished tasks of the stopped worker',flush=True)
+        except Exception as exc:  # noqa: BLE001 - the region watchdog still requeues orphaned steps
+            print(f'restore of unfinished tasks failed: {exc}',flush=True)
     if os.getenv('REGION_WATCHDOG','1')!='0':
         try: run_region_watchdog.apply_async(countdown=60)
         except Exception: pass
