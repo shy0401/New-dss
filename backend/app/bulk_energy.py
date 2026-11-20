@@ -90,40 +90,102 @@ def road_address(p: list[str]) -> str | None:
     return f"{p[4].strip()} {p[5].strip()} {road} {underground}{building} ({p[6].strip()}) "
 
 
+def split_root() -> Path:
+    return Path(os.getenv("DATA_DIR", "data")) / "cache" / "bulk-energy"
+
+
+def _split_dir(path: Path) -> Path:
+    stat = path.stat()
+    return split_root() / f"{path.stem}-{stat.st_size}-{int(stat.st_mtime)}"
+
+
+def ensure_split(path: Path) -> Path:
+    """The month file cut into one gzip per 시군구 code (2026-11-21, made once, then reused).
+
+    Reading a national month file takes seconds (4.6 of 5.2 s of one region-month, profiled), and every region read
+    all of it again: 22 regions × 24 files = 829 s. The cut is a cache under ``data/cache`` (the zip in ``data/raw`` is
+    untouched); its folder name carries the zip's size and time, so a replaced zip gets a new cut. Two workers cutting
+    the same file at once each write a temporary folder and only the first rename is kept."""
+    import gzip
+    import shutil
+    final = _split_dir(path)
+    if (final / ".done").exists():
+        return final
+    final.parent.mkdir(parents=True, exist_ok=True)
+    temp = final.parent / f"{final.name}.tmp{os.getpid()}"
+    shutil.rmtree(temp, ignore_errors=True)
+    temp.mkdir()
+    buckets: dict[bytes, list[bytes]] = {}
+    with zipfile.ZipFile(path) as archive:
+        member = next(i for i in archive.infolist() if not i.is_dir())
+        with archive.open(member) as handle:
+            for line in handle:
+                if line.startswith(b"\xef\xbb\xbf"):  # the file's BOM would stick to the first line of its piece
+                    line = line[3:]
+                parts = line.split(b"|", 3)
+                if len(parts) < 4:
+                    continue
+                code = parts[2]
+                buckets.setdefault(code if re.fullmatch(rb"\d{5}", code) else b"other", []).append(line)
+    for code, lines in buckets.items():
+        with gzip.open(temp / f"{code.decode('ascii')}.txt.gz", "wb", compresslevel=1) as out:
+            out.writelines(lines)
+    (temp / ".done").write_text(path.name, encoding="utf-8")
+    try:
+        temp.rename(final)
+    except OSError:  # another worker finished first
+        shutil.rmtree(temp, ignore_errors=True)
+    return final
+
+
+def _lines(path: Path, wanted: set[tuple[str, str]] | None) -> Iterable[str]:
+    """Text lines of the file: only the wanted 시군구 pieces of the cut, or the whole zip when ``wanted`` is None."""
+    import gzip
+    if wanted is None:
+        with zipfile.ZipFile(path) as archive:
+            member = next(i for i in archive.infolist() if not i.is_dir())
+            with archive.open(member) as handle:
+                yield from io.TextIOWrapper(handle, encoding="utf-8-sig", newline="")
+        return
+    folder = ensure_split(path)
+    for code in sorted({sg for sg, _ in wanted}):
+        piece = folder / f"{code}.txt.gz"
+        if piece.exists():
+            with gzip.open(piece, "rt", encoding="utf-8-sig", newline="") as handle:
+                yield from handle
+
+
 def read_month(path: Path, energy_type: str, wanted: set[tuple[str, str]] | None = None) -> dict[tuple[str, ...], dict[str, Any]]:
     """{(sigungu, bjdong, lot, bun, ji, use_ym, energy_type): {value, raw, rows, conflict, record}} of one file.
 
     ``wanted`` = {(file 시군구 code, 법정동 code)} to keep (None = all)."""
     out: dict[tuple[str, ...], dict[str, Any]] = {}
-    with zipfile.ZipFile(path) as archive:
-        member = next(i for i in archive.infolist() if not i.is_dir())
-        with archive.open(member) as handle:
-            for line in io.TextIOWrapper(handle, encoding="utf-8-sig", newline=""):
-                p = line.rstrip("\r\n").split("|")
-                if len(p) < COLUMNS or not p[0].isdigit():
-                    continue
-                if wanted is not None and (p[2], p[3]) not in wanted:
-                    continue
-                lot = p[7].strip() or "0"
-                key = (p[2], p[3], lot, p[8].strip().zfill(4)[-4:], p[9].strip().zfill(4)[-4:], p[0], energy_type)
-                raw = p[16].strip()
-                seq = int(p[1]) if p[1].isdigit() else 10**9
-                road = road_address(p)
-                item = out.get(key)
-                if item is None:
-                    record: dict[str, Any] = {"platPlc": parcel_address(p), "bulk_file": path.name}
-                    if road:
-                        record["newPlatPlc"] = road
-                    item = out[key] = {"rows": 0, "conflict": False, "record": record, "lines": [],
-                                       "seq": seq if road else 10**9, "value_seq": 10**9, "raw": None, "value": None}
-                item["rows"] += 1
-                item["lines"].append(raw)
-                # Tried against the API (2025-01 ~ 12, 2,575,968 지번): it answers the value and the road address of the
-                # lowest 순번. Lines of one 지번 with other values (2025-12: 120 지번) are kept in the record only.
-                if seq < item["value_seq"]:
-                    item["value_seq"], item["raw"], item["value"] = seq, raw, number(raw)
-                if road and seq < item["seq"]:
-                    item["record"]["newPlatPlc"], item["seq"] = road, seq
+    for line in _lines(path, wanted):
+        p = line.rstrip("\r\n").split("|")
+        if len(p) < COLUMNS or not p[0].isdigit():
+            continue
+        if wanted is not None and (p[2], p[3]) not in wanted:
+            continue
+        lot = p[7].strip() or "0"
+        key = (p[2], p[3], lot, p[8].strip().zfill(4)[-4:], p[9].strip().zfill(4)[-4:], p[0], energy_type)
+        raw = p[16].strip()
+        seq = int(p[1]) if p[1].isdigit() else 10**9
+        road = road_address(p)
+        item = out.get(key)
+        if item is None:
+            record: dict[str, Any] = {"platPlc": parcel_address(p), "bulk_file": path.name}
+            if road:
+                record["newPlatPlc"] = road
+            item = out[key] = {"rows": 0, "conflict": False, "record": record, "lines": [],
+                               "seq": seq if road else 10**9, "value_seq": 10**9, "raw": None, "value": None}
+        item["rows"] += 1
+        item["lines"].append(raw)
+        # Tried against the API (2025-01 ~ 12, 2,575,968 지번): it answers the value and the road address of the
+        # lowest 순번. Lines of one 지번 with other values (2025-12: 120 지번) are kept in the record only.
+        if seq < item["value_seq"]:
+            item["value_seq"], item["raw"], item["value"] = seq, raw, number(raw)
+        if road and seq < item["seq"]:
+            item["record"]["newPlatPlc"], item["seq"] = road, seq
     for item in out.values():
         raw = item["raw"]
         item["record"]["useQty"] = int(raw) if re.fullmatch(r"-?\d+", raw) else raw
