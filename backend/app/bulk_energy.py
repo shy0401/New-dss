@@ -9,9 +9,11 @@ and asks the API only for the rest.
 Columns (0-based): 0 사용년월, 1 순번, 2 시군구코드, 3 법정동코드, 4 시도명, 5 시군구명, 6 법정동명, 7 대지구분코드, 8 본번, 9 부번,
 10 새주소도로코드, 11 도로명, 12 지상지하코드, 13 지상지하명, 14 새주소본번, 15 새주소부번, 16 사용량(kWh).
 
-* A 지번 with several road addresses comes as several lines (순번) with the same 사용량: one parcel, the value once
-  (the API lists the 지번 once). Lines of one 지번 with different values are not added up and not stored (counted as
-  ``conflicts``): which one is right is unknown.
+* A 지번 with several road addresses comes as several lines (순번), mostly with the same 사용량: one parcel, the value
+  once (the API lists the 지번 once). When the lines differ, the API answers the lowest 순번's value (2025-01 ~ 12:
+  120 such 지번, all 120 equal to the lowest 순번): the same is stored, the other values are kept in
+  ``raw_record.bulk_other_useQty`` and counted as ``conflicts``. They are not added up (whether they are other meters
+  is 확인 필요).
 * Same rules as the API rows: same source name, negative or blank → ``usage_kwh`` NULL with the raw value kept.
 * 건축HUB rows already in the table (API) are never overwritten; their value is compared (``same`` / ``different``).
   An earlier K-apt row of the same parcel and month is replaced by the meter value with the old one kept, as the API
@@ -105,23 +107,30 @@ def read_month(path: Path, energy_type: str, wanted: set[tuple[str, str]] | None
                 lot = p[7].strip() or "0"
                 key = (p[2], p[3], lot, p[8].strip().zfill(4)[-4:], p[9].strip().zfill(4)[-4:], p[0], energy_type)
                 raw = p[16].strip()
+                seq = int(p[1]) if p[1].isdigit() else 10**9
+                road = road_address(p)
                 item = out.get(key)
                 if item is None:
-                    record: dict[str, Any] = {"platPlc": parcel_address(p), "useQty": int(raw) if re.fullmatch(r"-?\d+", raw) else raw,
-                                              "bulk_file": path.name}
-                    road = road_address(p)
-                    seq = 10**9
+                    record: dict[str, Any] = {"platPlc": parcel_address(p), "bulk_file": path.name}
                     if road:
-                        record["newPlatPlc"], seq = road, int(p[1]) if p[1].isdigit() else 10**9 - 1
-                    out[key] = {"raw": raw, "value": number(raw), "rows": 1, "conflict": False, "record": record, "seq": seq}
-                    continue
+                        record["newPlatPlc"] = road
+                    item = out[key] = {"rows": 0, "conflict": False, "record": record, "lines": [],
+                                       "seq": seq if road else 10**9, "value_seq": 10**9, "raw": None, "value": None}
                 item["rows"] += 1
-                if raw != item["raw"]:
-                    item["conflict"] = True
-                road = road_address(p)
-                seq = int(p[1]) if p[1].isdigit() else 10**9
-                if road and seq < item["seq"]:  # tried against the API (2025-01): it keeps the road address of the lowest 순번
+                item["lines"].append(raw)
+                # Tried against the API (2025-01 ~ 12, 2,575,968 지번): it answers the value and the road address of the
+                # lowest 순번. Lines of one 지번 with other values (2025-12: 120 지번) are kept in the record only.
+                if seq < item["value_seq"]:
+                    item["value_seq"], item["raw"], item["value"] = seq, raw, number(raw)
+                if road and seq < item["seq"]:
                     item["record"]["newPlatPlc"], item["seq"] = road, seq
+    for item in out.values():
+        raw = item["raw"]
+        item["record"]["useQty"] = int(raw) if re.fullmatch(r"-?\d+", raw) else raw
+        others = [v for v in item.pop("lines") if v != raw]
+        if others:
+            item["conflict"] = True
+            item["record"]["bulk_other_useQty"] = [int(v) if re.fullmatch(r"-?\d+", v) else v for v in others]
     return out
 
 
@@ -156,8 +165,7 @@ def import_months(db: Any, regions: Iterable[dict[str, str]], months: Iterable[s
                 for key, item in items:
                     lot, bun, ji = key[2], key[3], key[4]
                     if item["conflict"]:
-                        stats["conflicts"] += 1
-                        continue
+                        stats["conflicts"] += 1      # stored with the lowest 순번 value, like the API
                     if item["rows"] > 1:
                         stats["lines_merged"] += item["rows"] - 1
                     record = dict(item["record"])

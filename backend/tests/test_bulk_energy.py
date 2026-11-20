@@ -46,8 +46,8 @@ def test_read_month_one_value_per_lot_addresses_like_the_api_and_conflicts(tmp_p
         line("202501", 1, "41360", "10100", "0005", "0030", 350, lot="1", road="천마산로", road_main="68", road_sub="13"),
         line("202501", 1, "41360", "10100", "0000", "0000", -50),                      # no number, negative use
         line("202501", 1, "41360", "10100", "0014", "0000", 9, road="성남대로", road_main="491", under="1"),
-        line("202501", 1, "41360", "10100", "0020", "0001", 5),
-        line("202501", 2, "41360", "10100", "0020", "0001", 6),                         # same 지번, other value
+        line("202501", 2, "41360", "10100", "0020", "0001", 6),                         # same 지번, other value,
+        line("202501", 1, "41360", "10100", "0020", "0001", 5),                         # lower 순번 listed later
         line("202501", 1, "41360", "10200", "0001", "0000", 7),                         # not wanted
     ])
     rows = bulk_energy.read_month(path, "ELECTRICITY", {("41360", "10100")})
@@ -59,7 +59,9 @@ def test_read_month_one_value_per_lot_addresses_like_the_api_and_conflicts(tmp_p
     assert empty["value"] is None and empty["record"]["useQty"] == -50                   # NULL, raw kept
     assert empty["record"]["platPlc"] == "경기도 남양주시 호평동 "                       # the API keeps the space
     assert rows[("41360", "10100", "0", "0014", "0000", "202501", "ELECTRICITY")]["record"]["newPlatPlc"] == "경기도 남양주시 성남대로 지하491 (호평동) "
-    assert rows[("41360", "10100", "0", "0020", "0001", "202501", "ELECTRICITY")]["conflict"]
+    two = rows[("41360", "10100", "0", "0020", "0001", "202501", "ELECTRICITY")]
+    # the API answers the lowest 순번's value (2025-01 ~ 12: 120 of 120); the other value stays in the record
+    assert two["conflict"] and two["value"] == 5 and two["record"]["useQty"] == 5 and two["record"]["bulk_other_useQty"] == [6]
     assert not any(k[1] == "10200" for k in rows)
 
 
@@ -88,7 +90,7 @@ def test_import_keeps_api_rows_replaces_kapt_rows_and_maps_old_jeonbuk_codes(tmp
     ])
     write_zip(tmp_path / "2026-11-21", "GAS", "202301", [line("202301", 1, "45113", "11600", "0014", "0000", 0)])
     stats = bulk_energy.import_months(db, [{"sigunguCd": "52113", "bjdongCd": "11600"}], ["202301"], root=tmp_path)
-    assert (stats["same"], stats["different"], stats["replaced"], stats["inserted"], stats["conflicts"]) == (1, 1, 1, 2, 1)
+    assert (stats["same"], stats["different"], stats["replaced"], stats["inserted"], stats["conflicts"]) == (1, 1, 1, 3, 1)
     rows = {(r.bun, r.energy_type): r for r in db.scalars(select(EnergyMonthly))}
     assert rows[("0012", "ELECTRICITY")].usage_kwh == 1.0                                # API value kept
     replaced = rows[("0013", "ELECTRICITY")]
@@ -97,7 +99,8 @@ def test_import_keeps_api_rows_replaces_kapt_rows_and_maps_old_jeonbuk_codes(tmp
     new = rows[("0014", "ELECTRICITY")]
     assert new.sigungu_code == "52113" and new.raw_record["bulk_file"] == "MART_KEY_ELCTY_ENERGY_DATA_202301.zip"
     assert rows[("0014", "GAS")].usage_kwh == 0                                         # the provider's 0 stays 0
-    assert ("0015", "ELECTRICITY") not in rows                                          # two values for one 지번: not stored
+    two = rows[("0015", "ELECTRICITY")]                                                  # two values: the lowest 순번's
+    assert two.usage_kwh == 5 and two.raw_record["bulk_other_useQty"] == [6]
 
 
 def test_region_step_reads_file_months_and_asks_the_api_only_for_the_rest(tmp_path, monkeypatch):
