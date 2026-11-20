@@ -20,7 +20,7 @@ from typing import Any, Iterable
 
 import httpx
 from pyproj import Transformer
-from sqlalchemy import JSON, Boolean, Float, Integer, String, Text, select
+from sqlalchemy import JSON, Boolean, Float, Integer, String, Text, func, select
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .cache import CachedClient, ExternalError
@@ -589,10 +589,19 @@ def candidate_energy_parcels(db: Any, limit: int | None = 3, min_households: int
     return result
 
 
-def merge_energy_coordinates(db: Any, year: int = 2025) -> dict[str, int]:
-    """Attach coordinates/grid only for unique ordinary-land parcel matches."""
+def merge_energy_coordinates(db: Any, year: int = 2025, sigungu_codes: Any = None) -> dict[str, int]:
+    """Attach coordinates/grid only for unique ordinary-land parcel matches.
+
+    ``sigungu_codes``: only that region's complexes and energy rows (a region's finalize step, 2026-11-21). Without it
+    every complex and energy row of every region was read again: with 11.5 million energy rows one region's finalize
+    ran over 20 minutes and grew with each region. The prototype sector's baseline is then updated only when the
+    region holds that sector, so another region's finalize cannot clear it."""
     from .models import EnergyMonthly, TestbedSector
-    complexes = list(db.scalars(select(ApartmentComplex)))
+    codes = sorted({str(c)[:5] for c in sigungu_codes}) if sigungu_codes else None
+    query = select(ApartmentComplex)
+    if codes:
+        query = query.where(func.substr(ApartmentComplex.bjd_code, 1, 5).in_(codes))
+    complexes = list(db.scalars(query))
     index: dict[tuple[str, str, str], list[ApartmentComplex]] = {}
     for complex_row in complexes:
         if complex_row.bjd_code and complex_row.bun:
@@ -609,7 +618,10 @@ def merge_energy_coordinates(db: Any, year: int = 2025) -> dict[str, int]:
     keys = [(bjd[:5], bjd[5:], bun, ji) for (bjd, bun, ji) in index]
     candidates_filter = [tuple_(EnergyMonthly.sigungu_code, EnergyMonthly.bjdong_code, EnergyMonthly.bun, EnergyMonthly.ji).in_(keys[i:i + 500])
                          for i in range(0, len(keys), 500)]
-    rows = db.scalars(select(EnergyMonthly).where(or_(EnergyMonthly.grid_id.is_not(None), EnergyMonthly.match_method.is_not(None), *candidates_filter)))
+    where = or_(EnergyMonthly.grid_id.is_not(None), EnergyMonthly.match_method.is_not(None), *candidates_filter)
+    if codes:
+        where = (EnergyMonthly.sigungu_code.in_(codes)) & where
+    rows = db.scalars(select(EnergyMonthly).where(where))
     for energy in rows:
         if str(energy.lot_type or "0") not in {"", "0"}:
             energy.grid_id = None
@@ -656,8 +668,10 @@ def merge_energy_coordinates(db: Any, year: int = 2025) -> dict[str, int]:
             energy.grid_id = None
             energy.match_method = None
             unmatched += 1
-    parcel_sets = {frozenset(codes) for codes in observed_sets.values()}
+    parcel_sets = {frozenset(found) for found in observed_sets.values()}
     stable_codes = set(next(iter(parcel_sets))) if len(parcel_sets) == 1 else set()
+    if codes and sector and not any(row.grid_id == sector.grid_id for row in complexes):
+        sector = None   # this region does not hold the prototype sector: leave its baseline as it is
     if sector and stable_codes and baseline_area_complete:
         area = sum(row.gross_floor_area_m2 for row in complexes if row.kapt_code in stable_codes)
         metadata = dict(sector.metadata_json or {})

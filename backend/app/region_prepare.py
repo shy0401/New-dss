@@ -800,7 +800,7 @@ def step_finalize(db: Any, region: StudyRegion, log: Log) -> dict[str, Any]:
     """Energy ↔ grid links and the default 대상지 (the cell with the most K-apt households, else the centre cell)."""
     from .kapt import ApartmentComplex, merge_energy_coordinates
     try:
-        merge_energy_coordinates(db, analysis_year())
+        merge_energy_coordinates(db, analysis_year(), sigungu_codes=region.legal_codes or [region.code])
     except Exception as exc:  # noqa: BLE001 - linking is best effort; the map still shows the layers
         db.rollback()
         log(f"에너지-격자 연결 실패: {type(exc).__name__}")

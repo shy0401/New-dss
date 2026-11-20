@@ -92,7 +92,8 @@ def check(db: Any, conn: Any, *, now: float | None = None, queue: Callable[..., 
             elif "QUEUED" in states and "RUNNING" not in states and turn:
                 again += [s for s in steps if state(s) == "QUEUED"]
         # finalize left behind (the worker stopped between the last lane and finalize)
-        if not again and quiet and state("finalize") in ("QUEUED", "RUNNING") and holder["kapt"] != region.code \
+        # finalize runs under the lock of whichever lane finished last: orphaned only when the region holds no lane
+        if not again and quiet and state("finalize") in ("QUEUED", "RUNNING") and region.code not in holder.values() \
                 and not any(state(s) in ("QUEUED", "RUNNING") for lane_steps in LANES.values() for s in lane_steps):
             again = ["finalize"]
         if again:
