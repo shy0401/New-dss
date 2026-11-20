@@ -127,7 +127,8 @@ export interface AreaRegionGuide {
   /** 분석 지역 K-apt 단지의 난방 방식 구성(관측). 단지가 없으면 null */
   heating?: {
     complexes: number; unknown_complexes: number; households: number | null; source: string; value_kind: string; reading: string;
-    kinds: Array<{ kind: string; complexes: number; households: number; household_share_pct: number | null }>;
+    /** 세대수가 있는 단지가 없는 방식은 households · household_share_pct가 null(0이 아님) */
+    kinds: Array<{ kind: string; complexes: number; households: number | null; household_share_pct: number | null }>;
   } | null;
 }
 

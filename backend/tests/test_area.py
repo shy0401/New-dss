@@ -358,5 +358,8 @@ def test_heating_mix_counts_kinds_and_keeps_unknown_apart():
     assert mix["complexes"] == 4 and mix["unknown_complexes"] == 1 and mix["households"] == 1000   # 미상 500세대는 비율에 넣지 않음
     assert kinds["지역난방"]["household_share_pct"] == 90.0 and kinds["개별난방"]["complexes"] == 2 and kinds["개별난방"]["household_share_pct"] == 10.0
     assert "중앙난방" not in kinds                         # 없는 방식은 0행으로 만들지 않음
+    only_blank = heating_mix([{"heating_type": "개별난방", "households": 100}, {"heating_type": "기타", "households": None}])
+    other = next(k for k in only_blank["kinds"] if k["kind"] == "기타")
+    assert other["complexes"] == 1 and other["household_share_pct"] is None and other["households"] is None   # 세대수 없는 방식은 0 % 가 아니라 빈칸
     assert "−13.7%" in mix["reading"] and "지역난방 열 배출계수 없음" in mix["reading"]   # 사다리 상수에서 만든 문장
     assert heating_mix([]) is None

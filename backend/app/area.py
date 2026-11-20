@@ -946,7 +946,7 @@ def heating_mix(complexes: Any) -> dict[str, Any] | None:
     rows = list(complexes)
     if not rows:
         return None
-    kinds = {k: {"kind": k, "complexes": 0, "households": 0} for k in HEATING_KINDS}
+    kinds = {k: {"kind": k, "complexes": 0, "households": 0, "_with_households": 0} for k in HEATING_KINDS}
     unknown = 0
     for c in rows:
         kind = heating_kind(c.get("heating_type"))
@@ -954,11 +954,17 @@ def heating_mix(complexes: Any) -> dict[str, Any] | None:
             unknown += 1
             continue
         kinds[kind]["complexes"] += 1
-        kinds[kind]["households"] += int(c.get("households") or 0)
+        if c.get("households"):
+            kinds[kind]["households"] += int(c["households"])
+            kinds[kind]["_with_households"] += 1
     from .reduction_plan import ENVELOPE_GAS_SAVING
     known_households = sum(k["households"] for k in kinds.values())
     for k in kinds.values():
-        k["household_share_pct"] = round(k["households"] / known_households * 100, 1) if known_households else None
+        # 세대수가 있는 단지가 하나도 없는 방식은 비율을 비운다(0 %로 채우지 않음)
+        has_households = k.pop("_with_households") > 0
+        k["household_share_pct"] = round(k["households"] / known_households * 100, 1) if known_households and has_households else None
+        if not has_households:
+            k["households"] = None
     return {"complexes": len(rows), "unknown_complexes": unknown, "households": known_households or None,
             "kinds": [k for k in kinds.values() if k["complexes"]], "source": "K-apt 단지 기본정보(난방 방식), 이 도구에 받아 둔 단지",
             "reading": f"단열·창호 가스 지표(−{ENVELOPE_GAS_SAVING * 100:g}%)는 개별난방 단지 짝 비교에서 나온 값이고, 지역난방 단지의 난방 열 탄소는 "

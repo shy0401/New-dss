@@ -250,10 +250,11 @@ describe('RegionGuidePanel (지역 구분 · 평년 기후 · 방향 가이드 �
     const { RegionGuidePanel } = await import('./AreaPage');
     const { render: r, screen: sc } = await import('@testing-library/react');
     const heating = { complexes: 224, unknown_complexes: 3, households: 150000, source: 'K-apt 단지 기본정보', value_kind: '관측', reading: '단열·창호 가스 지표는 개별난방 단지 짝 비교에서 나온 값',
-      kinds: [{ kind: '지역난방', complexes: 185, households: 130000, household_share_pct: 86.7 }, { kind: '개별난방', complexes: 33, households: 20000, household_share_pct: 13.3 }] };
+      kinds: [{ kind: '지역난방', complexes: 185, households: 130000, household_share_pct: 86.7 }, { kind: '개별난방', complexes: 33, households: 20000, household_share_pct: 13.3 },
+        { kind: '중앙난방', complexes: 1, households: 300, household_share_pct: 0.2 }, { kind: '기타', complexes: 1, households: null, household_share_pct: null }] };
     r(<RegionGuidePanel analysis={{ history: { region_guide: { ...guide, heating } } } as never} />);
     const row = sc.getByTestId('region-guide-heating');
-    expect(row.textContent).toContain('지역 87% · 개별 13%');
+    expect(row.textContent).toContain('지역 87% · 개별 13% · 중앙 1% 미만 · 기타 1곳(세대수 없음)');   // 0 %로 채우지 않음
     expect(row.textContent).toContain('미상 3곳 제외');
     expect(row.textContent).toContain('개별난방 단지 짝 비교');
   });
