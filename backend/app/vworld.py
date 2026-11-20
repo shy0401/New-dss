@@ -400,6 +400,83 @@ def tiles_for(grid_ids: list[str], tile_m: int = 1000) -> dict[tuple[int, int], 
     return tiles
 
 
+def tile_request(dataset: str, layer: dict[str, Any], key: str, domain_value: str, x0: int, y0: int, cells: list[str], page: int,
+                 tile_m: int = 1000) -> tuple[str, dict[str, Any]]:
+    """(cache operation name, params) of one page of one 1km tile — the same for the prefetch and the stored pass, so the
+    prefetched page is the one the stored pass reads from the cache."""
+    xs = [int(c.split("_")[1]) for c in cells]
+    ys = [int(c.split("_")[2]) for c in cells]
+    bounds = (min(xs), min(ys), max(xs) + GRID_SIZE_M, max(ys) + GRID_SIZE_M)
+    params = {"service": "data", "version": "2.0", "request": "GetFeature", "key": key, "format": "json", "size": 1000, "page": page,
+              "data": layer["dataset_id"], "geomFilter": bbox_filter(bounds), "geometry": "true", "attribute": "true",
+              "crs": layer["source_crs"], "domain": domain_value}
+    if str(domain_value).strip().lower() in {"none", "-"}:
+        params.pop("domain")
+    return f"{dataset}-tile{tile_m}-{x0}-{y0}-{page}", params
+
+
+# Same-key measurement 2026-11-21 (1km tiles, cadastral page 1, 120 requests each, fresh cache): 1 flow 3.35 requests/s,
+# 2 flows 6.67, 3 flows 6.46 with longer answers, 1 flow without the 0.3 s gap 4.64, 2 flows at 0.15 s 5.96; no errors.
+# The provider tops out near 6.5/s → 2 flows, each keeping the 0.3 s gap.
+VWORLD_FLOWS_DEFAULT = 2
+
+
+def prefetch_vworld_cells(dataset: str, grid_ids: list[str], *, tile_m: int = 1000, flows: int | None = None,
+                          session_factory: Any = None, api_key: str | None = None, domain: str | None = None,
+                          data_dir: str | Path | None = None) -> tuple[int, int]:
+    """Fill the VWorld cache with every page of the region's tiles in parallel; ``collect_vworld_cells`` then stores
+    them in one thread from the cache. Failures are left to the stored pass (it asks again or records them).
+    Returns (pages fetched, failed)."""
+    import queue
+    import threading
+    flows = int(flows or os.getenv("VWORLD_FLOWS", str(VWORLD_FLOWS_DEFAULT)))
+    key = (api_key or os.getenv("VWORLD_API_KEY", "")).strip()
+    if dataset not in DATASETS or not key or flows < 2 or not grid_ids:
+        return 0, 0
+    layer = load_layer_config()[dataset]
+    root = Path(data_dir or os.getenv("DATA_DIR", "data"))
+    url = os.getenv("VWORLD_DATA_URL", VWORLD_API_URL)
+    domain_value = domain or os.getenv("VWORLD_DOMAIN", "http://localhost")
+    make = session_factory or (lambda: CachedClient(root / "cache" / "vworld", min_interval=0.3))
+    jobs: "queue.Queue[tuple[tuple[int, int], list[str]]]" = queue.Queue()
+    for tile in sorted(tiles_for(grid_ids, tile_m).items()):
+        jobs.put(tile)
+    done = [0, 0]
+    lock = threading.Lock()
+
+    def work() -> None:
+        try:
+            session = make()
+        except Exception:  # noqa: BLE001 - this flow does nothing; the stored pass still asks every page
+            return
+        while True:
+            try:
+                (x0, y0), cells = jobs.get_nowait()
+            except queue.Empty:
+                return
+            page = 1
+            while True:
+                operation, params = tile_request(dataset, layer, key, domain_value, x0, y0, cells, page, tile_m)
+                try:
+                    parsed = parse_cached_response(session, session.get("VWorld", operation, url, params), parse_vworld_response)
+                except Exception:  # noqa: BLE001 - the stored pass asks again and records the failure
+                    with lock:
+                        done[1] += 1
+                    break
+                with lock:
+                    done[0] += 1
+                if page >= parsed["total_pages"]:
+                    break
+                page += 1
+
+    threads = [threading.Thread(target=work, name=f"vworld-prefetch-{i}", daemon=True) for i in range(flows)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return done[0], done[1]
+
+
 def collect_vworld_cells(db: Any, dataset: str, grid_ids: list[str], *, tile_m: int = 1000, progress: Any = None,
                          client: CachedClient | None = None, api_key: str | None = None, domain: str | None = None,
                          data_dir: str | Path | None = None) -> dict[str, int]:
@@ -425,17 +502,10 @@ def collect_vworld_cells(db: Any, dataset: str, grid_ids: list[str], *, tile_m: 
     tiles = tiles_for(grid_ids, tile_m)
     stats = {"requests": 0, "features": 0, "tiles": len(tiles), "cells": len(member), "geometry_repaired": 0}
     for index, ((x0, y0), cells) in enumerate(sorted(tiles.items()), 1):
-        xs = [int(c.split("_")[1]) for c in cells]
-        ys = [int(c.split("_")[2]) for c in cells]
-        bounds = (min(xs), min(ys), max(xs) + GRID_SIZE_M, max(ys) + GRID_SIZE_M)
         page, found, per_cell = 1, 0, {c: 0 for c in cells}
         while True:
-            params = {"service": "data", "version": "2.0", "request": "GetFeature", "key": key, "format": "json", "size": 1000, "page": page,
-                      "data": layer["dataset_id"], "geomFilter": bbox_filter(bounds), "geometry": "true", "attribute": "true",
-                      "crs": layer["source_crs"], "domain": domain_value}
-            if str(domain_value).strip().lower() in {"none", "-"}:
-                params.pop("domain")
-            result = session.get("VWorld", f"{dataset}-tile{tile_m}-{x0}-{y0}-{page}", url, params)
+            operation, params = tile_request(dataset, layer, key, domain_value, x0, y0, cells, page, tile_m)
+            result = session.get("VWorld", operation, url, params)
             stats["requests"] += 1
             raw_path = raw_root / f"{x0}_{y0}-page-{page}.json"
             raw_path.write_bytes(result["body"])
