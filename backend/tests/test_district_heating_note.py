@@ -26,6 +26,12 @@ def test_heat_factor_is_the_supplier_branch_value_of_that_year():
     assert district_heat_factor("41110", 2025)["kg_per_kwh"] == 0.1302      # 수도권 연계지사(수원 · 광교)
     assert district_heat_factor("11740", 2025) is None                     # 공급자 확인 전 지역
     assert district_heat_factor("36110", 2014) is None                     # 그해 값이 없으면 가까운 해로 채우지 않음
+    # 2021 집단에너지사업 편람: 달서 = 대구지사(성서 · 대곡 · 용산 · 장기), 양산 = 양산지사(물금 · 사송)
+    assert district_heat_factor("27290", 2025)["branch"] == "대구" and district_heat_factor("27290", 2025)["kg_per_kwh"] == 0.1324
+    assert district_heat_factor("48330", 2025)["branch"] == "양산" and district_heat_factor("48330", 2025)["kg_per_kwh"] == 0.1325
+    assert district_heat_factor("27290", 2022)["kg_per_kwh"] == 0.2081      # 대구지사는 해마다 크게 다름 → 그해 값
+    # 사업자가 둘(성남: 한난 분당 · 판교 + 나래 위례), 계수 미공표(남양주: 별내에너지), 지정 지역 없음(제주) → 계산 안 함
+    assert all(district_heat_factor(code, 2025) is None for code in ("41130", "41360", "50110"))
 
 
 def test_heat_estimate_uses_individual_minus_district_gas(monkeypatch):
@@ -47,17 +53,26 @@ def test_standard_doc_heat_table_matches_the_code():
     """기준 문서 5.16의 계수표와 emissions 상수가 같다(AGENTS.md: 계수는 문서와 코드가 같아야 함)."""
     import re
     from pathlib import Path
-    from app.emissions import KDHC_HEAT_KG_PER_TJ, district_heat_factor
+    from app.emissions import HEAT_SUPPLIER_BRANCH, KDHC_HEAT_KG_PER_TJ, district_heat_factor
     import pytest
     path = Path(__file__).resolve().parents[2] / "docs" / "DATA_STANDARD.md"
     if not path.exists():   # 백엔드 폴더만 넣은 컨테이너에서는 문서가 없음(CI는 저장소 전체)
         pytest.skip("docs/DATA_STANDARD.md 없음")
     doc = path.read_text(encoding="utf-8")
     section = doc.split("### 5.16", 1)[1].split("## 6.", 1)[0]
-    rows = re.findall(r"^\| (20\d\d) \| ([\d,.· ]+) \| ([\d.]+) \| ([\d,.· ]+) \| ([\d.]+) \|$", section, re.M)
-    assert len(rows) == 11
+    region_of = {branch: code for code, branch in HEAT_SUPPLIER_BRANCH.items()}
     num = lambda s: tuple(float(x.replace(",", "")) for x in s.split("·"))
-    for year, sejong, sejong_kwh, metro, metro_kwh in rows:
-        y = int(year)
-        assert num(sejong) == KDHC_HEAT_KG_PER_TJ["세종"][y] and num(metro) == KDHC_HEAT_KG_PER_TJ["수도권연계"][y]
-        assert float(sejong_kwh) == district_heat_factor("36110", y)["kg_per_kwh"] and float(metro_kwh) == district_heat_factor("41110", y)["kg_per_kwh"]
+    seen = {}
+    # 표마다 머리줄의 지사 이름 두 개("<지사>지사 CO2 · CH4 · N2O")를 읽고 그 아래 연도 줄을 코드와 견줌
+    for head, body in re.findall(r"^\| 연도 \| (.+?) \|\n\|[-| ]+\|\n((?:\| 20\d\d \|.*\n?)+)", section, re.M):
+        branches = [b.replace(" ", "") for b in re.findall(r"([^|]+?)지사 CO2", head)]
+        assert len(branches) == 2, head
+        for year, a, a_kwh, b, b_kwh in re.findall(r"^\| (20\d\d) \| ([\d,.· ]+) \| ([\d.]+) \| ([\d,.· ]+) \| ([\d.]+) \|$", body, re.M):
+            y = int(year)
+            for branch, values, kwh in ((branches[0], a, a_kwh), (branches[1], b, b_kwh)):
+                assert num(values) == KDHC_HEAT_KG_PER_TJ[branch][y]
+                assert float(kwh) == district_heat_factor(region_of[branch], y)["kg_per_kwh"]
+                seen.setdefault(branch, set()).add(y)
+    # 코드의 지사 · 연도가 문서에 빠짐없이 있음
+    assert seen == {branch: set(years) for branch, years in KDHC_HEAT_KG_PER_TJ.items()}
+    assert set(KDHC_HEAT_KG_PER_TJ) == set(HEAT_SUPPLIER_BRANCH.values())
