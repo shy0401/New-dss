@@ -126,7 +126,7 @@ export interface AreaRegionGuide {
   value_kinds: string; check: string;
   reference?: { station: string | null; sunshine_hours_year: number | null };
   /** 감축 방안의 태양광 용량에 쓰는 지역 발전량 추정(solar.py). 없으면 null(0이 아님) */
-  solar?: { year: number; yield_kwh_per_kw: number; irradiation_kwh_m2: number; performance_ratio: number; source: string } | null;
+  solar?: { year: number; yield_kwh_per_kw: number; irradiation_kwh_m2: number; performance_ratio: number; source: string; source_type?: string } | null;
   /** 냉방 쪽 수단(쓰임만, 새 값 없음)과 그 지역에서의 읽는 법 */
   cooling?: { items: Array<{ label: string; use: string; indicator: string | null }>; reading: string };
   /** 감축률의 지역 차이(지역 보정 관문 G2) 문장 */

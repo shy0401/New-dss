@@ -403,7 +403,7 @@ export function RegionGuidePanel({ analysis }: { analysis: AreaAnalysis }) {
           <td><small>{g.heating.source}</small></td></tr>}
         {g.solar !== undefined && <tr data-testid="region-guide-solar"><td>지붕 태양광 발전량 (kW당 연)</td>
           <td className="num">{g.solar ? `${Math.round(g.solar.yield_kwh_per_kw).toLocaleString('ko-KR')} kWh` : '자료 없음'}</td>
-          <td>{g.solar ? `${g.solar.year}년 수평면 일사량 ${Math.round(g.solar.irradiation_kwh_m2).toLocaleString('ko-KR')} kWh/m² × 성능비 ${g.solar.performance_ratio.toFixed(2)}(추정, 경사 보정 없음). 감축 방안의 태양광 용량은 이 값으로 계산합니다` : '이 지역은 12개월이 다 있는 일사 자료가 없어 계산하지 않았습니다'}
+          <td>{g.solar ? `${g.solar.year}년 수평면 일사량 ${Math.round(g.solar.irradiation_kwh_m2).toLocaleString('ko-KR')} kWh/m²${g.solar.source_type === 'FALLBACK' ? '(대체 자료: 재분석)' : g.solar.source_type === 'OFFICIAL' ? '(관측)' : ''} × 성능비 ${g.solar.performance_ratio.toFixed(2)}(발전량은 추정, 경사 보정 없음). 감축 방안의 태양광 용량은 이 값으로 계산합니다` : '이 지역은 12개월이 다 있는 일사 자료가 없어 계산하지 않았습니다'}
             {c?.sunshine_hours_year != null ? ` · 평년 일조 ${Math.round(c.sunshine_hours_year).toLocaleString('ko-KR')}시간` : ''}{c?.sunshine_hours_year != null && g.reference?.sunshine_hours_year != null ? `(전주 ${Math.round(g.reference.sunshine_hours_year).toLocaleString('ko-KR')}시간)` : ''}</td>
           <td><small>{g.solar ? g.solar.source : '—'}{c?.sunshine_hours_year != null ? ` · ${g.sources.climate}` : ''}</small></td></tr>}
         {g.cooling && <tr data-testid="region-guide-cooling"><td>냉방 쪽 수단</td>
