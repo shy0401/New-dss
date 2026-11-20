@@ -395,7 +395,7 @@ def test_lane_plan_and_order(monkeypatch):
     """기본 단계 뒤 K-apt · VWorld 차선을 넣고, 건축HUB는 VWorld 뒤, 정리는 마지막 차선이 함."""
     from app import tasks
     runs, queued = [], []
-    monkeypatch.setattr(tasks, "_run_region_locked", lambda task, lock, code, steps, force: runs.append((lock, steps)) or {"datasets": {}})
+    monkeypatch.setattr(tasks, "_run_region_locked", lambda task, lock, code, steps, force, **kw: runs.append((lock, steps)) or {"datasets": {}})
     monkeypatch.setattr(tasks.run_region_lane, "delay", lambda *a: queued.append(a))
     tasks.run_prepare_region.run("48330", None, False)
     assert runs == [("carbon:region-prepare", ["grid", "sgis_admin", "complexes", "weather", "ordinance"])]
@@ -407,11 +407,11 @@ def test_lane_plan_and_order(monkeypatch):
     assert runs == [("carbon:region-vworld", ["zoning"])] and queued == [("bldhub", "48330", ["register", "building_energy"], False, True, None)]
     # 건축HUB 차선 끝: 다른 차선(K-apt)이 아직 돌면 정리 안 함, 다 끝났으면 정리
     runs.clear()
-    monkeypatch.setattr(tasks, "_run_region_locked", lambda task, lock, code, steps, force: runs.append((lock, steps)) or {"datasets": {"kapt_energy": {"status": "RUNNING"}}})
+    monkeypatch.setattr(tasks, "_run_region_locked", lambda task, lock, code, steps, force, **kw: runs.append((lock, steps)) or {"datasets": {"kapt_energy": {"status": "RUNNING"}}})
     tasks.run_region_lane.run("bldhub", "48330", ["register"], False, True, None)
     assert runs == [("carbon:region-bldhub", ["register"])]
     runs.clear()
-    monkeypatch.setattr(tasks, "_run_region_locked", lambda task, lock, code, steps, force: runs.append((lock, steps)) or {"datasets": {"kapt_energy": {"status": "DONE"}}})
+    monkeypatch.setattr(tasks, "_run_region_locked", lambda task, lock, code, steps, force, **kw: runs.append((lock, steps)) or {"datasets": {"kapt_energy": {"status": "DONE"}}})
     tasks.run_region_lane.run("kapt", "48330", ["kapt_energy"], False, True, None)
     assert runs == [("carbon:region-kapt", ["kapt_energy"]), ("carbon:region-kapt", ["finalize"])]
     # 일부 단계만 다시: 건축HUB만 → VWorld 없이 바로 건축HUB 차선

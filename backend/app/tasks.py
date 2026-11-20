@@ -278,17 +278,28 @@ LANE_LOCKS={'basic':REGION_LOCK,'kapt':REGION_KAPT_LOCK,'vworld':'carbon:region-
 # A task that finds its lock taken asks again after this many seconds (was 120: up to 2 idle minutes between regions).
 LOCK_RETRY_SECONDS=30
 
-def _run_region_locked(task,lock_name,code,steps,force):
-    """Run ``prepare_region`` while holding ``lock_name``; reschedule quota-bound steps for the next quota day."""
+LANE_OF_LOCK={lock:lane for lane,lock in LANE_LOCKS.items()}
+
+def _run_region_locked(task,lock_name,code,steps,force,ordered=True):
+    """Run ``prepare_region`` while holding ``lock_name``; reschedule quota-bound steps for the next quota day.
+
+    ``ordered``: wait in the lane's rank order (``region_priority``, 2026-11-21) — the lock goes to the waiting region
+    ranked highest, not to whichever task asks first. Finalize (short, after the region's own lane) skips the order."""
     import redis
     import threading
     from .region_prepare import next_quota_reset,prepare_region
+    from .region_priority import leave,my_turn
     from .regions import StudyRegion
     connection=redis.Redis.from_url(os.getenv('REDIS_URL','redis://redis:6379/0'))
+    lane=LANE_OF_LOCK.get(lock_name,lock_name)
+    if ordered and not my_turn(connection,lane,code):
+        raise task.retry(countdown=LOCK_RETRY_SECONDS)
     # Short lock renewed while the run is alive: a worker killed by a rebuild frees it within 10 minutes.
     lock=connection.lock(lock_name,timeout=600,blocking_timeout=1,thread_local=False)
     if not lock.acquire(blocking=True):
         raise task.retry(countdown=LOCK_RETRY_SECONDS)
+    if ordered:
+        leave(connection,lane,code)
     stop=threading.Event()
     def keep():
         while not stop.wait(150):
@@ -320,6 +331,14 @@ def lane_plan(steps=None):
     pick=lambda lane:[s for s in wanted if s in LANES[lane]]
     return pick('basic'),pick('kapt'),pick('vworld'),pick('bldhub'),'finalize' in wanted
 
+def _cancelled(code):
+    try:
+        import redis
+        from .region_priority import cancelled
+        return cancelled(redis.Redis.from_url(os.getenv('REDIS_URL','redis://redis:6379/0')),code)
+    except Exception:  # noqa: BLE001 - no Redis (tests): nothing was cancelled
+        return False
+
 def _queue_lane(lane,code,steps,force,finalize,then=None):
     try: run_region_lane.delay(lane,code,steps,force,finalize,then)
     except Exception: pass
@@ -328,6 +347,8 @@ def _queue_lane(lane,code,steps,force,finalize,then=None):
 def run_prepare_region(self,code,steps=None,force=False):
     """Basic steps of one region, then the K-apt and VWorld lanes (the 건축HUB lane follows VWorld)."""
     basic,kapt,vworld,bldhub,finalize=lane_plan(steps)
+    if _cancelled(code):   # the national run was stopped before this region started (region_priority.cancel_queued)
+        return
     if basic:
         _run_region_locked(self,REGION_LOCK,code,basic,force)
     if kapt:
@@ -355,7 +376,7 @@ def run_region_lane(self,lane,code,steps,force=False,finalize=False,then=None):
             with Session() as db:
                 region=db.get(StudyRegion,code);datasets=dict(region.datasets or {}) if region else {}
         if not other_lanes_busy(datasets):
-            _run_region_locked(self,LANE_LOCKS[lane],code,['finalize'],force)
+            _run_region_locked(self,LANE_LOCKS[lane],code,['finalize'],force,ordered=False)
 
 @celery_app.task(name='prepare_region_kapt',bind=True,max_retries=None)
 def run_region_kapt(self,code,steps,force=False):
