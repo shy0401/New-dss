@@ -330,7 +330,7 @@ def step_complexes(db: Any, region: StudyRegion, log: Log, *, delay_s: float = 0
                 details += 1
             except (RuntimeError, ExternalError, ValueError, TypeError, KeyError, httpx.HTTPError) as exc:
                 # One unreadable detail page leaves that complex with its list values only.
-                failed.append(f"{code}: {type(exc).__name__}")
+                failed.append(f"{code}: {type(exc).__name__} {str(exc)[:80]}".strip())
             apply_complex(db, row, pair, month)
             if index % 50 == 0:
                 db.commit()
@@ -338,8 +338,13 @@ def step_complexes(db: Any, region: StudyRegion, log: Log, *, delay_s: float = 0
     finally:
         client.client.close()
     db.commit()
-    return {"rows": len(summaries), "message": f"K-apt 단지 {len(summaries):,}개 (상세 {details:,}개{f', 상세 실패 {len(failed)}개' if failed else ''}, 목록 기준 {month})",
-            "details": details, "failed": failed[:10]}
+    message = f"K-apt 단지 {len(summaries):,}개 (상세 {details:,}개{f', 상세 실패 {len(failed)}개' if failed else ''}, 목록 기준 {month})"
+    if summaries and not details:
+        # 2026-11-20 대구 달서: 252곳 상세가 모두 실패했는데 DONE으로 끝나 난방 방식 · 주소가 빈 채로 남았다(한 건씩 다시 부르면 정상,
+        # 그때만의 실패). 상세가 하나도 없으면 FAILED로 남겨 다시 돌리게 하고, 첫 오류를 메시지에 적는다(목록 값은 그대로 저장됨).
+        return {"status": "FAILED", "rows": len(summaries), "message": f"{message} — 상세를 하나도 읽지 못함, 다시 실행 필요 (첫 오류: {failed[0]})",
+                "details": 0, "failed": failed[:10]}
+    return {"rows": len(summaries), "message": message, "details": details, "failed": failed[:10]}
 
 
 def step_weather(db: Any, region: StudyRegion, log: Log) -> dict[str, Any]:
