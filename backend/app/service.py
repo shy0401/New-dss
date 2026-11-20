@@ -51,6 +51,29 @@ def grid_heating(complexes):
     if not weights:return None
     return max(weights,key=weights.get)
 
+def heating_share(complexes):
+    """대상지 단지의 지역난방 비중(연면적 가중, %). 난방 방식을 아는 단지가 없으면 None(0이 아님). 2026-11-20
+
+    지역난방 열의 탄소는 계수가 없어 계산 밖이라(기준 문서 5.14 · 5.15), 비중을 계획안 가정 문장에 적는 데 쓴다."""
+    weights={};known=unknown=0
+    for c in complexes:
+        group=heating_group(getattr(c,'heating_type',None))
+        if not group:unknown+=1;continue
+        known+=1;area=getattr(c,'gross_floor_area_m2',None) or 0
+        weights[group]=weights.get(group,0)+(area if area>0 else 1)
+    total=sum(weights.values())
+    if not total:return None
+    return {'district_share_pct':round(weights.get('district',0)/total*100,1),'complexes':known,'unknown_complexes':unknown}
+
+def district_heating_note(share):
+    """지역난방 비중이 0보다 큰 대상지의 가정 문장(계산 엔진 문장, 숫자는 이 함수 인자와 상수에서만)."""
+    if not share or not share.get('district_share_pct'):return None
+    from .reduction_plan import ENVELOPE_GAS_SAVING
+    return (f"대상지 격자에서 난방 방식을 아는 K-apt 단지 {share['complexes']}곳 중 연면적 {share['district_share_pct']:.0f}%가 지역난방입니다. "
+            "지역난방 열의 탄소는 배출계수가 없어 이 계산에 들어가지 않아 그만큼 운영탄소가 작게 잡힙니다"
+            "(지역난방 단지의 건축HUB 가스 원단위는 개별난방 단지의 약 20분의 1). "
+            f"단열·창호 가스 절감({ENVELOPE_GAS_SAVING*100:.1f}%)의 근거도 개별난방 단지입니다.")
+
 def pooled_baseline(db,year,sc=None,heating=None):
     """Consistent baseline over every K-apt-linked parcel of a region (``sc``; None = all regions).
 
