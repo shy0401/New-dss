@@ -49,9 +49,11 @@ def test_design_zones_follow_the_notice():
 def test_regional_climate_guide_is_a_marked_estimate_against_jeonju():
     r = rows("regional_climate_guide.csv")
     assert len(r) == 269
-    assert [x["sigungu_name"] for x in r if not x["mapping"]] == ["세종특별자치시"]   # 지점 이름이 '세종연서'라 연결 안 됨
-    blank = next(x for x in r if not x["mapping"])
-    assert blank["hdd18_normal"] == "" and blank["guide_emission_change_pct"] == ""   # 0으로 채우지 않음
+    assert [x["sigungu_name"] for x in r if not x["mapping"]] == []
+    # 세종: 지점 이름 '세종연서'(611)는 이름 규칙에 안 맞지만 좌표가 세종시 연서면 안(DB 경계, 2026-11-21) → 세종 지점
+    sejong = next(x for x in r if x["sigungu_code"] == "36110")
+    assert (sejong["station_id"], sejong["station_name"], sejong["mapping"]) == ("611", "세종연서", "광역시 이름 지점(좌표 확인)")
+    assert sejong["hdd18_normal"] != "" and sejong["sunshine_hours_year"] == ""   # 이 지점 평년값에 일조가 없음: 0으로 채우지 않음
     jeonju = next(x for x in r if x["sigungu_name"] == "전북특별자치도 전주시 완산구")
     assert jeonju["station_name"] == "전주" and float(jeonju["guide_emission_change_pct"]) == 0.0 and float(jeonju["hdd_ratio_vs_jeonju"]) == 1.0
     assert all("ESTIMATED" in x["value_kinds"] and "예측 아님" in x["value_kinds"] for x in r)
@@ -89,7 +91,8 @@ def test_region_guide_joins_zone_climate_and_plans():
     assert g["climate"]["station"] == "전주" and g["climate"]["guide_emission_change_pct"] == 0.0
     assert [(p["code"], p["tasks"]) for p in g["plans"]] == [("52110", 32), ("52", 14)]   # 시 계획 먼저, 그다음 도 계획
     sejong = region_guide("36110")
-    assert sejong["climate"] is None and sejong["plans"][0]["tasks"] == 33   # 기후는 빈칸(0으로 채우지 않음)
+    assert sejong["climate"]["station"] == "세종연서" and sejong["climate"]["sunshine_hours_year"] is None   # 일조는 빈칸(0이 아님)
+    assert sejong["plans"][0]["tasks"] == 33
     assert region_guide("99999") is None
     assert "예측 아님" in g["value_kinds"]
     # 냉방 쪽 수단: 모든 지역에 같은 목록, 읽는 법만 냉방도일 비의 부호로(새 임계값 없음)
@@ -97,7 +100,9 @@ def test_region_guide_joins_zone_climate_and_plans():
     assert g["cooling"]["items"][0]["use"] == "지표만" and g["cooling"]["items"][3]["use"].startswith("설비 사양")
     assert "1.00배입니다" in g["cooling"]["reading"] and "더 필요한" not in g["cooling"]["reading"]
     assert "더 필요한 지역" in region_guide("27110")["cooling"]["reading"]   # 대구 중구 CDD 비 1.06
-    assert "견주지 못합니다" in sejong["cooling"]["reading"]
+    assert "0.36배입니다" in sejong["cooling"]["reading"]   # 세종연서 CDD 비 0.360(2026-11-21 연결)
+    from app.reference_tables import cooling_measures
+    assert "견주지 못합니다" in cooling_measures(None)["reading"]   # 기후 값이 없는 지역
     assert "2.21 · 2.72%p" in g["rate_note"] and "중부2" in g["rate_note"]
     assert g["reference"]["station"] == "전주" and g["reference"]["sunshine_hours_year"] == 2063.0
 
