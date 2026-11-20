@@ -3,7 +3,7 @@
 서비스와 분석이 함께 쓰는 손정리 · 계산 표. 2026-11-20에 PC 실험 폴더에서 옮겼다. 서비스는 `backend/app/reference_tables.py`로 읽는다(2026-11-20 연결):
 - `design_zone_sigungu.csv` → 표준지표 지역(중부 · 남부, `benchmarks.py`). **계산에 쓰는 유일한 표**
 - `reduction_evidence.csv` → 보고서 화면 '감축 수단 근거표'의 수단별 행 · 출처 · 등급 요약과 도구 수단에 없는 묶음(표시만, 값을 계획안에 곱하지 않음)
-- `regional_climate_guide.csv` · `local_plans_building.csv` → 지역 화면 '지역 기후·지자체 계획 가이드'(표시만, 감축률 보정 · 필요 감축량에 쓰지 않음)
+- `regional_climate_guide.csv` · `local_plans_building.csv` · `apartment_energy_stats_2025.csv` → 지역 기후 · 지자체 계획 가이드(지역 시뮬레이션 화면과 전국 지역 화면의 시군구 상세, 표시만, 감축률 보정 · 필요 감축량에 쓰지 않음)
 - `design_zone_uvalue_apartment.csv` · `regional_conditions_sigungu.csv`는 아직 읽지 않는다
 
 - 없는 값은 빈칸(NULL). 0으로 채우지 않는다
@@ -18,6 +18,7 @@
 | `design_zone_sigungu.csv` | 269 | 시군구 → 설계기준 지역 구분(중부1 · 중부2 · 남부 · 제주) | `regional_adjust/design_zone_sigungu.csv` | (나) |
 | `design_zone_uvalue_apartment.csv` | 11 | 공동주택 부위별 열관류율 기준(지역 구분별) | `regional_adjust/design_zone_uvalue_apartment.csv` | (나) |
 | `regional_conditions_sigungu.csv` | 23 | 지역 조건표: DB에 기상 · 단지가 있는 시군구의 지역 구분 · 평년 도일 · 단지 수 · 용도 몫 · 2025 통계 원단위 | `regional_adjust/regional_conditions_sigungu.csv` | (나) |
+| `apartment_energy_stats_2025.csv` | 249 | 시군구 아파트 에너지 통계(건물에너지사용량통계 2025, TOE) · 지역난방 열 비중 | `regional_guide/build_heat_stats.py` | (나) |
 | `regional_climate_guide.csv` | 269 | 지역 기후 가이드: 전국 시군구의 기상청 평년값(1991~2020) 기후 값 · 전주 대비 냉난방도일 비 · 기준 배출 방향 가이드(추정) · 지자체 과제 수 | `regional_guide/out/regional_climate_guide.csv` | (나) |
 
 ## `reduction_evidence.csv`
@@ -61,3 +62,9 @@
 - **정부 기준과의 점검(미리 정한 규칙): 맞지 않음.** 남부 에너지 중앙값 −4.3% 대 표준베이스라인 남부 ÷ 중부2 −11.9%(차이 7.6%p, 기준 ±5%p). 가이드는 정부 기준보다 지역 차이를 작게 본다 — 정부 값에는 단지 구성(면적 · 연식) 차이도 섞여 있고, 평년 일평균 도일은 지역 차이를 줄인다(까닭은 확인 필요)
 - `within_our_data_hdd_range`: 우리 단지 자료가 있는 시군구의 평년값 HDD 범위(1,818~3,091) 밖이면 "자료 범위 밖"(16곳: 제주 · 철원 등)
 - 규칙(결과 전에 적음) · 결과: PC `project/tools/experiments/regional_guide/README.md`
+
+## `apartment_energy_stats_2025.csv` (시군구 아파트 에너지 통계, 2026-11-20)
+- 건물에너지사용량통계(국가승인통계 제408003호, 그린투게더) 2025년 아파트: 시군구 × 동수 · 연면적 · 전기 · 도시가스 · 지역난방 · 전체 **TOE**. 그린투게더 화면을 옮겨 적은 값(화면의 "-"는 빈칸). 249곳(인천 중구 · 동구 · 서구 3곳은 행정구역 개편으로 코드를 찾지 못해 뺌)
+- `district_heat_share_pct` = 지역난방 TOE ÷ 전체 TOE × 100(같은 통계 같은 단위, kWh 환산 가정 없음). 지역난방이 빈칸이면 비중도 빈칸(0 %가 아님). 83곳에 값이 있음
+- 지역 가이드(`reference_tables.heat_stats`)가 전국 지역 화면의 시군구 상세와 지역 시뮬레이션에서 "아파트 에너지 중 지역난방 열(통계)"로 보인다. 구가 있는 시 코드(수원 41110 등)는 그 시의 구를 더한다. 난방 방식을 가르지 않는 시군구 합계라 K-apt 단지 난방 방식과 다를 수 있다(예: 부산 강서는 통계에 지역난방이 없지만 K-apt 단지는 연면적 61%가 지역난방)
+- 이용약관은 확인 필요(기준 문서 2절). 만든 스크립트: PC `project/tools/experiments/regional_guide/build_heat_stats.py`

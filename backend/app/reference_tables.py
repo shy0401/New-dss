@@ -146,6 +146,27 @@ def cooling_measures(cdd_ratio: float | None) -> dict[str, Any]:
     return {"items": items, "reading": f"{where}. {COOLING_SHARE_NOTE}"}
 
 
+HEAT_STATS_SOURCE = "건물에너지사용량통계(국가승인통계 제408003호, 그린투게더) 2025 아파트"
+
+
+def heat_stats(code: str | None) -> dict[str, Any] | None:
+    """시군구 아파트 에너지 중 지역난방 열 비중(통계, TOE끼리 나눔). 구가 있는 시 코드는 그 시의 구를 더한다. 표에 없으면 None.
+
+    지역난방 TOE가 통계에 없으면(화면 "-") 비중도 None — 0 %로 쓰지 않는다(2026-11-20)."""
+    code = str(code or "")
+    rows = [r for r in _rows("apartment_energy_stats_2025.csv") if r["sigungu_code"] == code]
+    if not rows and code.endswith("0"):
+        rows = [r for r in _rows("apartment_energy_stats_2025.csv") if r["sigungu_code"][:4] == code[:4] and r["sigungu_code"] != code]
+    if not rows:
+        return None
+    total = sum(float(r["total_toe"]) for r in rows if r["total_toe"])
+    heat_rows = [r for r in rows if r["district_heat_toe"]]
+    heat = sum(float(r["district_heat_toe"]) for r in heat_rows) if heat_rows else None
+    return {"year": int(rows[0]["year"]), "parts": [r["sigungu_name"] for r in rows] if len(rows) > 1 else None,
+            "total_toe": round(total, 1) if total else None, "district_heat_toe": round(heat, 1) if heat is not None else None,
+            "district_heat_share_pct": round(heat / total * 100, 1) if heat is not None and total else None, "source": HEAT_STATS_SOURCE}
+
+
 def region_guide(code: str | None) -> dict[str, Any] | None:
     """한 시군구의 지역 구분 · 평년 기후(전주 대비) · 기준 배출 방향 가이드(추정) · 지자체 계획 건물 과제. 표에 없으면 None."""
     code = str(code or "")
@@ -170,6 +191,7 @@ def region_guide(code: str | None) -> dict[str, Any] | None:
             "climate": climate, "plans": [p for p in (city_plans, sido_plans) if p],
             "reference": {"station": ref.get("station_name"), "sunshine_hours_year": _num(ref.get("sunshine_hours_year"))},
             "cooling": cooling_measures(climate["cdd_ratio"] if climate else None), "rate_note": RATE_NOTE,
+            "heat_stats": heat_stats(code),
             "sources": {"zone": DESIGN_ZONE_SOURCE, "climate": CLIMATE_SOURCE, "plans": PLAN_SOURCE},
             "value_kinds": "지역 구분 = 고시, 기후 = 평년값, 배출 방향 = 추정 가이드(예측 아님), 과제 = 지자체 계획값(자체 평가)",
             "check": "정부 표준베이스라인의 남부 ÷ 중부2 차이(−11.9%)보다 이 가이드의 남부 중앙값(에너지 −4.3%)이 작아, 미리 정한 점검에서 '맞지 않음'이었습니다. 방향만 참고하세요."}

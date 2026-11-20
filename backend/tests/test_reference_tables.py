@@ -110,3 +110,18 @@ def test_regional_conditions_mark_value_kinds_and_keep_gaps_empty():
     assert all(zones.get(x["sigungu_code"]) == x["design_zone"] for x in r)
     # 지역 보정 관문을 못 넘은 참고값은 계산에 쓰지 않음을 표에 적었다
     assert all("계산에 쓰지 않음" in x["value_kinds"] for x in r if x["envelope_saving_adjusted_ref_pct_v2"])
+
+
+def test_heat_stats_share_from_toe_and_city_codes_sum_their_gu():
+    from app.reference_tables import heat_stats, region_guide
+    r = rows("apartment_energy_stats_2025.csv")
+    assert len(r) == 249 and sum(1 for x in r if x["district_heat_share_pct"]) == 83   # 인천 중구 · 동구 · 서구는 코드가 없어 뺌
+    assert heat_stats("36110")["district_heat_share_pct"] == 45.8 and heat_stats("36110")["parts"] is None
+    suwon = heat_stats("41110")                                   # 수원시 = 장안 · 권선 · 팔달 · 영통 합
+    gu = [x for x in r if x["sigungu_code"][:4] == "4111"]
+    assert len(suwon["parts"]) == len(gu) == 4
+    assert suwon["district_heat_share_pct"] == round(sum(float(x["district_heat_toe"]) for x in gu) / sum(float(x["total_toe"]) for x in gu) * 100, 1)
+    busan = heat_stats("26440")                                   # 통계에 지역난방 "-" → 0 %가 아니라 빈칸
+    assert busan["district_heat_toe"] is None and busan["district_heat_share_pct"] is None and busan["total_toe"] > 0
+    assert heat_stats("99999") is None
+    assert region_guide("27110")["heat_stats"]["year"] == 2025    # 상세 수집 전 지역(대구 중구)도 가이드에 통계가 붙음

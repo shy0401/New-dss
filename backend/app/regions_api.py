@@ -100,6 +100,7 @@ def overview() -> dict[str, Any]:
 
 @router.get("/{code}")
 def region_detail(code: str) -> dict[str, Any]:
+    from .reference_tables import region_guide
     from .region_prepare import STEP_LABELS, STEPS, create_region
     with Session() as db:
         region = db.get(StudyRegion, code)
@@ -108,12 +109,14 @@ def region_detail(code: str) -> dict[str, Any]:
                 entry = next(r for r in catalog(db) if r["code"] == code)
             except StopIteration:
                 raise HTTPException(404, "전국 행정구역 목록에 없는 지역입니다") from None
+            # 상세 수집 전 지역도 지역 가이드(지역 구분 · 평년 기후 · 통계 지역난방 비중 · 지자체 과제)는 전국 참조 표로 보인다(2026-11-20)
             return {"code": code, "name": entry["name"], "short_name": short_name(entry["name"]), "sido_name": entry["sido_name"],
                     "status": "NOT_PREPARED", "legal_codes": entry["legal_codes"], "districts": entry["districts"], "datasets": {},
-                    "steps": [{"id": s, "label": STEP_LABELS[s], "status": None} for s in STEPS]}
+                    "steps": [{"id": s, "label": STEP_LABELS[s], "status": None} for s in STEPS], "guide": region_guide(code)}
         body = region_summary(region)
         body["short_name"] = short_name(region.name)
         body["steps"] = [dict({"id": s, "label": STEP_LABELS[s], "status": None}, **((region.datasets or {}).get(s) or {})) for s in STEPS]
+        body["guide"] = region_guide(code)
         return body
 
 

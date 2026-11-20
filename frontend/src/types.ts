@@ -529,6 +529,8 @@ export interface RegionSummary extends RegionRef {
   center?: [number, number] | null; bbox?: [number, number, number, number] | null;
   datasets?: Record<string, { status: string; message?: string; at?: string; rows?: number }>;
   message?: string | null; updated_at?: string | null; steps?: RegionStep[]; districts?: Array<{ code: string; name: string }>;
+  /** 지역 가이드(전국 참조 표: 지역 구분 · 평년 기후 · 통계 지역난방 비중 · 지자체 과제). 표에 없는 코드는 null */
+  guide?: import('./lib/area').AreaRegionGuide | null;
 }
 
 export interface NationalMeta {

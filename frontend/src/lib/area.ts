@@ -131,6 +131,8 @@ export interface AreaRegionGuide {
   cooling?: { items: Array<{ label: string; use: string; indicator: string | null }>; reading: string };
   /** 감축률의 지역 차이(지역 보정 관문 G2) 문장 */
   rate_note?: string;
+  /** 건물에너지사용량통계(2025) 시군구 아파트 에너지 중 지역난방 열 비중. 통계에 지역난방이 없으면 share가 null(0이 아님) */
+  heat_stats?: { year: number; parts: string[] | null; total_toe: number | null; district_heat_toe: number | null; district_heat_share_pct: number | null; source: string } | null;
   /** 분석 지역 K-apt 단지의 난방 방식 구성(관측). 단지가 없으면 null */
   heating?: {
     complexes: number; unknown_complexes: number; households: number | null; source: string; value_kind: string; reading: string;
