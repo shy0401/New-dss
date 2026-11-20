@@ -2,7 +2,7 @@
 
 > **자료를 모으기 전에 이 문서부터 읽습니다.** 팀원 누구나, 어느 지역이든, 사람이 하든 AI 도구로 하든 같은 기준으로 모으고 같은 공식으로 계산해야 결과를 합치고 비교할 수 있습니다. 이 문서가 그 기준의 **유일한 원본**입니다. 코드의 상수·규칙이 이 문서와 다르면 둘 중 하나가 틀린 것이니, 같은 커밋에서 함께 고칩니다(9절).
 
-- 판: 1.31 (2026-11-20, 2절 감축 근거표 · 지역 표를 `backend/reference/`에 둠) · 근거: [팀 데이터 비교](TEAM_DATA_COMPARISON.md), [탄소 계산](CARBON_METHOD.md), [정확도 점검](ACCURACY.md), 팀 데이터셋 urban-carbon의 `config/rules.yaml`·ADR
+- 판: 1.32 (2026-11-20, 2절 기상청 기후평년값 · 지역 기후 가이드 표) · 근거: [팀 데이터 비교](TEAM_DATA_COMPARISON.md), [탄소 계산](CARBON_METHOD.md), [정확도 점검](ACCURACY.md), 팀 데이터셋 urban-carbon의 `config/rules.yaml`·ADR
 - 점검 명령: `docker compose exec api python -m app.cli check-standard` (8절)
 
 ## 0. 작업 전 확인 (매번)
@@ -37,6 +37,7 @@
 | SGIS 1km 격자 통계 | 공공데이터포털 15141768 | 칸별 인구·가구·주택 노후 등 | 2024 | `import-sgis-grid` | 500m에 나눠 넣지 않는다 |
 | 기상청 ASOS | [공공데이터포털 15059093](https://www.data.go.kr/data/15059093/openapi.do) | 일평균기온 → 월 난방·냉방도일, 합계 일사량(MJ/m²) | 일 | `Collect` (전주 146), 지역 준비 `weather` (같은 시 · 군의 관측소: 서울 108(강동구), 부산 159(강서구), 세종 239, 수원 119, 군산 140, 정읍 245, 남원 247, 장수 248, 임실 244, 순창 254, 고창 172, 부안 243) | 그달 일평균이 하루라도 없으면 그달 도일은 NULL. 일사량은 한 해 모든 날이 있을 때만 연간 값 |
 | 기상청 AWS(방재기상관측) | [기상청 API허브](https://apihub.kma.go.kr/) 방재기상월보 조회(`AwsMtlyInfoService` 일자료 · 지점일람표, 인증키 `KMA_APIHUB_KEY`) | 월보 일평균기온 → 연 평균기온 · 난방 · 냉방도일 | 일 | 팀 변화 모델의 기상만(같은 시에 ASOS가 없는 지역, `project/tools/experiments/aws_annual_for_team.py`) | 월보 표시 `)`(일부 시간 결측으로 계산한 공표값)는 값으로 쓰고 `x`는 결측. 하루라도 결측이면 그달 값 없음, 12개월이 다 있어야 그해 값 |
+| 기상청 기후평년값 1991~2020 (일별 · 전 지점) | [기상청 기상자료개방포털 기후표](https://data.kma.go.kr/normals/table.do) · [제공지점 일람표](https://data.kma.go.kr/normals/info1.do) | 관측 지점 × 날짜: 평균 · 최고 · 최저기온(℃), 상대습도(%), 일조시간(시간), 강수 등 | 30년 평년(1991~2020) | 기후표 화면이 쓰는 조회(`tableAjax.do`, 로그인 없음)의 응답 JSON을 날짜마다 받은 그대로 → `data/raw/kma_normals/<받은 날>/`(MANIFEST에 크기 · sha256), 지점 일람표 xlsx 함께. DB에 넣지 않음 | 지역 기후 가이드용(지역 보정 계산에 쓰지 않음). 냉난방도일은 5.10의 기준온도로 평년 일평균기온에서 계산 → 해마다의 도일을 평균한 값보다 작게 나올 수 있어(기온의 해마다 흔들림이 빠짐) **가이드 · 지역 간 비교용**으로만, 우리 DB 도일과 같은 값으로 쓰지 않음. 지점 → 시군구 연결은 일람표의 위치로(규칙은 가이드 표 README) |
 | ERA5-Land · ERA5 (대체) | [Open-Meteo 과거 기상](https://open-meteo.com/en/docs/historical-weather-api) | 일평균기온(ERA5-Land), 일 일사량 `shortwave_radiation_sum`(MJ/m², **ERA5** — Open-Meteo의 ERA5-Land는 일사량이 비어 옴) | 일 | 지역 준비 `weather`, `backfill-solar` | 같은 시 · 군에 ASOS가 없거나 그달 ASOS가 다 차지 않을 때만, `FALLBACK`으로 표시. 다른 도시 관측소로 대체하지 않음. 일사량은 빠진 날이 있는 달을 NULL로 저장 |
 | 전력 배출계수 | [온실가스종합정보센터 승인 배출계수](https://www.gir.go.kr/home/index.do?menuId=36) | 소비단 CO2eq tCO2eq/MWh | 공표일 | 원문 PDF를 `data/raw/research/gir/`에 두면 증빙 확인 후 등록 | 5.4절 표 |
 | 한전 시군구 전력판매량 | [한전 전력판매량 게시판](https://www.kepco.co.kr/home/customer/library/electricity-statistics/sales-volume/boardList.do) | 시·군·구 × 월, 계약종별 kWh | 월 | 파일 → `data/raw/kepco/` | 총량 대조용. 격자에 나누지 않음 |
@@ -249,6 +250,7 @@ docker compose -p carbon-urban-dss -f compose.yaml -f compose.demo.yaml exec -T 
 
 | 판 | 날짜 | 바뀐 것 |
 |---|---|---|
+| 1.32 | 2026-11-20 | 출처 추가(2절, 받기 전에 등록): 기상청 기후평년값 1991~2020 일별 · 전 지점(366일 × 219지점, 사용자 승인). 지역 기후 가이드 표 `backend/reference/regional_climate_guide.csv`(269 시군구, 전주 대비 도일 비 · 기준 배출 방향 가이드, 추정 · 예측 아님). 정부 표준베이스라인 남부 ÷ 중부2와의 점검은 맞지 않음(차이 7.6%p)으로 적음. 계산 · 저장값 · 화면 바뀜 없음 |
 | 1.31 | 2026-11-20 | 참조 표를 저장소 `backend/reference/`에 둠: 감축 근거표 610행 · 지자체 이행 사업 447행 · 설계기준 지역 구분 269행 · 열관류율 11행 · 지역 조건표 23행(README에 열 · 값의 성격). 서비스 계산 · 화면 연결은 다음 PR. 계산 · 저장값 바뀜 없음 |
 | 1.30 | 2026-11-20 | 2절 지자체 기본계획: 대구 · 인천 원문을 사용자 승인으로 받아 20개 지역 원문 모두 보관(PDF 21개), 표 숫자 대조 8/8 · 10/10. 규칙 · 계산 바뀜 없음 |
 | 1.29 | 2026-11-20 | 점검 결정 C · D: 4절에 단지끼리 견주는 분석의 개별난방 가스 원단위 범위(20~200 kWh/m²·년, 값은 두고 그 분석에서만 뺌). 2절 지자체 기본계획 원문 13 → 18개(근거표 세션 사본 5개 보관). 서비스 계산 · 저장값 바뀜 없음 |

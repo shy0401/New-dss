@@ -44,6 +44,19 @@ def test_design_zones_follow_the_notice():
     assert len(rows("design_zone_uvalue_apartment.csv")) == 11
 
 
+def test_regional_climate_guide_is_a_marked_estimate_against_jeonju():
+    r = rows("regional_climate_guide.csv")
+    assert len(r) == 269
+    assert [x["sigungu_name"] for x in r if not x["mapping"]] == ["세종특별자치시"]   # 지점 이름이 '세종연서'라 연결 안 됨
+    blank = next(x for x in r if not x["mapping"])
+    assert blank["hdd18_normal"] == "" and blank["guide_emission_change_pct"] == ""   # 0으로 채우지 않음
+    jeonju = next(x for x in r if x["sigungu_name"] == "전북특별자치도 전주시 완산구")
+    assert jeonju["station_name"] == "전주" and float(jeonju["guide_emission_change_pct"]) == 0.0 and float(jeonju["hdd_ratio_vs_jeonju"]) == 1.0
+    assert all("ESTIMATED" in x["value_kinds"] and "예측 아님" in x["value_kinds"] for x in r)
+    daegu = [x for x in r if x["sigungu_code"].startswith("27")]
+    assert len(daegu) == 9 and {x["station_name"] for x in daegu} == {"대구"}
+
+
 def test_regional_conditions_mark_value_kinds_and_keep_gaps_empty():
     r = rows("regional_conditions_sigungu.csv")
     assert len(r) == 23
