@@ -107,6 +107,12 @@ def create_snapshot(db,year,grid_id,scenario_ids,region=None):
         from .reduction_plan import building_plan,plan_text
         annual=r.result.get('annual') or {}
         reduction=building_plan(annual.get('reference'),r.result.get('total_footprint'),factors_now,pv_yield,(annual.get('scenario') or {}).get('carbon_kg'),green_area_m2=r.result.get('green_area_m2'),floor_area_m2=r.result.get('gross_floor_area'),floors=s.inputs.get('floors'),base_year=year)
+        if reduction.get('available') and actual_grid:
+            # 대상지 지역난방 비중(지금 DB 단지로 다시 셈): 지역난방 열 탄소가 계산 밖임을 사다리 가정에 적는다(2026-11-20)
+            from .kapt import ApartmentComplex
+            from .service import district_heating_note,heating_share
+            note=district_heating_note(heating_share(db.scalars(select(ApartmentComplex).where(ApartmentComplex.grid_id==actual_grid)).all()))
+            if note:reduction['assumptions'].append(note)
         scenarios.append({'id':sid,'label':label,'inputs':s.inputs,'result':r.result,'created_at':s.created_at.isoformat(),'reduction_plan':reduction})
         plan_facts+=plan_sentence_facts(n,label,s.inputs,r.result)
         text=plan_text(reduction)

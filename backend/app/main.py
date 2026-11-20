@@ -665,6 +665,13 @@ def compute_scenario(db,request):
     result['baseline']={k:baseline.get(k) for k in ['current_far','current_bcr','households','population','gross_floor_area_m2','developable_site_area_m2']}
     result['grid_id']=baseline['selected_sector']['grid_id'] if baseline['selected_sector'] else None
     result['region']=baseline.get('region')
+    # 대상지 지역난방 비중: 지역난방 열의 탄소는 계산 밖이라 가정 문장으로 알린다(숫자는 바꾸지 않음, 2026-11-20)
+    if result['grid_id']:
+        from .kapt import ApartmentComplex
+        from .service import district_heating_note,heating_share
+        result['site_heating']=heating_share(db.scalars(select(ApartmentComplex).where(ApartmentComplex.grid_id==result['grid_id'])).all())
+        note=district_heating_note(result['site_heating'])
+        if note:result['assumptions'].append(note)
     # A reader's name for the site (전주시 송천1동 일대), used by the result panel and the report instead of the cell id.
     from .overlays import grid_admin_rows,place_label
     result['place']=place_label(grid_admin_rows(db,result['grid_id']),(result['region'] or {}).get('short_name') or (result['region'] or {}).get('name'))
