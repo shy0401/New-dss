@@ -9,7 +9,7 @@
 
 | 파일 | 행 | 무엇 | 만든 곳(PC) | 갈래 |
 |---|---|---|---|---|
-| `reduction_evidence.csv` | 610 | 감축 근거표: 문헌 · 실증 조사표 543행 정리 + 보강 67행. 수단 · 층 · 줄이는 용도 · 효과 범위 · 근거 등급 · 추천 제외와 까닭 · 원문 대조 | `reduction_evidence/a1/evidence_table_all.csv` | (가) |
+| `reduction_evidence.csv` | 645 | 감축 근거표: 문헌 · 실증 조사표 543행 정리 + 보강 67행 + 냉방 쪽 보강 35행(2026-11-20). 수단 · 층 · 줄이는 용도 · 효과 범위 · 근거 등급 · 추천 제외와 까닭 · 원문 대조 | `reduction_evidence/a10/evidence_table_all_v2.csv` | (가) |
 | `local_plans_building.csv` | 447 | 지자체 탄소중립 · 녹색성장 기본계획의 건물 부문 과제(시도 17 + 수원 · 전주 · 군산, 20개 지역). 단위 맞춤 열 포함 | `reduction_evidence/a4/local_plans_building_units.csv` | (가) |
 | `design_zone_sigungu.csv` | 269 | 시군구 → 설계기준 지역 구분(중부1 · 중부2 · 남부 · 제주) | `regional_adjust/design_zone_sigungu.csv` | (나) |
 | `design_zone_uvalue_apartment.csv` | 11 | 공동주택 부위별 열관류율 기준(지역 구분별) | `regional_adjust/design_zone_uvalue_apartment.csv` | (나) |
@@ -31,6 +31,7 @@
 | `도구_지표_행` · `원문_대조` | 서비스 지표에 쓰이는 행, 원문과 대조한 결과 |
 | `쓰임` | 보강 행만: 지표 후보 / 범위 참고 / 차이 확인 못 함(값으로 쓰지 않음) 등 |
 
+- 냉방 쪽 보강(`조사표` = "추가_냉방 쪽 보강(A10)", 번호 A10-…): 쿨루프 9 · 냉방 효율 4 · 지역냉방 2 · 건물 녹화 9 · 열원 선택 11행. 모두 `쓰임` = 범위 참고(지표로 바로 쓰지 않음). 쿨루프 국내 실측 −26.4%는 최상층 세대 기준일 가능성, 열원 비교의 탄소는 기준 문서 5절 계수로 다시 계산해야 함. 히트펌프 행은 추천 제외(예), 냉방 효율은 설비 사양(따로 추천 안 함)
 - 근거 등급별 숫자는 **행 수**다. 같은 출처 · 수단이 여러 행인 것을 하나로 세면 실측_국내 87 · 문헌_계산 110([기록](../../docs/records/2026-11-20-reduction-evidence-and-local-plans.md))
 - 규칙 · 대조 과정: PC `project/working/methods/reduction-evidence-table-2026-11-20.md`
 

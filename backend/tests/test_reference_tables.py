@@ -13,10 +13,12 @@ def rows(name: str) -> list[dict[str, str]]:
 
 def test_evidence_table_rows_grades_and_exclusions():
     r = rows("reduction_evidence.csv")
-    assert len(r) == 610
+    assert len(r) == 645   # 2026-11-20 냉방 쪽 보강 35행
     grades = Counter(x["근거_등급"] for x in r)
     assert set(grades) == {"실측_국내", "실측_국외_조건맞음", "문헌_계산", "실측_국외_참고", "가정", "해당_없음"}
-    assert grades["실측_국내"] == 131 and grades["문헌_계산"] == 136
+    assert grades["실측_국내"] == 139 and grades["문헌_계산"] == 146
+    a10 = [x for x in r if x["번호"].startswith("A10-")]
+    assert len(a10) == 35 and all(x["쓰임"].startswith("범위 참고") for x in a10)
     assert {x["추천_제외"] for x in r} == {"예", "아니오", "따로 추천 안 함", "해당 없음"}
     # 추천에서 뺀 행에는 까닭이 있다
     assert all(x["제외_까닭"] for x in r if x["추천_제외"] in ("예", "따로 추천 안 함"))
