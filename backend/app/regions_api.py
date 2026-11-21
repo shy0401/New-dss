@@ -116,8 +116,38 @@ def region_detail(code: str) -> dict[str, Any]:
         body = region_summary(region)
         body["short_name"] = short_name(region.name)
         body["steps"] = [dict({"id": s, "label": STEP_LABELS[s], "status": None}, **((region.datasets or {}).get(s) or {})) for s in STEPS]
-        body["guide"] = region_guide(code)
+        body["guide"] = with_region_data(db, code, region_guide(code))
         return body
+
+
+def with_region_data(db: Any, code: str, guide: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Add the region's own heating mix and rooftop PV yield to its guide (2026-11-22).
+
+    Regions whose collection stopped at PARTIAL (outside the core 34) still have their K-apt complexes (basic step) and,
+    when the weather step ran, their irradiation: the guide shows those, the same numbers the area page shows. Values of a
+    nearby region are never borrowed. A part that cannot be read is left out (the screen then shows no row), not 0."""
+    if guide is None:
+        return None
+    from .area import heating_mix
+    from .kapt import ApartmentComplex
+    from .region_prepare import analysis_year
+    from .regions import RegionNotReady, scope
+    from .solar import regional_pv_yield
+    try:
+        sc = scope(db, code)
+        rows = db.execute(select(ApartmentComplex.bjd_code, ApartmentComplex.grid_id, ApartmentComplex.heating_type,
+                                 ApartmentComplex.households))
+        guide["heating"] = heating_mix({"heating_type": heat, "households": households}
+                                       for bjd, grid, heat, households in rows if sc.owns_complex(bjd, grid))
+    except RegionNotReady:
+        pass
+    except Exception:  # noqa: BLE001 - the guide still shows its reference-table rows
+        db.rollback()
+    try:
+        guide["solar"] = regional_pv_yield(db, code, up_to=analysis_year())
+    except Exception:  # noqa: BLE001
+        db.rollback()
+    return guide
 
 
 def _stale(region: StudyRegion) -> bool:
