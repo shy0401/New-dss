@@ -24,7 +24,11 @@ def test_quota_and_credentials_are_told_apart():
     assert _classify(ExternalError("API 인증 실패: DATA_GO_KR_SERVICE_KEY 미설정"))[0] == "BLOCKED"
     assert _classify(ExternalError("SGIS 격자 API 오류: provider_code=-200"))[0] == "FAILED"
     status, message = _classify(KeyError("x"))
-    assert status == "FAILED" and message == "처리 실패: KeyError"
+    assert status == "FAILED" and message == "처리 실패: KeyError: 'x'"
+    # the text shows (network or folder?) but never turns a crash into WAITING/BLOCKED
+    assert _classify(OSError("Connection reset by peer")) == ("FAILED", "처리 실패: OSError: Connection reset by peer")
+    assert _classify(OSError("호출 한도 인증"))[0] == "FAILED"
+    assert _classify(KeyError())[1] == "처리 실패: KeyError"
 
 
 def test_collect_energy_years_runs_newest_first_and_stops_at_the_daily_quota(monkeypatch):
