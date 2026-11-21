@@ -416,7 +416,9 @@ def _asos_overlay(db: Any, region: StudyRegion, last: int, log: Log) -> dict[str
     from .cache import parse_cached_response
     from .collectors import client
     from .kma_asos import KMA_ASOS_BASE_URL, aggregate_asos_months, parse_asos_response
-    station = ASOS_STATIONS.get(region.code)
+    from .reference_tables import asos_station
+    # 손정리 12곳, 그 밖은 기후 가이드 표의 같은 시 · 군(광역시는 시 안) ASOS 지점(2026-11-21, 12 → 149 시군구)
+    station = ASOS_STATIONS.get(region.code) or asos_station(region.code)
     if not station:
         return {"months": 0, "message": "같은 시 · 군에 기상청 ASOS 관측소가 없어 ERA5-Land 재분석 유지"}
     stn, place = station

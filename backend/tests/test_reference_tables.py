@@ -130,3 +130,14 @@ def test_heat_stats_share_from_toe_and_city_codes_sum_their_gu():
     assert busan["district_heat_toe"] is None and busan["district_heat_share_pct"] is None and busan["total_toe"] > 0
     assert heat_stats("99999") is None
     assert region_guide("27110")["heat_stats"]["year"] == 2025    # 상세 수집 전 지역(대구 중구)도 가이드에 통계가 붙음
+
+
+def test_asos_station_is_the_regions_own_asos_station_only():
+    """2026-11-21: 기후 가이드 표의 같은 시 · 군(광역시는 시 안) 지점 중 ASOS(번호 300 미만)만. 다른 도시 대표 지점 · 평년값 AWS는 쓰지 않음."""
+    from app.reference_tables import asos_station
+    assert asos_station("50110") == ("184", "제주") and asos_station("48330") == ("257", "양산시")
+    assert asos_station("11740") == ("108", "서울") and asos_station("26440") == ("159", "부산")   # same as the hand list
+    assert asos_station("41360") is None          # 541 남양주: 평년값 지점이지만 ASOS 일자료 없음
+    assert asos_station("27290") is None          # 대구 구: 가이드 지점 860(ASOS 아님)
+    assert asos_station("12190") is None          # 다른 도시 대표 지점(목포)으로 이어진 곳
+    assert asos_station(None) is None and asos_station("99999") is None
