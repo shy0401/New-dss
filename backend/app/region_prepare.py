@@ -118,7 +118,12 @@ def overall_status(datasets: dict[str, Any]) -> str:
 
 
 def _classify(exc: Exception) -> tuple[str, str]:
-    message = str(exc) if type(exc).__name__ in ("ExternalError", "ValueError", "LookupError", "RuntimeError") else f"처리 실패: {type(exc).__name__}"
+    # Other errors keep their type and a short text (2026-11-21: "처리 실패: OSError" alone hid whether it was the
+    # network — requests' errors are OSError — or the data folder).
+    # Their text never decides WAITING/BLOCKED (only the provider messages below do).
+    if type(exc).__name__ not in ("ExternalError", "ValueError", "LookupError", "RuntimeError"):
+        return "FAILED", f"처리 실패: {type(exc).__name__}: {str(exc)[:160]}".rstrip(": ")
+    message = str(exc)
     lowered = message.lower()
     if "한도" in message or "호출 제한" in message or "limited" in lowered or message.startswith("22"):
         return "WAITING", message

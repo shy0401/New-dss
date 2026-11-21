@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
@@ -448,6 +449,7 @@ def approval_month(complex_row: Any) -> str | None:
     return None
 
 
+_log = logging.getLogger(__name__)
 EXTRA_KEYS_ENV = "KAPT_ENERGY_EXTRA_KEYS"
 EXTRA_STOP_AFTER_ERRORS = 5
 
@@ -477,27 +479,38 @@ def start_extra_key_prefetch(keys: list[str], targets: list[Any], months: list[s
     import threading
 
     def work(key: str, lane: int, lanes: int) -> None:
+        got, reason = 0, "끝까지 받음"
         try:
             session = session_factory()
         except Exception:  # noqa: BLE001 - no helper flow; the main pass asks everything
             return
         streak = 0
-        for index in range(len(targets) - 1 - lane, -1, -lanes):
-            if stop.is_set() or index <= position.get("main", 0) + 1:
-                return
-            code = targets[index].kapt_code
-            for month in months:
-                if stop.is_set():
+        try:
+            for index in range(len(targets) - 1 - lane, -1, -lanes):
+                if stop.is_set() or index <= position.get("main", 0) + 1:
+                    reason = "주 흐름과 만남"
                     return
-                if (code, month) in answered:
-                    continue
-                try:
-                    _fetch_month(session, url, key, code, month, attempts=1)
-                    streak = 0
-                except Exception as exc:  # noqa: BLE001 - the main pass asks again and records the outcome
-                    streak += 1
-                    if QUOTA_ERROR in str(exc) or streak >= EXTRA_STOP_AFTER_ERRORS:
+                code = targets[index].kapt_code
+                for month in months:
+                    if stop.is_set():
+                        reason = "주 흐름 끝남"
                         return
+                    if (code, month) in answered:
+                        continue
+                    try:
+                        _fetch_month(session, url, key, code, month, attempts=1)
+                        streak = 0
+                        got += 1
+                    except Exception as exc:  # noqa: BLE001 - the main pass asks again and records the outcome
+                        streak += 1
+                        if QUOTA_ERROR in str(exc):
+                            reason = "하루 한도"
+                            return
+                        if streak >= EXTRA_STOP_AFTER_ERRORS:
+                            reason = f"연속 {streak}건 오류: {str(exc)[:120]}"
+                            return
+        finally:
+            _log.warning("K-apt 추가 키 흐름 %d 멈춤: %s (받은 달 %d)", lane + 1, reason, got)
 
     threads = [threading.Thread(target=work, args=(key, lane, len(keys)), name=f"kapt-extra-{lane}", daemon=True)
                for lane, key in enumerate(keys)]
