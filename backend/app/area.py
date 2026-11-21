@@ -1419,7 +1419,12 @@ def load_inputs(db: Any, years: list[int], region: str | None = None) -> dict[st
     sc = scope(db, region)
     region_ids = sc.grid_ids
     complexes: dict[str, dict[str, Any]] = {}
-    for row in db.scalars(select(ApartmentComplex)):
+    # Columns only (2026-11-21): the ORM objects carried every complex's summary/detail JSON (22,176 complexes, 88 MB
+    # stored) of the whole country although only this region's are kept.
+    columns = (ApartmentComplex.kapt_code, ApartmentComplex.name, ApartmentComplex.approval_date, ApartmentComplex.households,
+               ApartmentComplex.gross_floor_area_m2, ApartmentComplex.management_area_m2, ApartmentComplex.longitude,
+               ApartmentComplex.latitude, ApartmentComplex.grid_id, ApartmentComplex.heating_type, ApartmentComplex.bjd_code)
+    for row in db.execute(select(*columns)):
         if not sc.owns_complex(row.bjd_code, row.grid_id):
             continue
         complexes[row.kapt_code] = {
@@ -1480,11 +1485,15 @@ def load_inputs(db: Any, years: list[int], region: str | None = None) -> dict[st
     register = []
     try:
         from .official import BuildingRegister, register_areas
-        for r in db.scalars(select(BuildingRegister).where(BuildingRegister.grid_id.is_not(None))):
-            if r.grid_id not in region_ids:
-                continue
-            attrs = r.attributes or {}
-            register.append({"grid_id": r.grid_id, "approval_year": r.approval_year, "gfa": register_areas(attrs)[0], "use": attrs.get("building_use")})
+        # Only this region's cells, asked in SQL (2026-11-21): reading every register row of the country (2.09 million rows,
+        # 1.4 GB of stored JSON during the national collection) and dropping the other regions' in Python took over 6 GiB in
+        # the start-up warm-up (measured in a 6 GiB container: killed; the API peaked at 29 GiB).
+        for start in range(0, len(ids), 2000):
+            query = select(BuildingRegister.grid_id, BuildingRegister.approval_year, BuildingRegister.attributes).where(
+                BuildingRegister.grid_id.in_(ids[start:start + 2000]))
+            for grid_id, approval_year_value, attributes in db.execute(query):
+                attrs = attributes or {}
+                register.append({"grid_id": grid_id, "approval_year": approval_year_value, "gfa": register_areas(attrs)[0], "use": attrs.get("building_use")})
     except Exception:  # noqa: BLE001 - register not collected yet (or columns not migrated)
         db.rollback()
     from .overlays import admin_features, grid_zoning_summary
