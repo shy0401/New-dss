@@ -12,7 +12,7 @@ from typing import Any
 from sqlalchemy import JSON, DateTime, Float, String, UniqueConstraint, func, select
 from sqlalchemy.orm import Mapped, mapped_column
 
-from .cache import CachedClient, ExternalError, parse_cached_response
+from .cache import QUOTA_ERROR, CachedClient, ExternalError, parse_cached_response
 from .db import Base
 from .domain import scope_label
 from .models import DataSource, EnergyMonthly, RawDataAsset
@@ -448,6 +448,64 @@ def approval_month(complex_row: Any) -> str | None:
     return None
 
 
+EXTRA_KEYS_ENV = "KAPT_ENERGY_EXTRA_KEYS"
+EXTRA_STOP_AFTER_ERRORS = 5
+
+
+def extra_keys(main_key: str) -> list[str]:
+    """Other data.go.kr keys the user received for K-apt energy (``KAPT_ENERGY_EXTRA_KEYS``, comma-separated, 2026-11-21).
+
+    The provider holds each key to about one request a second; a second key lets a second flow ask at the same pace."""
+    seen = {main_key.strip()}
+    keys = []
+    for raw in os.getenv(EXTRA_KEYS_ENV, "").split(","):
+        key = raw.strip()
+        if key and key not in seen:
+            seen.add(key)
+            keys.append(key)
+    return keys
+
+
+def start_extra_key_prefetch(keys: list[str], targets: list[Any], months: list[str], url: str, position: dict[str, int],
+                             answered: set[tuple[str, str]], *, session_factory: Any, stop: Any) -> list[Any]:
+    """One flow per extra key, from the end of the target list towards the main pass, each at its own request gap.
+
+    Pages go to the shared cache only: the main pass (main key, from the front) reads them there when it gets to those
+    complexes, so storing and every rule stay in one place. A flow stops when it meets the main pass, after
+    ``EXTRA_STOP_AFTER_ERRORS`` failures in a row (a provider block) or at its key's daily quota; whatever it did not get
+    the main pass asks itself."""
+    import threading
+
+    def work(key: str, lane: int, lanes: int) -> None:
+        try:
+            session = session_factory()
+        except Exception:  # noqa: BLE001 - no helper flow; the main pass asks everything
+            return
+        streak = 0
+        for index in range(len(targets) - 1 - lane, -1, -lanes):
+            if stop.is_set() or index <= position.get("main", 0) + 1:
+                return
+            code = targets[index].kapt_code
+            for month in months:
+                if stop.is_set():
+                    return
+                if (code, month) in answered:
+                    continue
+                try:
+                    _fetch_month(session, url, key, code, month, attempts=1)
+                    streak = 0
+                except Exception as exc:  # noqa: BLE001 - the main pass asks again and records the outcome
+                    streak += 1
+                    if QUOTA_ERROR in str(exc) or streak >= EXTRA_STOP_AFTER_ERRORS:
+                        return
+
+    threads = [threading.Thread(target=work, args=(key, lane, len(keys)), name=f"kapt-extra-{lane}", daemon=True)
+               for lane, key in enumerate(keys)]
+    for thread in threads:
+        thread.start()
+    return threads
+
+
 def collect_kapt_energy(
     db: Any, year: int, scope: str = "smoke", *, client: CachedClient | None = None,
     service_key: str | None = None, data_dir: str | Path | None = None, history: bool = False,
@@ -496,12 +554,27 @@ def collect_kapt_energy(
     url = f"{base_url}/{KAPT_ENERGY_OPERATION}"
     outage = {"run": 0, "pauses": 0}
     shown = [0.0]
+    position = {"main": 0}  # index of the complex the main pass is on (extra-key flows stop when they reach it)
 
     def tell(fraction: float | None, message: str) -> None:
         if fraction is not None:
             shown[0] = fraction
+            position["main"] = int(fraction * len(targets))
         if progress:
             progress(shown[0], message)
+
+    import threading
+    stop_helpers = threading.Event()
+    helpers: list[Any] = []
+    more = extra_keys(key) if client is None and len(targets) > 1 else []
+    if more:
+        answered = {(code, month) for code, month in db.execute(select(ApartmentEnergyMonthly.complex_code, ApartmentEnergyMonthly.year_month).where(
+            ApartmentEnergyMonthly.year_month.in_(months), ApartmentEnergyMonthly.quality_status.in_(sorted(ANSWERED)),
+            ApartmentEnergyMonthly.complex_code.in_([t.kapt_code for t in targets])))}
+        helpers = start_extra_key_prefetch(more, targets, months, f"{base_url}/{KAPT_ENERGY_OPERATION}", position, answered,
+                                           session_factory=lambda: CachedClient(root / "cache" / "kapt-energy", min_interval=delay),
+                                           stop=stop_helpers)
+        stats["extra_key_flows"] = len(helpers)
 
     def after_request(ok: bool) -> None:
         outage["run"] = 0 if ok else outage["run"] + 1
@@ -530,8 +603,11 @@ def collect_kapt_energy(
             if progress:
                 tell(None, f"재시도 {round_}/{retry_rounds} 대기 — 오류로 남은 {len(failed_rows)}개 월을 {retry_wait_s / 60:.0f}분 뒤 다시 요청")
             pause(retry_wait_s)
-        _collect_pass(db, source, session, url, key, raw_root, targets, months, history, stats, tell if progress else None, after_request,
-                      retry_months, f"재시도 {round_}/{retry_rounds} · " if round_ else "")
+        try:
+            _collect_pass(db, source, session, url, key, raw_root, targets, months, history, stats, tell, after_request,
+                          retry_months, f"재시도 {round_}/{retry_rounds} · " if round_ else "")
+        finally:
+            stop_helpers.set()   # after the first pass the helpers have nothing left to do (retries use the main key)
     if retry_rounds:
         # Final state of this year after the retries (a recovered month is no longer a failure).
         final = db.execute(select(ApartmentEnergyMonthly.provider_code).where(
