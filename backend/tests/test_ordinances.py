@@ -117,3 +117,25 @@ def test_number_and_name_variants():
     assert {z: v["value"] for z, v in parsed.items()} == {
         "제1종전용주거지역": 100, "제1종일반주거지역": 200, "준주거지역": 500, "중심상업지역": 1500, "일반상업지역": 1500,
         "근린상업지역": 1000, "계획관리지역": 100, "농림지역": 80}
+
+
+def test_a_rejected_oc_is_not_reported_as_not_found(monkeypatch):
+    """2026-11-22: 법제처가 기본 OC "test"를 거절하면 "못 찾음"이 아니라 AUTH_FAILED(키 · IP 등록 필요)로."""
+    from types import SimpleNamespace
+    from app import ordinances
+    monkeypatch.setattr(ordinances.time, "sleep", lambda s: None)
+    body = ('<?xml version="1.0" encoding="UTF-8"?><Response><result>사용자 정보 검증에 실패하였습니다.</result>'
+            '<msg>OPEN API 호출 시 사용자 검증을 위하여 정확한 서버장비의 IP주소 및 도메인주소를 등록해 주세요.</msg></Response>')
+    calls = []
+    class Client:
+        def get(self, url, params=None):
+            calls.append(params["query"])
+            return SimpleNamespace(text=body, content=body.encode(), raise_for_status=lambda: None)
+    class Db:
+        def get(self, model, key): return None
+        def add(self, row): self.row = row
+        def commit(self): pass
+    db = Db()
+    row = ordinances.collect_ordinance(db, Client(), {"code": "41130", "name": "경기도 성남시", "names": ["경기도 성남시"]}, log=lambda m: None)
+    assert row.status == "AUTH_FAILED" and "LAW_GO_KR_OC" in row.message and "IP" in row.message
+    assert len(calls) == 1                                        # 한 번 거절되면 더 묻지 않음

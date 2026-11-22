@@ -2,7 +2,7 @@
 
 > **자료를 모으기 전에 이 문서부터 읽습니다.** 팀원 누구나, 어느 지역이든, 사람이 하든 AI 도구로 하든 같은 기준으로 모으고 같은 공식으로 계산해야 결과를 합치고 비교할 수 있습니다. 이 문서가 그 기준의 **유일한 원본**입니다. 코드의 상수·규칙이 이 문서와 다르면 둘 중 하나가 틀린 것이니, 같은 커밋에서 함께 고칩니다(9절).
 
-- 판: 1.52 (2026-11-22, 5.16 성남 · 화성 지역난방 열을 법정동마다 공급자로 · 2절 화성 2025-11분까지 옛 법정동으로 읽기) · 근거: [팀 데이터 비교](TEAM_DATA_COMPARISON.md), [탄소 계산](CARBON_METHOD.md), [정확도 점검](ACCURACY.md), 팀 데이터셋 urban-carbon의 `config/rules.yaml`·ADR
+- 판: 1.53 (2026-11-22, 2절 자치법규: 법제처 OPEN API 키 필요 · 기본 test 거절을 AUTH_FAILED로) · 근거: [팀 데이터 비교](TEAM_DATA_COMPARISON.md), [탄소 계산](CARBON_METHOD.md), [정확도 점검](ACCURACY.md), 팀 데이터셋 urban-carbon의 `config/rules.yaml`·ADR
 - 점검 명령: `docker compose exec api python -m app.cli check-standard` (8절)
 
 ## 0. 작업 전 확인 (매번)
@@ -59,7 +59,7 @@
 | 탄소공간지도 100m 건물 전기 (선도소프트 제공) | 선도소프트 메일(2026-10, 데이터정의서 xlsx 동봉). [설명](SUNDOSOFT_KCSM100.md) | (100m 칸 × 법정동) 행의 월·연 건물 전기 배출, **tCO2eq** | 2023·2024 (전주 덕진구·완산구) | 파일 → `data/raw/sundosoft_kcsm100/<받은 날>/` → `import-kcsm100` | 칸 값 = 법정동 행의 합. 이 도구 계산값과 **더하지 않는다**(5.12). 산정 계수·0의 뜻·이용 조건은 확인 필요 → 공개 주소·Git에 올리지 않는다 |
 | SGIS 500m 격자 경계 (오픈API) | [SGIS 오픈API 격자 경계](https://sgis.kostat.go.kr/developer/html/newOpenApi/api/dataApi/admGrid.html) | 시군구의 공식 500m 칸 경계 · 칸 코드(통계 없음) | 받은 날 | `backend/app/sgis_grid_official.py` → 응답 캐시 `data/raw/sgis_grid_official/` | 칸 경계 · 코드 대조용. 칸 통계는 위 500m 자료제공(신청)으로만. 2026-11-22 근거 점검에서 등록(쓰고 있었으나 2절에 따로 없었음) |
 | 한국가스공사 월별 시도별 도시가스 판매현황 | [공공데이터포털 15040819](https://www.data.go.kr/data/15040819/fileData.do) | 시 · 도 × 월 도시가스 판매량, **천㎥** | 1989-01~2024-12(받은 파일 기준) | CSV(cp949) → `data/raw/gas/` → `regional_stats.py` | 시 · 도 단위뿐(시군구 공개 통계 없음). 시도 요약 · 총량 대조용, 격자에 나누지 않음. 빈칸은 NULL. 2026-11-22 근거 점검에서 등록 |
-| 국가법령정보센터 자치법규 (도시 · 군계획 조례) | [법제처 국가법령정보 DRF API](https://www.law.go.kr/DRF/lawSearch.do) | 시 · 군 조례 본문 → 용도지역별 건폐율 · 용적률(%) | 조례 시행일 | 지역 준비 `ordinance`(`ordinances.py`) → 응답 캐시 `data/raw/ordinances/` | 어느 조례를 따르는지(광역시 자치구 · 군은 광역시 조례 등)는 `ordinances.py` 머리 설명의 규칙. 2026-11-22 근거 점검에서 등록 |
+| 국가법령정보센터 자치법규 (도시 · 군계획 조례) | [법제처 국가법령정보 DRF API](https://www.law.go.kr/DRF/lawSearch.do) | 시 · 군 조례 본문 → 용도지역별 건폐율 · 용적률(%) | 조례 시행일 | 지역 준비 `ordinance`(`ordinances.py`) → 응답 캐시 `data/raw/ordinances/` | 어느 조례를 따르는지(광역시 자치구 · 군은 광역시 조례 등)는 `ordinances.py` 머리 설명의 규칙. 2026-11-22 근거 점검에서 등록. **키**: 법제처 OPEN API 이용자 ID(OC, `.env`의 `LAW_GO_KR_OC`)와 요청하는 PC의 IP 등록이 필요. 기본값 `test`는 2026-11 초부터 "사용자 정보 검증에 실패"로 거절됨(그 뒤 받은 37곳이 시행령 상한으로 넘어감) → 이 답은 "못 찾음"이 아니라 `AUTH_FAILED`로 적음(2026-11-22) |
 | 법정동코드 (행정안전부 행정표준코드) | [행정표준코드관리시스템 법정동코드 전체자료](https://www.code.go.kr/etc/codeFullDown.do) | 법정동 10자리 코드 · 이름 · 폐지 여부 | 받은 날 현행 | `data/raw/legal-dong.zip` → `admin_units`(`national.py`, `raw_data_assets`에 현행 코드 해시) | 2026-11-22 근거 점검에서 등록 |
 | OpenStreetMap (Overpass API) | [Overpass API](https://overpass-api.de/api/interpreter) | 전주 공동주택 건물 · 주거지 도형, 경계 | 받은 날 | `collectors.collect_spatial` → `data/raw/osm-jeonju.json` · `osm-boundary.geojson` | 처음 만든 전주 공간 자료(앱 시작 · `cli`). 계산 기준 자료가 아님(건물은 VWorld · 건축물대장). 이용 조건 ODbL(출처 표시). 2026-11-22 근거 점검에서 등록 |
 | 전주시 공동주택 현황 (2025.12월, 전주시 재개발재건축과) | [전주시 게시판](https://www.jeonju.go.kr/planweb/board/view.9is?dataUid=9be517a89b212afa019b734df7f35e34&boardUid=ff8080818bad9295018bb25702581197) | 공동주택 단지 목록(준공 · 공사 중) | 2025-12-31 | xls → `data/raw/research/jeonju_apartment_status_2025_12.xls` → `kapt.py`(`raw_data_assets`) | 전주 단지 목록 보강. 2026-11-22 근거 점검에서 등록 |
@@ -329,6 +329,7 @@ docker compose -p carbon-urban-dss -f compose.yaml -f compose.demo.yaml exec -T 
 
 | 판 | 날짜 | 바뀐 것 |
 |---|---|---|
+| 1.53 | 2026-11-22 | 2절 자치법규(도시 · 군계획 조례): 법제처 OPEN API 이용자 ID(`LAW_GO_KR_OC`)와 IP 등록이 필요함을 적음. 기본값 `test`가 2026-11 초부터 거절돼 그 뒤 받은 READY 37곳이 '조례 못 찾음 → 시행령 상한'으로 넘어간 것을 찾음 → 거절 답은 `AUTH_FAILED`(키 · IP 등록 필요)로 적고 다시 받을 때 다시 물음. 계산 · 계수 바뀜 없음 |
 | 1.52 | 2026-11-22 | 5.16: 사업자가 둘 이상인 성남 · 화성은 대상지 격자의 지역난방 단지마다 법정동으로 공급자를 찾아 계수를 연면적 가중(`HEAT_SUPPLIER_BY_DONG`, 편람 지구 이름과 단지 이름이 맞는 동만, 모르는 동의 단지가 있으면 계산 안 함). 송파는 동으로 못 가려 보류. 2절 건축HUB: 화성은 2025-12분부터 일반구 · 새 법정동 번호라 2025-11분까지 옛 41590 · 옛 법정동으로 읽음(207곳 짝, 둘로 나뉜 옛 능동은 지번으로 가름). 화성 2025년 1~11월 건물 에너지 거의 없음(전력 약 370행/월 · 가스 0) → 327,124행 |
 | 1.51 | 2026-11-22 | 5.16 수원(41110): 편람상 휴세스(호매실 · 당수)도 공급해 사업자가 둘이지만 수도권 연계지사 연결을 그대로 둠(사용자 결정 "추천 진행"). 빼면 수원 전체 열 탄소가 0으로 빠지고 갈라 써도 휴세스는 대체 계수뿐이라 빼는 쪽 오차가 큼. 호매실 · 당수 대상지는 한난 계수로 계산되는 한계를 적음. 계수 · 숫자 바뀜 없음 |
 | 1.50 | 2026-11-22 | 2절 건축HUB 건물에너지: 전남광주통합특별시(12xxx)는 2025-12 사용분까지 옛 광주 29xxx · 전남 46xxx 코드로 요청 · 대용량 파일 읽기(번호까지 바뀐 곳이 있어 27곳 짝을 법정동코드 전체자료의 이름으로 맞춤, 법정동 3,176곳 뒤 5자리 같음). 9곳 건물 에너지 0행 → 84,280~187,066행. 계산 · 계수 바뀜 없음 |
