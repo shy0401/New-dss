@@ -49,7 +49,7 @@ def test_each_measure_alone_on_the_plan_and_indicator_only_rows_have_no_value():
     # 계산 근거가 계획안에 없는 수단: 값을 지어내지 않고 지표와 이유만
     for key in ("operation", "new_build_package", "home_energy_display", "passive_package", "window_retrofit", "shading", "heat_recovery_ventilation", "common_lighting", "elevator_regeneration", "condensing_boiler", "district_heating_control"):
         assert rows[key]["alone_kg"] is None and rows[key]["alone_range_kg"] is None and rows[key]["reason"]
-    assert rows["common_lighting"]["value_pct"] == 40.0 and rows["common_lighting"]["range_pct"] == [10.0, 82.5]
+    assert rows["common_lighting"]["value_pct"] == 40.0 and rows["common_lighting"]["range_pct"] == [40.0, 82.5]   # 조명만 잰 두 행(2026-11-22 근거 점검)
 
 
 def test_missing_gas_pv_or_green_leaves_the_value_empty_not_zero():
