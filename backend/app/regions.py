@@ -305,6 +305,17 @@ def region_for_grid(db: Any, grid_id: str | None) -> str:
     return DEFAULT_REGION if not codes or DEFAULT_REGION in codes else sorted(codes)[0]
 
 
+def record_region(db: Any, region: str | None, grid_id: str | None, cache: dict[Any, str | None]) -> str | None:
+    """The region a saved plan or report belongs to: its own region code, else the region of its grid (rows saved
+    before plans carried a region; 2026-11-23: 78 plans, by grid 59 전주 · 6 완주 · 13 grids with no region row, which
+    ``region_for_grid`` places in 전주, the original study area)."""
+    if region:
+        return str(region)
+    if grid_id not in cache:
+        cache[grid_id] = region_for_grid(db, grid_id)  # no grid: the original region, as when the plan was saved
+    return cache[grid_id]
+
+
 def sgis_prefixes(db: Any, code: str | None) -> tuple[str, ...]:
     """SGIS 시군구 codes of the region (for filtering 행정동 statistics and boundaries)."""
     region = get_region(db, code)

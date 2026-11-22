@@ -2,7 +2,7 @@
 import json,os,uuid,hashlib
 from urllib.parse import urlparse
 import httpx
-from fastapi import APIRouter,HTTPException
+from fastapi import APIRouter,HTTPException,Query
 from fastapi.responses import Response
 from pydantic import BaseModel,Field
 from sqlalchemy import String,JSON,DateTime,select
@@ -544,8 +544,22 @@ def create_report(request:ReportInput):
         return dict(id=rid,**snapshot)
 
 @router.get('')
-def reports():
-    with Session() as db:return [{'id':r.id,'created_at':r.created_at.isoformat(),'year':r.snapshot['year'],'grid_id':r.snapshot['grid_id'],'mode':r.snapshot['summary']['mode'],'title':r.snapshot.get('title'),'scenario_count':len(r.snapshot.get('scenarios') or [])} for r in db.scalars(select(DecisionReport).order_by(DecisionReport.created_at.desc()).limit(200)) if r.snapshot.get('kind')!='AREA'][:50]
+def reports(region:str|None=Query(None,max_length=10)):
+    """The latest 50 plan reports; with ``region`` only that region's (a report without a region is placed by its grid)."""
+    from .regions import record_region
+    with Session() as db:
+        rows=[r for r in db.scalars(select(DecisionReport).order_by(DecisionReport.created_at.desc()).limit(500 if region else 200)) if r.snapshot.get('kind')!='AREA']
+        if region:
+            cache={};rows=[r for r in rows if record_region(db,(r.snapshot.get('region') or {}).get('code'),r.snapshot.get('grid_id'),cache)==region]
+        return [{'id':r.id,'created_at':r.created_at.isoformat(),'year':r.snapshot['year'],'grid_id':r.snapshot['grid_id'],'mode':r.snapshot['summary']['mode'],'title':r.snapshot.get('title'),'scenario_count':len(r.snapshot.get('scenarios') or [])} for r in rows][:50]
+
+@router.delete('/{report_id}',status_code=204)
+def delete_report(report_id:str):
+    with Session() as db:
+        r=db.get(DecisionReport,report_id)
+        if not r or r.snapshot.get('kind')=='AREA':raise HTTPException(404,'보고서를 찾을 수 없습니다')
+        db.delete(r);db.commit()
+    return Response(status_code=204)
 
 @router.get('/{report_id}')
 def get_report(report_id:str):

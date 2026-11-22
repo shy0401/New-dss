@@ -24,6 +24,12 @@ from .db import Session
 router = APIRouter(prefix="/api/team-model")
 SERVICE = os.getenv("TEAM_MODEL_URL", "http://team-model:8090")
 RESTRICTED = "팀 변화 모델은 학습 표에 국토통계지도(국외 반출 금지) 값이 있어 공개 시연 주소에서 제공하지 않습니다. 이 PC의 화면에서만 쓸 수 있습니다."
+# 화면 앞 nginx(frontend/nginx.conf, deploy/gateway.conf)가 240초에 끊으므로 그보다 먼저 이유를 담아 답한다
+# (2026-11-23 전주 64칸 구역 예측 28.6초)
+PREDICT_TIMEOUT_S = 230.0
+TIMEOUT = -1  # _call: the service is on but did not answer in time
+SLOW = ("팀 변화 모델이 {sec:.0f}초 안에 답하지 않았습니다(다른 예측을 계산하는 중이거나 칸이 많음). "
+        "잠시 뒤 다시 시도하거나 칸 수를 줄여 주세요.")
 OFF = "팀 변화 모델 서비스가 꺼져 있습니다. 팀 인계 묶음이 있는 PC에서 `docker compose --profile team-model up -d team-model`로 켭니다."
 USES = ("residential", "commercial", "large_retail", "office", "officetel", "industrial", "knowledge_industry", "education", "medical_welfare", "other")
 # 팀 결과(2026-10-20, 00_합본_7차): 채택 기준과 학습에 없던 10개 지역 153사례 시험. 출처: 팀 인계 문서 5절, docs/results/model-results-ledger.md
@@ -75,7 +81,11 @@ def _call(path: str, body: dict[str, Any] | None = None, timeout: float = 5.0) -
             return exc.code, json.loads(exc.read().decode("utf-8"))
         except Exception:  # noqa: BLE001
             return exc.code, {"detail": str(exc)}
-    except (urllib.error.URLError, TimeoutError, OSError):
+    except TimeoutError:
+        return TIMEOUT, None
+    except urllib.error.URLError as exc:
+        return (TIMEOUT if isinstance(exc.reason, TimeoutError) else 0), None
+    except OSError:
         return 0, None
 
 
@@ -205,7 +215,9 @@ def predict(body: PredictIn, request: Request) -> dict[str, Any]:
         x, y = _xy(p.grid)
         plans.append({"x": x, "y": y, "new": [i.model_dump(exclude_none=True) for i in p.new],
                       "removed": [i.model_dump(exclude_none=True) for i in p.removed], "years_after": p.years_after})
-    status_code, answer = _call("/predict", {"region": model or code, "plans": plans}, timeout=240.0)
+    status_code, answer = _call("/predict", {"region": model or code, "plans": plans}, timeout=PREDICT_TIMEOUT_S)
+    if status_code == TIMEOUT:
+        raise HTTPException(504, SLOW.format(sec=PREDICT_TIMEOUT_S))
     if status_code == 0:
         raise HTTPException(503, OFF)
     if status_code != 200:
@@ -252,7 +264,9 @@ def predict_area(body: AreaPredictIn, request: Request) -> dict[str, Any]:
     status_code, answer = _call("/predict-area", {
         "region": model or code, "cells": cells, "years_after": body.years_after,
         "new": [i.model_dump(exclude_none=True) for i in body.new],
-        "removed": [i.model_dump(exclude_none=True) for i in body.removed]}, timeout=600.0)
+        "removed": [i.model_dump(exclude_none=True) for i in body.removed]}, timeout=PREDICT_TIMEOUT_S)
+    if status_code == TIMEOUT:
+        raise HTTPException(504, SLOW.format(sec=PREDICT_TIMEOUT_S))
     if status_code == 0:
         raise HTTPException(503, OFF)
     if status_code != 200:
