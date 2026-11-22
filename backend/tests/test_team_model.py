@@ -38,6 +38,7 @@ def test_predict_sends_the_cell_corner_and_marks_the_answer_as_a_scenario(monkey
         sent.update(path=path, body=body)
         return 200, {"dataset": "52110_전주시", "results": [{"change_tco2e": 2500.0, "band": {"q10": 900.0}}], "combined": None}
     monkeypatch.setattr(team_model, "_call", fake)
+    monkeypatch.setattr(team_model, "_model_region", lambda db, code, cells: None)   # 팀 표를 못 찾으면 지역 코드 그대로
     r = _client().post("/api/team-model/predict", json={"region": "52110", "plans": [
         {"grid": "cell_959500_1760500", "new": [{"use": "residential", "floor_area_m2": 120000, "dwellings": 1200}], "years_after": 3}]})
     assert r.status_code == 200
@@ -136,3 +137,22 @@ def test_service_splits_a_development_equally_over_its_cells():
     assert server.common_year([{2014}, {2016}, {2018}]) == 2018  # no year with half: the most cells, the later on a tie
     assert server.common_year([set(), set()]) is None
     assert server.nearest_year({2014, 2018, 2021}, 2019) == 2018 and server.nearest_year({2017, 2021}, 2019) == 2017
+
+
+def test_cell_predict_asks_the_team_table_of_the_gu_like_the_area_predict(monkeypatch):
+    """2026-11-23: 수원(41110)처럼 팀 데이터셋이 구 단위 표인 시는 칸이 든 구 표(예: 41117)로 묻는다(전에는 시 코드로 물어 404)."""
+    from app import team_model
+    sent: dict[str, Any] = {}
+
+    def fake(path, body=None, timeout=5.0):
+        sent.update(body=body)
+        return 200, {"results": [{"change_tco2e": 10.0}], "combined": None}
+    monkeypatch.setattr(team_model, "_call", fake)
+    monkeypatch.setattr(team_model, "_model_region", lambda db, code, cells: "41117" if code == "41110" and len(cells) == 1 else None)
+    r = _client().post("/api/team-model/predict", json={"region": "41110", "plans": [{"grid": "cell_961000_1916500", "new": [{"floor_area_m2": 1000}]}]})
+    assert r.status_code == 200 and sent["body"]["region"] == "41117"
+    def broken(db, code, cells):
+        raise OSError("팀 격자 자료 없음")
+    monkeypatch.setattr(team_model, "_model_region", broken)
+    assert _client().post("/api/team-model/predict", json={"region": "41110", "plans": [{"grid": "cell_961000_1916500", "new": [{"floor_area_m2": 1000}]}]}).status_code == 200
+    assert sent["body"]["region"] == "41110"

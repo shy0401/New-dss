@@ -192,6 +192,12 @@ def predict(body: PredictIn, request: Request) -> dict[str, Any]:
     from .regions import region_for_grid
     with Session() as db:
         code = body.region or region_for_grid(db, body.plans[0].grid)
+        # 2026-11-23: 구가 있는 시(수원 · 고양 · 용인)는 팀 데이터셋이 구 단위 표라 시 코드로 물으면 404("53개 지역만")였음 →
+        # 구역 예측(/predict-area)과 같이 칸이 든 팀 표의 지역으로 물음
+        try:
+            model = _model_region(db, code, [dict(zip(("x", "y"), _xy(p.grid))) for p in body.plans]) if code else None
+        except Exception:  # noqa: BLE001 - 팀 격자 자료가 없는 곳(시험 · CI): 지역 코드 그대로
+            model = None
     if not code:
         raise HTTPException(422, "지역을 알 수 없습니다")
     plans = []
@@ -199,7 +205,7 @@ def predict(body: PredictIn, request: Request) -> dict[str, Any]:
         x, y = _xy(p.grid)
         plans.append({"x": x, "y": y, "new": [i.model_dump(exclude_none=True) for i in p.new],
                       "removed": [i.model_dump(exclude_none=True) for i in p.removed], "years_after": p.years_after})
-    status_code, answer = _call("/predict", {"region": code, "plans": plans}, timeout=240.0)
+    status_code, answer = _call("/predict", {"region": model or code, "plans": plans}, timeout=240.0)
     if status_code == 0:
         raise HTTPException(503, OFF)
     if status_code != 200:
