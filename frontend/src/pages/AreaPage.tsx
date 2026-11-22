@@ -76,10 +76,14 @@ export function AreaPage() {
   const lastSpec = useRef<AreaSpec | null>(null);
   const revision = useRef(0);
   const started = useRef(false);
+  // 지금 지역의 선택지(행정동 · 용도지역)가 도착했는지. 지역을 바꾼 순간에는 앞 지역 선택지 · 행정동 코드가 남아 있어,
+  // 그대로 첫 분석을 보내면 "행정동을 찾을 수 없습니다"(422)가 나고 새 지역 첫 분석도 돌지 않았음(2026-11-23 재현).
+  const optionsReady = useRef(false);
 
   // 처음 열 때: 에코시티 개발이 있는 송천1동(없으면 목록 첫 동)과 가장 넓은 용도지역을 고른다.
   useEffect(() => {
     const o = options.data; if (!o) return;
+    optionsReady.current = true;
     setAdminCode((old) => old || (o.admin.find((a) => a.name.includes('송천1동')) ?? o.admin[0])?.code || '');
     setCategory((old) => old || o.zones.find((z) => z.category === 'COMMERCIAL')?.category || o.zones[0]?.category || '');
   }, [options.data]);
@@ -111,7 +115,7 @@ export function AreaPage() {
   useEffect(() => {
     if (shownRegion.current === region) return;
     shownRegion.current = region;
-    revision.current++; lastSpec.current = null; started.current = false;
+    revision.current++; lastSpec.current = null; started.current = false; optionsReady.current = false;
     setAnalysis(null); setAdminCode(''); setCategory(''); setCenter(null); setVertices([]); setError(null);
   }, [region]);
 
@@ -121,7 +125,7 @@ export function AreaPage() {
   // First analysis once the defaults are known (declared before the region reset above uses it).
 
   useEffect(() => {
-    if (started.current || !options.data) return;
+    if (started.current || !options.data || !optionsReady.current) return;   // the previous region's options are still on screen
     if (link && link.region !== undefined && link.region !== region) return;   // wait for the linked region
     const first = link?.spec ?? (adminCode ? { type: 'admin' as const, code: adminCode } : null);
     if (!first) return;
