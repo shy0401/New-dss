@@ -23,6 +23,7 @@ from .area import AnalyzeInput, analyze, benchmark, benchmark_position, only_in
 from .db import Session
 from .models import now
 from .reporting import DecisionReport, local_config, narrative_model
+from .team_model import Item
 
 router = APIRouter(prefix="/api/area-reports", tags=["area-reports"])
 
@@ -112,8 +113,12 @@ def verify_narrative(text: str, facts: list[dict[str, Any]]) -> list[str]:
             pct = fact["numbers"][0]
         if not pct:
             continue
+        variants = _variants(pct)
         for sentence in re.split(r"(?<=[.!?다])\s+", text):
-            if any(v in sentence for v in _variants(pct)):
+            # also the numbers written with thousands commas ("1,500.4"): the plain substring test missed every value ≥ 1,000
+            # (U3 S2, 2026-11-23: the change model value sentence). Only adds detections.
+            tokens = {t.replace(",", "").lstrip("+-") for t in NUMBER.findall(sentence)}
+            if any(v in sentence for v in variants) or tokens & variants:
                 if pct > 0 and "감소" in sentence and "증가를 감소로 서술" not in problems:
                     problems.append("증가를 감소로 서술")
                 if pct < 0 and "증가" in sentence and "감소를 증가로 서술" not in problems:
@@ -187,15 +192,113 @@ def summarize_area(facts: list[dict[str, Any]], use_local: bool) -> dict[str, An
 class AreaReportInput(AnalyzeInput):
     use_local_model: bool = False
     title: str | None = Field(default=None, max_length=80)
+    # U3 S2 (2026-11-23): the per-use plan of the bundle (/api/plans/evaluate). With use lines the report adds the team change
+    # model section; without them the report is as before (the use is never guessed).
+    uses_new: list[Item] = Field(default_factory=list, max_length=4)
+    uses_removed: list[Item] = Field(default_factory=list, max_length=4)
+    years_after: int | None = Field(default=None, ge=1, le=10)
+    include_change_model: bool = True
 
 
-def _snapshot(request: AreaReportInput, public: bool = False) -> dict[str, Any]:
+SECTION3_FACTS = ("development", "register", "event", "before_after", "change", "new_share", "estimated_change")
+CHANGE_LIMIT = "변화 모델 예측과 범위가 다른 값입니다(전력만, 가스 · 지역난방 열과 계획 밖 변화 제외)"
+
+
+def _word(change: float) -> str:
+    return "늘어나는" if change > 0 else "줄어드는" if change < 0 else "변하지 않는"
+
+
+def change_model_facts(block: dict[str, Any], effort: dict[str, Any] | None, plan: dict[str, Any]) -> list[dict[str, Any]]:
+    """Engine sentences of the change model section (U3 design 5.2). Every number is in ``numbers``. Below 1,000 tCO2e only
+    the direction (DATA_STANDARD 5.8): no value and no band in any sentence. No prediction → the reason and the intensity-based
+    increase (② ``plan_added``), which is a different scope and is never added to the model value."""
+    facts = [{"id": "change_model_scope", "numbers": [],
+              "text": "변화 예측은 팀 변화 모델의 추정(시나리오)이고 탄소공간지도 건물 배출(전기 · 가스 · 지역난방, 칸 안 모든 건물)의 변화입니다. "
+                      "위의 원단위 계산(전력만)과 범위가 달라 더하거나 평균하지 않습니다."}]
+    if block.get("status") != "OK":
+        reason = str(block.get("reason") or "변화 모델 예측을 내지 못했습니다").rstrip(". ")
+        added = next((t for t in (effort or {}).get("targets") or [] if t.get("key") == "plan_added"), None)
+        net = (added or {}).get("net_added_kgco2eq")
+        if net is not None and net > 0:
+            year = (effort or {}).get("baseline_year")
+            facts.append({"id": "change_model_missing", "numbers": [round(net), year],
+                          "text": f"{reason}. 대신 같은 계획을 원단위로 계산한 전력 운영탄소 증가는 연간 {net:,.0f} kgCO2eq입니다({year}년 원단위 · 계수, 계산값). {CHANGE_LIMIT}."})
+        else:
+            facts.append({"id": "change_model_missing", "numbers": [], "text": f"{reason}."})
+        return facts
+    used, total, state = block.get("cells_used"), block.get("cells_total"), block.get("state_year")
+    after = block.get("after_year")
+    n = after - state if after is not None and state is not None else None
+    when = f"{state}년 상태에서 {n}년 뒤({after}년)" if n is not None else f"{state}년 상태에서"
+    when_numbers = [state, n, after] if n is not None else [state]
+    change_raw = block.get("change_tco2e")
+    direction = block.get("direction") if block.get("direction") is not None else (0 if change_raw is None else (change_raw > 0) - (change_raw < 0))
+    if block.get("reading") == "direction":
+        facts.append({"id": "change_model_direction", "numbers": [used, total, *when_numbers, 1000],
+                      "text": f"팀 변화 모델은 이 계획을 구역의 500m 칸 {used}개(전체 {total}개)에 같게 나눠 넣으면 {when} 건물 배출이 {_word(direction)} 방향으로 추정합니다. "
+                              f"변화가 1,000 tCO2e보다 작아 값과 구간은 적지 않고 방향만 읽습니다({block.get('small_text')})."})
+    else:
+        change = float(block["change_tco2e"])
+        q10, q90 = block.get("band_q10_tco2e"), block.get("band_q90_tco2e")
+        model = block.get("model") or {}
+        new_m2, removed_m2 = plan.get("added_floor_area_m2") or 0, plan.get("removed_floor_area_m2") or 0
+        band = f"80% 구간 {q10:,.1f} ~ {q90:,.1f} tCO2e, 개발 단위 교차검증 잔차" if q10 is not None and q90 is not None else "80% 구간 없음"
+        facts.append({"id": "change_model_value", "signed_pct": change,
+                      "numbers": [round(new_m2), round(removed_m2), used, total, *when_numbers, round(abs(change), 1), round(change, 1),
+                                  *([round(q10, 1), round(q90, 1)] if q10 is not None and q90 is not None else [])],
+                      "text": f"팀 변화 모델({model.get('name')}, 학습 합본 {model.get('train')})은 이 계획(신축 {new_m2:,.0f} m² · 철거 {removed_m2:,.0f} m²)을 "
+                              f"구역의 500m 칸 {used}개(전체 {total}개)에 같게 나눠 넣으면, {when} 건물 배출이 연간 {abs(change):,.1f} tCO2e {_word(change)} 것으로 추정합니다({band})."})
+        row = block.get("accuracy_row")
+        if row:
+            facts.append({"id": "change_model_accuracy", "numbers": [row["median_error"], round(row["within_50pct"] * 100), row["sum_ratio"], row["cases"]],
+                          "text": f"이 크기({row['band']}) 개발의 교차검증 성능은 오차 중앙값 {row['median_error']}, ±50% 안 {row['within_50pct'] * 100:.0f}%, "
+                                  f"합계 비 {row['sum_ratio']}({row['cases']}개 개발)입니다. {block.get('requirement_text') or ''}".rstrip()})
+    empty = sum(1 for c in block.get("cells") or [] if c.get("start") == "empty")
+    skipped = block.get("cells_skipped") or 0
+    if skipped or empty:
+        cut = f"{skipped}개는 기준 해 자료가 없거나 결함 표시라 뺐" if skipped else ""
+        land = f"{empty}개는 건물이 없는 빈 땅으로 보고 시작했습니다(추정)" if empty else ""
+        said = f"{cut}고, {land}" if cut and land else f"{cut}습니다" if cut else land
+        facts.append({"id": "change_model_cells", "numbers": [total, *([skipped] if skipped else []), *([empty] if empty else []), used],
+                      "text": f"칸 {total}개 중 {said}. 연면적은 쓴 칸 {used}개에 같게 나눴습니다."})
+    return facts
+
+
+def stored_change_block(block: dict[str, Any]) -> dict[str, Any]:
+    """The block as the report keeps it: below 1,000 tCO2e the value and band are not stored, only the direction (5.8)."""
+    out = dict(block)
+    change = out.get("change_tco2e")
+    if out.get("status") == "OK" and change is not None:
+        out["direction"] = 1 if change > 0 else -1 if change < 0 else 0
+        if out.get("reading") == "direction":
+            out.update(change_tco2e=None, sources_tco2e=None, emission_before_tco2e=None, **{f"band_{q}_tco2e": None for q in ("q10", "q25", "q75", "q90")})
+    return out
+
+
+def _insert_change_facts(facts: list[dict[str, Any]], new: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """After the development-history sentences (section 3), else before the effort sentences, else before the rules line."""
+    after = [i for i, f in enumerate(facts) if f["id"] in SECTION3_FACTS or f["id"].startswith("gap_")]
+    at = after[-1] + 1 if after else next((i for i, f in enumerate(facts) if f["id"].startswith("effort") or f["id"] == "rules"), len(facts))
+    return facts[:at] + new + facts[at:]
+
+
+def _snapshot(request: AreaReportInput, public: bool = False, http: Request | None = None) -> dict[str, Any]:
+    from .plan_bundle import change_model_block, normalize_plan
+    plan = normalize_plan(request)  # per-use lines are the floor area; two different areas → ValueError (422), as in the bundle
     with Session() as db:
         result = analyze(db, request.area.model_dump(), request.from_year, request.to_year, request.event_year, request.window,
-                         request.plan.model_dump() if request.plan else None, request.target_pct, request.pv_yield_kwh_per_kw, region=request.region,
+                         plan or None, request.target_pct, request.pv_yield_kwh_per_kw, region=request.region,
                          effort_basis=request.effort_basis, measures=request.measures.model_dump() if request.measures else None, public=public)
     history = result["history"]
     facts = list(result["facts"])
+    change_block = None
+    # asked only with use lines, and never on the public gateway (U3 Q7: the model is closed there, its section is not shown)
+    if request.include_change_model and (request.uses_new or request.uses_removed) and not public:
+        added = next((t for t in (result.get("effort") or {}).get("targets") or [] if t.get("key") == "plan_added"), None)
+        change_block = change_model_block(request, list((history.get("area") or {}).get("grid_ids") or []),
+                                          (result.get("region") or {}).get("code") or request.region, http, (added or {}).get("text"))
+        facts = _insert_change_facts(facts, change_model_facts(change_block, result.get("effort"), plan))
+        change_block = stored_change_block(change_block)
     bench = None
     e = result["effort"] or {}
     if e.get("available") and e.get("baseline_mode") == "OBSERVED":
@@ -222,6 +325,7 @@ def _snapshot(request: AreaReportInput, public: bool = False) -> dict[str, Any]:
         "created_at": now().isoformat(), "request": request.model_dump(exclude={"use_local_model"}),
         "area": area, "geometry": history["area"].get("geometry"), "history": history_public,
         "before_after": result["before_after"], "effort": result["effort"], "facts": facts, "region": result.get("region"), "benchmark": bench,
+        **({"change_model": change_block} if change_block is not None else {}),
         # kept for the shared report list
         "year": request.to_year, "grid_id": None,
     }
@@ -230,7 +334,13 @@ def _snapshot(request: AreaReportInput, public: bool = False) -> dict[str, Any]:
 
 
 def public_view(snapshot: dict[str, Any]) -> dict[str, Any]:
-    """A stored report as the public demo gateway may show it: without the provider's 100m data (선도소프트, 이용 조건 확인 전)."""
+    """A stored report as the public demo gateway may show it: without the provider's 100m data (선도소프트, 이용 조건 확인 전)
+    and without the team change model section (its training table holds NGII values; U3 Q7)."""
+    if "change_model" in snapshot or any(str(f.get("id", "")).startswith("change_model") for f in snapshot.get("facts") or []):
+        snapshot = dict(snapshot, facts=[f for f in snapshot.get("facts") or [] if not str(f.get("id", "")).startswith("change_model")])
+        snapshot.pop("change_model", None)
+        if (snapshot.get("summary") or {}).get("mode") != "LOCAL_SLM_NARRATIVE" and snapshot.get("summary"):
+            snapshot["summary"] = dict(snapshot["summary"], paragraphs=[f["text"] for f in snapshot["facts"]])
     if not (snapshot.get("history") or {}).get("kcsm") and not any(str(f.get("id", "")).startswith("kcsm") for f in snapshot.get("facts") or []) \
             and (snapshot.get("effort") or {}).get("basis") != "kcsm":
         return snapshot
@@ -252,7 +362,7 @@ def public_view(snapshot: dict[str, Any]) -> dict[str, Any]:
 def create_area_report(request: AreaReportInput, http: Request) -> dict[str, Any]:
     from .team_grid import is_public
     try:
-        snapshot = _snapshot(request, public=is_public(http))
+        snapshot = _snapshot(request, public=is_public(http), http=http)
     except (ValueError, KeyError) as exc:
         raise HTTPException(422, str(exc)) from None
     snapshot["summary"] = summarize_area(snapshot["facts"], request.use_local_model)
@@ -302,6 +412,24 @@ def _t(kg: float | None) -> str:
     return "자료 없음" if kg is None else f"{kg / 1000:,.1f} tCO2eq/년"
 
 
+def change_rows(s: dict[str, Any]) -> list[tuple[str, str]]:
+    """The two plan increases of different scopes (U3 design 5.3, rows A and C): the intensity-based increase (electricity)
+    and the change model (carbon-map building emission). Values from the snapshot only; below 1,000 t the direction only."""
+    e = s.get("effort") or {}
+    added = next((t for t in e.get("targets") or [] if t.get("key") == "plan_added"), None)
+    net = (added or {}).get("net_added_kgco2eq")
+    a = "자료 없음" if added is None or net is None else ("늘지 않음" if net <= 0 else _t(net)) + " — 원단위 계산(전력만, 시나리오)"
+    b = s.get("change_model") or {}
+    if b.get("status") != "OK":
+        c = f"예측 없음 — {b.get('reason') or '변화 모델 예측을 내지 못했습니다'}"
+    elif b.get("reading") == "direction":
+        c = f"{_word(b.get('direction') or 0)} 방향 — 1,000 tCO2e 미만이라 값 없이 방향만(시나리오)"
+    else:
+        band = f", 80% 구간 {b['band_q10_tco2e']:,.1f} ~ {b['band_q90_tco2e']:,.1f}" if b.get("band_q10_tco2e") is not None and b.get("band_q90_tco2e") is not None else ""
+        c = f"{b['change_tco2e']:+,.1f} tCO2e/년{band} — 팀 변화 모델(건물 배출 전체: 전기 · 가스 · 지역난방, 시나리오)"
+    return [("개발 증가분(원단위 · 전력)", a), ("변화 모델 예측(다른 범위, 더하지 않음)", c)]
+
+
 def key_results(s: dict[str, Any]) -> list[tuple[str, str]]:
     """The few lines a reviewer reads first (all values straight from the engine's effort result)."""
     e = s.get("effort") or {}
@@ -314,9 +442,11 @@ def key_results(s: dict[str, Any]) -> list[tuple[str, str]]:
     if e.get("fallback_from"):
         basis += " (요청한 기준에 근거가 없어 자동 전환)"
     out = [("기준", basis), ("기준 배출", _t(e.get("baseline_kgco2eq"))),
-           ("계획 반영 배출(추가 대책 없음)", _t(e.get("bau_kgco2eq"))),
-           (f"목표({e['target_pct']:,.0f}% 감축)", _t(e.get("target_kgco2eq"))),
-           ("필요 감축량", "추가 감축 불필요" if e.get("already_met") else _t(e.get("required_reduction_kgco2eq")))]
+           ("계획 반영 배출(추가 대책 없음)", _t(e.get("bau_kgco2eq")))]
+    if s.get("change_model") is not None:  # U3 S2: the two increases side by side (different scopes, never added)
+        out += change_rows(s)
+    out += [(f"목표({e['target_pct']:,.0f}% 감축)", _t(e.get("target_kgco2eq"))),
+            ("필요 감축량", "추가 감축 불필요" if e.get("already_met") else _t(e.get("required_reduction_kgco2eq")))]
     rec = e.get("recommended")
     if rec and rec.get("steps") and not e.get("already_met"):
         out.append(("구체적 감축 방안", " + ".join(f"{st['title']} {st['detail']}" for st in rec["steps"]) + f" → {_t(rec['total_kgco2eq'])} — "
@@ -341,6 +471,7 @@ HTML_SECTIONS = (
     ("2-2. 빈 자료 보정·추정 (추정값, 관측과 따로)", ("estimate_",)),
     ("2-3. 업계·정부 기준과 대조 (참고)", ("bench_",)),
     ("3. 개발 이력과 전후 영향", ("development", "register", "event", "before_after", "change", "new_share", "estimated_change", "gap_")),
+    ("3-1. 계획 반영 뒤 변화 예측 (팀 변화 모델, 시나리오)", ("change_model_",)),
     ("4. 감축 목표와 필요 감축량", ("effort_fallback", "effort_basis", "effort_target", "effort_met", "effort_added", "effort_added_none", "effort_split")),
     ("5. 감축 방안", ("effort_rec_added", "effort_rec", "effort_new", "effort_all", "effort_offset", "effort_pv", "effort_mix", "effort_mix_gap")),
     ("6. 지역 특성 (SGIS 1km 격자)", ("sgis_grid", "sgis_grid_shares")),
@@ -466,6 +597,14 @@ def area_html(s: dict[str, Any]) -> str:
                 extra += ("<table><thead><tr><th>항목</th><th>이 구역</th><th>기준</th><th>출처</th></tr></thead><tbody>"
                           + "".join(f"<tr><td>{escape(r['label'])}</td><td class=num>{escape(r['value'])}</td><td>{escape(r['reference'])}</td><td>{escape(r['source'])}</td></tr>" for r in rows)
                           + "</tbody></table>" + "".join(f"<p class=note>{escape(n)}</p>" for n in bench.get("notes") or []))
+        if title.startswith("3-1.") and s.get("change_model") is not None:
+            b = s["change_model"]
+            extra += ("<table><thead><tr><th>범위</th><th>계획 반영 뒤 연간 변화</th></tr></thead><tbody>"
+                      + "".join(f"<tr><td>{escape(k)}</td><td>{escape(v)}</td></tr>" for k, v in change_rows(s))
+                      + "</tbody></table><p class=note>두 값은 범위가 달라 더하거나 평균하지 않습니다.</p>")
+            assumed = list(b.get("filled") or []) + list(b.get("warnings") or []) + [f"범위 밖 입력: {w}" for w in b.get("out_of_range") or []]
+            if assumed:
+                extra += "<p class=note>변화 예측의 가정: " + escape(" · ".join(str(a) for a in assumed)) + "</p>"
         rec = (s.get("effort") or {}).get("recommended")
         if title.startswith("5.") and rec and rec.get("steps"):
             factor = (s.get("effort") or {}).get("factor_kgco2eq_per_kwh") or 0
@@ -565,6 +704,12 @@ def area_markdown(s: dict[str, Any]) -> str:
                              f"| 65세 이상 비율 | {pct(o.get('elderly_pct'))} |", f"| 1인가구 비율 | {pct(o.get('single_household_pct'))} |",
                              f"| 2000년 이전 준공 주택 비율 | {pct(o.get('old_housing_pct'))} |", f"| 아파트 비율 | {pct(o.get('apartment_pct'))} |"]),
                   "공식 격자 통계(공공데이터포털, 기준시점 6월 30일)이며 비밀보호를 위해 5 미만 값은 0 또는 5로 확률 대체되고 그 이상은 최대 ±7의 잡음이 들어 있습니다. 통계가 없는 격자는 0이 아니라 통계 없음입니다."]
+    if s.get("change_model") is not None:
+        b = s["change_model"]
+        assumed = list(b.get("filled") or []) + list(b.get("warnings") or []) + [f"범위 밖 입력: {w}" for w in b.get("out_of_range") or []]
+        lines += ["## 변화 예측 (팀 변화 모델, 시나리오)",
+                  "\n".join(["| 범위 | 계획 반영 뒤 연간 변화 |", "| --- | --- |"] + [f"| {k} | {v} |" for k, v in change_rows(s)]),
+                  "두 값은 범위가 달라 더하거나 평균하지 않습니다." + (" 변화 예측의 가정: " + " · ".join(str(a) for a in assumed) + "." if assumed else "")]
     lines += ["## 해석 범위", h.get("factor_basis", ""), "관측이 없는 연도는 0이 아니라 자료 없음입니다. 행정동 통계는 격자·반경에 배분하지 않았습니다.",
               "운영 단계 1차 추정이며 법적 적합성이나 넷제로 달성을 판정하지 않습니다."]
     rec = (s.get("effort") or {}).get("recommended")
