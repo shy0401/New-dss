@@ -166,6 +166,8 @@ def change_model_block(body: BundleIn, grid_ids: list[str], region: str | None, 
             "small_change_threshold_tco2e": SMALL_CHANGE_T, "change_tco2e": change,
             **{f"band_{q}_tco2e": band.get(q) for q in ("q10", "q25", "q75", "q90")},
             "sources_tco2e": combined.get("sources_tco2e"), "state_year": area.get("year"), "years_after": body.years_after,
+            # the year the service predicted for (its default when years_after is not given; U3 S2 report sentence)
+            "after_year": next((r.get("after_year") for r in results if r.get("after_year") is not None), None),
             "emission_before_tco2e": round(sum(r.get("emission_before_tco2e") or 0 for r in results), 1) if results and all(r.get("emission_before_tco2e") is not None for r in results) else None,
             "cells_total": area.get("cells_total"), "cells_used": used, "cells_skipped": len(area.get("cells_skipped") or []),
             "cells": area.get("cells_used"), "model": {"train": answer.get("train"), "snapshot": answer.get("snapshot"), "dataset": answer.get("dataset"),
