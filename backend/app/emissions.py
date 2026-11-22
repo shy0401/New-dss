@@ -87,28 +87,85 @@ KWH_PER_GCAL = 1163.0                       # 1 Gcal = 4.1868 GJ = 1,163 kWh
 LOCAL_GUIDELINE_HEAT_KG_PER_KWH = round(LOCAL_GUIDELINE_HEAT_TCO2EQ_PER_GCAL * 1000 / KWH_PER_GCAL, 4)   # 0.1054
 
 
-def district_heat_factor(region_code: str | None, year: int) -> dict | None:
+# 사업자가 둘 이상인 시군구는 법정동마다 공급자(2026-11-22, 기준 문서 5.16 · 판 1.52). 편람 지구 이름과 그 동 K-apt 지역난방 단지
+# 이름이 맞는 동만 적는다(예: 창곡동 "LH위례31단지" ↔ 나래 위례신도시). 적지 않은 동(성남 대장 · 신흥 · 금광 · 고등 · 복정 등 2020년
+# 뒤 개발지, 화성 병점구 · 봉담 상리 · 내리 · 향남 구문천리)의 단지가 대상지에 있으면 계산하지 않는다(공급자 모름).
+# 이름이 한국지역난방공사 지사(KDHC_HEAT_KG_PER_TJ)면 공표값, 아니면 대체 계수. 송파는 장지동에 한난 장지지구와 나래 위례가 섞이고
+# 잠실이 편람 지정 목록에 없어 동으로 못 가름 → 적지 않음(보류 그대로)
+_BUNDANG = "수도권연계"   # 한난 분당 · 판교 · 동탄 지사는 수도권 연계지사(공사 온실가스 통계 페이지)
+HEAT_SUPPLIER_BY_DONG = {
+    "41130": {   # 성남: 분당 신도시 · 판교 · 도촌 = 한난, 위례(창곡동) = 나래에너지서비스
+        **{bjd: _BUNDANG for bjd in ("4113510100", "4113510200", "4113510300", "4113510500", "4113510600", "4113510700",
+                                     "4113511100", "4113511400",                       # 분당 · 수내 · 정자 · 서현 · 이매 · 야탑 · 금곡 · 구미
+                                     "4113510800", "4113510900", "4113511000", "4113511500",   # 판교 · 삼평 · 백현 · 운중
+                                     "4113310700")},                                   # 중원구 도촌동
+        "4113110800": "나래에너지서비스"},                                             # 수정구 창곡동(위례)
+    "41590": {   # 화성: 동탄 = 한난, 송산그린시티(새솔동) = 안산도시개발, 남양뉴타운 · 향남 1 · 2 · 봉담2 · 비봉 = 휴세스
+        **{bjd: _BUNDANG for bjd in ("4159710100", "4159710200", "4159710300", "4159710500", "4159710600", "4159710800",
+                                     "4159710900", "4159711000", "4159711100", "4159711200", "4159711500")},   # 동탄구 11개 동
+        "4159110100": "안산도시개발",                                                  # 새솔동(송산그린시티)
+        **{bjd: "휴세스" for bjd in ("4159125621",                                    # 남양읍 남양리(남양뉴타운)
+                                     "4159125324", "4159125326", "4159125339",         # 향남읍 상신 · 하길 · 행정리(향남2지구)
+                                     "4159325023",                                     # 봉담읍 수영리(봉담2지구)
+                                     "4159332024", "4159332025")}},                    # 비봉면 삼화 · 구포리(화성 비봉지구)
+}
+
+
+def _published_factor(branch: str, year: int) -> dict | None:
+    values = (KDHC_HEAT_KG_PER_TJ.get(branch) or {}).get(int(year))
+    if not values:
+        return None
+    co2, ch4, n2o = values
+    per_tj = co2 + ch4 * GWP_CH4 + n2o * GWP_N2O
+    return {"branch": branch, "supplier": "한국지역난방공사", "factor_kind": "PUBLISHED", "year": int(year),
+            "kg_per_kwh": round(per_tj * 3.6e-6, 4), "co2eq_kg_per_tj": round(per_tj, 1),
+            "source": f"한국지역난방공사 {branch}지사 {int(year)}년 공표 열 배출계수(공공데이터포털 15090320)"}
+
+
+def _substitute_factor(supplier: str, year: int) -> dict:
+    return {"branch": supplier, "supplier": supplier, "factor_kind": "SUBSTITUTE", "year": int(year),
+            "kg_per_kwh": LOCAL_GUIDELINE_HEAT_KG_PER_KWH, "co2eq_kg_per_tj": None,
+            "source": (f"대체 계수: {supplier}의 공표 열 배출계수가 없어 지자체 온실가스 배출량 산정지침 공통값 "
+                       f"{LOCAL_GUIDELINE_HEAT_TCO2EQ_PER_GCAL} tCO2eq/Gcal(2007 · 2008년 전국 평균, 공급자 값 아님)")}
+
+
+def _named_factor(name: str, year: int) -> dict | None:
+    return _published_factor(name, year) if name in KDHC_HEAT_KG_PER_TJ else _substitute_factor(name, year)
+
+
+def district_heat_factor(region_code: str | None, year: int, district_bjd: dict | None = None) -> dict | None:
     """지역난방 열 1 kWh의 kgCO2eq.
 
     한국지역난방공사 지사가 공급하면 그 지사 · 그해 공표값(그해 값이 없으면 None, 가까운 해로 채우지 않음). 공표 계수가 없는
-    사업자(``HEAT_SUPPLIER_OTHER``)는 지자체 산정지침 공통값을 대체로(연도와 상관없이 같은 값). 공급자를 모르면 None."""
+    사업자(``HEAT_SUPPLIER_OTHER``)는 지자체 산정지침 공통값을 대체로(연도와 상관없이 같은 값). 공급자를 모르면 None.
+    사업자가 둘 이상인 시군구(``HEAT_SUPPLIER_BY_DONG``)는 대상지 지역난방 단지의 법정동(``district_bjd`` = {법정동 10자리:
+    연면적})마다 공급자를 찾아 연면적 가중 평균. 한 단지라도 공급자를 모르면 None."""
     code = str(region_code or "")
+    by_dong = HEAT_SUPPLIER_BY_DONG.get(code)
+    if by_dong is not None:
+        if not district_bjd:
+            return None
+        parts = []
+        for bjd, weight in district_bjd.items():
+            name = by_dong.get(str(bjd)[:10])
+            factor = _named_factor(name, year) if name else None
+            if not factor:
+                return None
+            parts.append((factor, float(weight) if weight and weight > 0 else 1.0))
+        total = sum(w for _, w in parts)
+        kinds = {f["factor_kind"] for f, _ in parts}
+        names = sorted({f["branch"] for f, _ in parts})
+        sources = list(dict.fromkeys(f["source"] for f, _ in parts))
+        return {"branch": " · ".join(names), "supplier": " · ".join(sorted({f["supplier"] for f, _ in parts})),
+                "factor_kind": kinds.pop() if len(kinds) == 1 else "MIXED", "year": int(year),
+                "kg_per_kwh": round(sum(f["kg_per_kwh"] * w for f, w in parts) / total, 4), "co2eq_kg_per_tj": None,
+                "source": ("대상지 단지의 법정동별 공급자를 연면적으로 가중: " if len(names) > 1 else "") + " / ".join(sources)}
     branch = HEAT_SUPPLIER_BRANCH.get(code)
     if branch:
-        values = (KDHC_HEAT_KG_PER_TJ.get(branch) or {}).get(int(year))
-        if not values:
-            return None
-        co2, ch4, n2o = values
-        per_tj = co2 + ch4 * GWP_CH4 + n2o * GWP_N2O
-        return {"branch": branch, "supplier": "한국지역난방공사", "factor_kind": "PUBLISHED", "year": int(year),
-                "kg_per_kwh": round(per_tj * 3.6e-6, 4), "co2eq_kg_per_tj": round(per_tj, 1),
-                "source": f"한국지역난방공사 {branch}지사 {int(year)}년 공표 열 배출계수(공공데이터포털 15090320)"}
+        return _published_factor(branch, year)
     supplier = HEAT_SUPPLIER_OTHER.get(code)
     if supplier:
-        return {"branch": supplier, "supplier": supplier, "factor_kind": "SUBSTITUTE", "year": int(year),
-                "kg_per_kwh": LOCAL_GUIDELINE_HEAT_KG_PER_KWH, "co2eq_kg_per_tj": None,
-                "source": (f"대체 계수: {supplier}의 공표 열 배출계수가 없어 지자체 온실가스 배출량 산정지침 공통값 "
-                           f"{LOCAL_GUIDELINE_HEAT_TCO2EQ_PER_GCAL} tCO2eq/Gcal(2007 · 2008년 전국 평균, 공급자 값 아님)")}
+        return _substitute_factor(supplier, year)
     return None
 
 
