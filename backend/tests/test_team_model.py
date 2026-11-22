@@ -170,3 +170,35 @@ def test_area_predict_says_why_before_asking_when_the_region_has_no_team_table(m
     monkeypatch.setattr(team_grid, "region_datasets", lambda db, code: ["41131_경기도_성남시_수정구"])
     r = _client().post("/api/team-model/predict-area", json=body)
     assert r.status_code == 404 and "다른 구 표만" in r.json()["detail"]
+
+
+def test_area_predict_keeps_the_same_answer_a_short_while_per_trained_model(monkeypatch):
+    """U3 S4 (2026-11-23): the screen and the report of one plan ask once; a retrained model or another plan asks again."""
+    from app import team_model
+    calls: list[str] = []
+    ready = {"at": "2026-11-22T18:49:44+0000"}
+
+    def fake(path, body=None, timeout=5.0):
+        calls.append(path)
+        if path == "/status":
+            return 200, {"status": "ready", "ready_at": ready["at"]}
+        return 200, {"dataset": "52110_전주시", "results": [{"change_tco2e": 1200.0}], "combined": {"change_tco2e": 1200.0},
+                     "area": {"cells_used": [{"x": 959500, "y": 1760500}], "cells_skipped": []}}
+    monkeypatch.setattr(team_model, "_call", fake)
+    monkeypatch.setattr(team_model, "_model_region", lambda db, code, cells: "52113")
+    monkeypatch.setattr(team_model, "_PREDICT_CACHE", {})
+    plan = {"region": "52110", "grids": ["cell_959500_1760500"], "new": [{"use": "residential", "floor_area_m2": 30000}]}
+    first = _client().post("/api/team-model/predict-area", json=plan).json()
+    first["combined"]["change_tco2e"] = -1   # a caller changing its copy does not change the kept answer
+    second = _client().post("/api/team-model/predict-area", json=plan).json()
+    assert calls.count("/predict-area") == 1 and second["cached"] is True and second["combined"]["change_tco2e"] == 1200.0
+    assert second["results"][0]["grid"] == "cell_959500_1760500"
+    _client().post("/api/team-model/predict-area", json=dict(plan, years_after=3))   # another plan
+    assert calls.count("/predict-area") == 2
+    ready["at"] = "2026-11-23T09:00:00+0000"   # the model was trained again
+    third = _client().post("/api/team-model/predict-area", json=plan).json()
+    assert calls.count("/predict-area") == 3 and "cached" not in third
+    ready["at"] = None   # no training time (not ready, or an old service): never kept
+    _client().post("/api/team-model/predict-area", json=plan)
+    _client().post("/api/team-model/predict-area", json=plan)
+    assert calls.count("/predict-area") == 5
