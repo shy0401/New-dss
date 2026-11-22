@@ -92,11 +92,13 @@ def test_a_saved_record_without_a_region_is_placed_by_its_grid(monkeypatch):
     assert calls == ["cell_1_2", None]
 
 
+@pytest.mark.db
 def test_analyze_answers_422_for_a_radius_area_without_its_centre():
     r = _client().post("/api/areas/analyze", json={"region": "52110", "area": {"type": "circle", "radius_m": 1000}})
     assert r.status_code == 422 and "중심 좌표" in r.json()["detail"]
 
 
+@pytest.mark.db
 def test_deleting_a_plan_removes_its_result_and_image_and_leaves_other_kinds_alone():
     """이 PC(공개 주소 아님)에서는 지울 수 있다. 계획안 지우기는 결과 · 3D 이미지도 함께, 보고서 종류는 서로 못 지움."""
     import uuid
@@ -136,6 +138,7 @@ def test_deleting_a_plan_removes_its_result_and_image_and_leaves_other_kinds_alo
             db.commit()
 
 
+@pytest.mark.db
 def test_a_public_request_to_an_open_path_is_not_stopped_by_the_gateway_rule(monkeypatch):
     from app import team_model
     monkeypatch.setattr(team_model, "_call", lambda *a, **k: (0, None))
