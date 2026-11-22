@@ -90,6 +90,17 @@ def test_jeonbuk_months_before_the_rename_use_the_old_sigungu_code():
     assert request_sigungu('52111', '202311') == '52111' and request_sigungu('41111', '202101') == '41111'
 
 
+def test_jeonnam_gwangju_new_codes_ask_with_the_old_ones():
+    """2026-11-22: 전남광주통합특별시(12xxx)는 번호까지 바뀐 곳이 있어 하나씩. 대용량 파일 2025-12분까지 옛 코드만 있음."""
+    from app.energy_parcels import OLD_SIGUNGU_CODES, request_sigungu, with_old_sigungu
+    assert len(OLD_SIGUNGU_CODES) == 27
+    assert request_sigungu('12170', '202512') == '46170'   # 나주
+    assert request_sigungu('12190', '202501') == '46230'   # 광양: 뒤 번호도 바뀜
+    assert request_sigungu('12240', '202506') == '29140'   # 광주 서구
+    assert request_sigungu('12170', '202601') == '12170'   # 그 뒤 달은 새 코드(확인 필요)
+    assert with_old_sigungu(['12190']) == ['12190', '46230']
+
+
 def test_map_properties_add_building_gas_carbon_with_the_assumed_factor_and_keep_missing_as_none():
     from app.emissions import GAS_FACTOR
     from app.energy_parcels import map_properties

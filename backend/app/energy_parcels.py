@@ -71,6 +71,8 @@ def with_old_sigungu(codes: Any) -> list[str]:
         rule = OLD_SIGUNGU.get(code[:2])
         if rule:
             out.add(rule[0] + code[2:])
+        if code in OLD_SIGUNGU_CODES:
+            out.add(OLD_SIGUNGU_CODES[code][0])
     return sorted(out)
 
 
@@ -156,6 +158,15 @@ def place_missing_parcels(db: Any, sigungu_codes: Any = None) -> dict[str, int]:
 # 전북특별자치도 출범(2024-01)으로 시·군·구 코드가 45xxx → 52xxx로 바뀌었다. 건축HUB는 2023-10 사용분까지 옛 코드로만
 # 답한다(팀 데이터셋 urban-carbon의 단지 80곳으로 확인: 새 코드로 물으면 2023년 이전이 모두 빈 응답). 2020-01분부터 있다.
 OLD_SIGUNGU = {"52": ("45", "202310")}
+# 전남광주통합특별시(12xxx): 옛 광주광역시(29xxx) · 전라남도(46xxx)가 합쳐지며 시·군·구 번호까지 바뀐 곳이 있어(광양 46230 →
+# 12190, 광주 서구 29140 → 12240 등) 앞 두 자리 규칙으로는 안 됨 → 하나씩 적음. 짝은 행정표준코드 법정동코드 전체자료
+# (data/raw/legal-dong.zip, 2026-07-08 판)에서 이름으로 맞춤: 27곳 모두 옛 코드 하나, 법정동 3,176곳의 뒤 5자리 · 이름이 모두 같음
+# (2026-11-22). 건축HUB 대용량 파일은 2025-12분까지 옛 코드만 있음(2025-12 파일 확인) → 그달까지 옛 코드. 그 뒤 달은 확인 필요
+OLD_SIGUNGU_CODES = {new: (old, "202512") for new, old in {
+    "12110": "46110", "12130": "46130", "12150": "46150", "12170": "46170", "12190": "46230", "12210": "29110", "12240": "29140",
+    "12270": "29155", "12300": "29170", "12330": "29200", "12710": "46710", "12720": "46720", "12730": "46730", "12740": "46770",
+    "12750": "46780", "12760": "46790", "12770": "46800", "12780": "46810", "12790": "46820", "12800": "46830", "12810": "46840",
+    "12820": "46860", "12830": "46870", "12840": "46880", "12850": "46890", "12860": "46900", "12870": "46910"}.items()}
 HUB_FIRST_YEAR = 2020
 # Months the provider answered only in part (city-wide, 2026-10-05: 전주 2020-09·10 전력 112.9·86.9 GWh against 157.9·137.7 GWh
 # in 2021; large apartment parcels were missing — 팀 사례 자료 TEAM_CASE_JEONJU_DONGS.md). Such a year is kept but not compared.
@@ -164,6 +175,9 @@ HUB_PROVIDER_GAPS = {2020: "2020년 9·10월 제공기관 응답에서 대단지
 
 def request_sigungu(sigungu: str, use_ym: str) -> str:
     """The 시·군·구 code 건축HUB expects for that month (old code before the province was renamed)."""
+    explicit = OLD_SIGUNGU_CODES.get(str(sigungu))
+    if explicit and str(use_ym) <= explicit[1]:
+        return explicit[0]
     rule = OLD_SIGUNGU.get(str(sigungu)[:2])
     if rule and str(use_ym) <= rule[1]:
         return rule[0] + str(sigungu)[2:]
