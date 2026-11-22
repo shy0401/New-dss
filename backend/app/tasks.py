@@ -288,7 +288,7 @@ def _run_region_locked(task,lock_name,code,steps,force,ordered=True):
     ranked highest, not to whichever task asks first. Finalize (short, after the region's own lane) skips the order."""
     import redis
     import threading
-    from .region_prepare import next_quota_reset,prepare_region
+    from .region_prepare import prepare_region,resume_time
     from .region_priority import leave,my_turn
     from .regions import StudyRegion
     connection=redis.Redis.from_url(os.getenv('REDIS_URL','redis://redis:6379/0'))
@@ -317,12 +317,16 @@ def _run_region_locked(task,lock_name,code,steps,force,ordered=True):
             waiting=[step for step,item in (result['datasets'] or {}).items() if (item or {}).get('status')=='WAITING']
             if waiting:
                 region=db.get(StudyRegion,code)
-                resume=next_quota_reset()
+                # Each step waits for its own provider's reset (weather: Open-Meteo, not 00:20 KST — 2026-11-22)
+                by_time={}
+                for step in waiting:by_time.setdefault(resume_time(step),[]).append(step)
                 datasets=dict(region.datasets or {})
-                for step in waiting:datasets[step]=dict(datasets[step],resume_at=resume.isoformat())
+                for resume,group in by_time.items():
+                    for step in group:datasets[step]=dict(datasets[step],resume_at=resume.isoformat())
                 region.datasets=datasets;db.commit()
-                try: run_prepare_region.apply_async((code,waiting+['finalize'],False),eta=resume)
-                except Exception: pass
+                for resume,group in by_time.items():
+                    try: run_prepare_region.apply_async((code,group+['finalize'],False),eta=resume)
+                    except Exception: pass
             return result
     finally:
         stop.set()

@@ -34,7 +34,7 @@ from typing import Any, Callable
 
 from sqlalchemy import func, insert, select, update
 
-from .cache import CachedClient, ExternalError
+from .cache import QUOTA_ERROR, CachedClient, ExternalError
 from .regions import (DEFAULT_REGION, RegionWeatherMonthly, StudyRegion, _set_center, catalog_entry, forget_region_cache,
                       legal_leaves, link_grids, list_codes, match_sgis, region_grid_ids)
 
@@ -365,7 +365,12 @@ def step_weather(db: Any, region: StudyRegion, log: Log) -> dict[str, Any]:
     def fetch(lat: float, lon: float) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
         params = dict(latitude=round(lat, 4), longitude=round(lon, 4), start_date="2015-01-01", end_date=f"{last}-12-31",
                       daily="temperature_2m_mean,temperature_2m_min,temperature_2m_max,precipitation_sum", timezone="Asia/Seoul", models="era5_land")
-        result = client.get("weather", f"region-{region.code}", "https://archive-api.open-meteo.com/v1/archive", params)
+        try:
+            result = client.get("weather", f"region-{region.code}", "https://archive-api.open-meteo.com/v1/archive", params)
+        except ExternalError as exc:
+            if QUOTA_ERROR in str(exc):  # Open-Meteo's own limit, not data.go.kr's (the message said so until 2026-11-22)
+                raise ExternalError(OPEN_METEO_QUOTA) from None
+            raise
         return params, result, monthly_weather(json.loads(result["body"]))
 
     params, result, rows = fetch(region.center_lat, region.center_lon)
@@ -395,6 +400,10 @@ def step_weather(db: Any, region: StudyRegion, log: Log) -> dict[str, Any]:
         db.commit()
     except Exception as exc:  # noqa: BLE001 - irradiation is optional; the weather step still succeeds
         db.rollback()
+        if QUOTA_ERROR in str(exc):
+            # the daily limit hit between the two requests: wait and ask again (the weather answer is cached) instead of
+            # finishing without irradiation — the region guide's PV row needs it (2026-11-22)
+            raise ExternalError(OPEN_METEO_QUOTA) from None
         log(f"일사량 받기 실패: {type(exc).__name__}")
     complete = sum(1 for r in rows if r["days_observed"] >= r["expected_days"])
     asos = _asos_overlay(db, region, last, log)
@@ -995,3 +1004,18 @@ def next_quota_reset() -> datetime:
     local = now().astimezone(kst)
     target = (local + timedelta(days=1)).replace(hour=0, minute=20, second=0, microsecond=0)
     return target.astimezone(timezone.utc)
+
+
+OPEN_METEO_QUOTA = "Open-Meteo 하루 호출 한도 — 세계 표준시 자정(09:00 KST) 뒤 다시 받음"
+
+
+def next_open_meteo_reset() -> datetime:
+    """00:05 UTC of the next UTC day: Open-Meteo's daily limit did not reset at midnight KST (still 429 "Please try again
+    tomorrow" at 20:10 UTC = 05:10 KST on 2026-11-22). UTC midnight is assumed (확인 필요)."""
+    t = now().astimezone(timezone.utc)
+    return (t + timedelta(days=1)).replace(hour=0, minute=5, second=0, microsecond=0)
+
+
+def resume_time(step: str) -> datetime:
+    """When a WAITING step is asked again: weather → Open-Meteo's reset, the data.go.kr steps → 00:20 KST."""
+    return next_open_meteo_reset() if step == "weather" else next_quota_reset()
