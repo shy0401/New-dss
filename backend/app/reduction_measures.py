@@ -304,3 +304,55 @@ def embodied_text(e: dict[str, Any] | None) -> str | None:
     if e.get("years_of_operation"):
         text += f", 대책 없는 연간 운영탄소의 {e['years_of_operation']:.1f}년치"
     return text + "입니다. 한 번 배출되며 운영 단계 감축으로 줄지 않습니다(자재 생산 단계, 참고 계산)."
+
+
+GROUP_KIND = {"예": "계획 단계 밖", "따로 추천 안 함": "설비 사양(상위 수단의 구성 요소)"}
+NO_VALUE_REASON = {
+    "envelope": "가스 지표(단열·창호)라 이 계산(전력 운영탄소)에는 값이 없습니다. 가스까지 본 값은 3D 계획안 검토 보고서에 있습니다",
+    "greenery": "구역 계획 입력에 녹지 면적이 없어 값이 없습니다",
+}
+
+
+def applicable_measures(targets: list[dict[str, Any]], added_m2: float, district_share_pct: float | None,
+                        cooling_reading: str | None) -> list[dict[str, Any]]:
+    """Recommendation lines of the area screen ↔ the measures usable under the site's conditions (U4, 2026-11-23, 5.15).
+
+    Only the rooftop PV line has a value (this calculation's own PV); every other measure is an indicator with its
+    evidence (measures list + evidence table summary), never multiplied into the plan. Existing-building measures go
+    to the whole-area target only; district heating control only where the region has district-heated households;
+    operation (after move-in behaviour) is folded as outside the planning stage."""
+    from .reference_tables import evidence_summary
+    ev = evidence_summary()["by_measure"]
+    out: list[dict[str, Any]] = []
+    for t in targets:
+        pv_c = (t.get("recommended") or {}).get("pv_kgco2eq")
+        for m in MEASURES:
+            if m.get("phase") != "operation" and m["key"] != "greenery":
+                continue
+            apply = m.get("apply") or ""
+            new_ok = added_m2 > 0 and any(w in apply for w in ("신축", "재개발"))
+            existing_ok = any(w in apply for w in ("기존", "리모델링"))
+            if m["key"] == "rooftop_pv":
+                attach = ["pv_onsite"]
+            else:
+                attach = (["remaining_new"] if new_ok else []) + (["remaining_existing"] if existing_ok and t["key"] == "area_total" else [])
+            if not attach:
+                continue
+            if m["key"] == "district_heating_control" and not district_share_pct:
+                continue
+            table = ev.get(m["key"])
+            top = table["exclusion"][0]["value"] if table and table.get("exclusion") else None
+            quantified = m["key"] == "rooftop_pv" and pv_c is not None
+            condition = None
+            if m["key"] == "envelope" and district_share_pct:
+                condition = f"이 지역 공동주택 세대의 {district_share_pct:,.1f}%가 지역난방입니다. 지표의 근거는 개별난방 단지 짝 비교입니다"
+            elif m["key"] == "shading" and cooling_reading:
+                condition = cooling_reading
+            out.append({"target": t["key"], "key": m["key"], "title": m["title"], "group": m.get("group"), "attach_to": attach,
+                        "value_status": "QUANTIFIED" if quantified else "INDICATOR_ONLY",
+                        "value_kgco2eq": pv_c if quantified else None,
+                        "no_value_reason": None if quantified else NO_VALUE_REASON.get(m["key"], "지표만 있는 수단입니다. 근거표 행의 값을 계획안에 곱하지 않습니다"),
+                        "indicator_text": indicator_text(m), "evidence": m["evidence"], "evidence_label": EVIDENCE_LABEL[m["evidence"]],
+                        "n": m.get("n"), "apply": apply, "evidence_table": table,
+                        "group_kind": GROUP_KIND.get(top or "", "계획 수단"), "condition_text": condition})
+    return out
