@@ -538,6 +538,11 @@ def _oc() -> str:
     return os.getenv("LAW_GO_KR_OC", "test").strip() or "test"
 
 
+AUTH_FAILED_TEXT = "사용자 정보 검증에 실패"
+AUTH_FAILED_MESSAGE = ("law.go.kr OPEN API 사용자 검증 실패(인증) — 법제처 OPEN API 키(LAW_GO_KR_OC)를 .env에 넣고 "
+                       "이 PC의 IP를 법제처에 등록해야 조례를 받습니다")
+
+
 def issuers(db: Any, region_codes: Iterable[str] | None = None) -> dict[str, dict[str, Any]]:
     """Issuer → {issuer…, regions: [codes]} for the given regions (default: every region in the catalog)."""
     from .regions import catalog
@@ -588,6 +593,14 @@ def collect_ordinance(db: Any, client: Any, issuer: dict[str, Any], *, log: Log 
             for query in (f"{local} 도시계획 조례", f"{local} 계획 조례"):
                 response = client.get(SEARCH_URL, params={"OC": _oc(), "target": "ordin", "type": "XML", "query": query, "display": 100})
                 response.raise_for_status()
+                if AUTH_FAILED_TEXT in response.text:
+                    # 2026-11-22: 기본 OC "test"가 거절됨(11월 초부터, "사용자 정보 검증에 실패 … IP주소 및 도메인주소를 등록").
+                    # 전에는 이 답을 "조례 못 찾음"으로 적어 37곳이 조용히 시행령 상한으로 넘어갔음 → 따로 표시
+                    row.status, row.message = "AUTH_FAILED", AUTH_FAILED_MESSAGE
+                    db.add(row)
+                    db.commit()
+                    log(f"{issuer['name']}: 법제처 사용자 검증 실패(키 · IP 등록 필요)")
+                    return row
                 hit = pick_search_hit(_parse_search(response.content), name)
                 time.sleep(delay_s)
                 if hit:
