@@ -101,3 +101,22 @@ def test_standard_doc_heat_table_matches_the_code():
     # 코드의 지사 · 연도가 문서에 빠짐없이 있음
     assert seen == {branch: set(years) for branch, years in KDHC_HEAT_KG_PER_TJ.items()}
     assert set(KDHC_HEAT_KG_PER_TJ) == set(HEAT_SUPPLIER_BRANCH.values())
+
+
+def test_new_detailed_regions_get_their_supplier_or_stay_held():
+    """2026-11-22 (기준 문서 5.16 · 판 1.49): 상세 수집을 넓힌 뒤 지역난방이 큰 23곳 — 편람으로 사업자가 하나로 확인된 곳만 연결."""
+    from app.emissions import district_heat_factor
+    published = {"41280": ("수도권연계", 0.1302), "11680": ("수도권연계", 0.1302), "41460": ("수도권연계", 0.1302),
+                 "41480": ("수도권연계", 0.1302), "48250": ("김해", 0.1884), "12170": ("광주전남", 0.1510)}
+    for code, (branch, kwh) in published.items():
+        f = district_heat_factor(code, 2025)
+        assert f["factor_kind"] == "PUBLISHED" and f["branch"] == branch and f["kg_per_kwh"] == kwh, code
+    assert district_heat_factor("48250", 2024)["kg_per_kwh"] == 0.1288        # 김해지사도 그해 값(2025년 +46%)
+    substitute = {"41290": "GS파워", "41410": "GS파워", "41170": "GS파워", "41430": "GS파워", "41190": "GS파워",
+                  "11470": "서울에너지공사", "41450": "나래에너지서비스", "28185": "인천종합에너지", "41270": "안산도시개발",
+                  "41370": "디에스파워", "44800": "내포그린에너지", "41210": "삼천리", "27710": "대성에너지"}
+    for code, supplier in substitute.items():
+        f = district_heat_factor(code, 2025)
+        assert f["factor_kind"] == "SUBSTITUTE" and f["supplier"] == supplier and f["kg_per_kwh"] == 0.1054, code
+    # 사업자 둘 이상(성남 · 송파 · 화성), 공급자 모름(대구 서구) → 계산하지 않음
+    assert all(district_heat_factor(code, 2025) is None for code in ("41130", "11710", "41590", "27170"))
