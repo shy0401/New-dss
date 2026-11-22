@@ -30,6 +30,8 @@ PREDICT_TIMEOUT_S = 230.0
 TIMEOUT = -1  # _call: the service is on but did not answer in time
 SLOW = ("팀 변화 모델이 {sec:.0f}초 안에 답하지 않았습니다(다른 예측을 계산하는 중이거나 칸이 많음). "
         "잠시 뒤 다시 시도하거나 칸 수를 줄여 주세요.")
+NO_TEAM_TABLE = "이 지역은 팀 데이터셋(칸 상태 표)이 없어 변화 모델 예측을 아직 내지 못합니다(준비 중). 원단위 기반 계산 값을 참고하세요"
+NOT_IN_TEAM_CELLS = "같은 시의 다른 구 표만 있고, 이 구역의 칸은 팀 데이터셋 밖이라 변화 모델 예측을 내지 못합니다. 원단위 기반 계산 값을 참고하세요"
 OFF = "팀 변화 모델 서비스가 꺼져 있습니다. 팀 인계 묶음이 있는 PC에서 `docker compose --profile team-model up -d team-model`로 켭니다."
 USES = ("residential", "commercial", "large_retail", "office", "officetel", "industrial", "knowledge_industry", "education", "medical_welfare", "other")
 # 팀 결과(2026-10-20, 00_합본_7차): 채택 기준과 학습에 없던 10개 지역 153사례 시험. 출처: 팀 인계 문서 5절, docs/results/model-results-ledger.md
@@ -259,6 +261,15 @@ def predict_area(body: AreaPredictIn, request: Request) -> dict[str, Any]:
     with Session() as db:
         code = body.region or region_for_grid(db, grids[0])
         model = _model_region(db, code, cells) if code else None
+        # U2-0(2026-11-23): say why before asking the service ("팀 데이터셋에 지역 41130이(가) 없습니다" read as a failure)
+        if code and model is None:
+            try:
+                from .team_grid import region_datasets
+                names = region_datasets(db, code)
+            except Exception:  # noqa: BLE001 - no team grid tables (tests, CI): let the service answer as before
+                names = None
+            if names is not None:
+                raise HTTPException(404, NOT_IN_TEAM_CELLS if names else NO_TEAM_TABLE)
     if not code:
         raise HTTPException(422, "지역을 알 수 없습니다")
     status_code, answer = _call("/predict-area", {

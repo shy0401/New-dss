@@ -55,6 +55,24 @@ describe('TeamAreaPanel', () => {
       new: [{ use: 'residential', floor_area_m2: 50000 }, { use: 'commercial', floor_area_m2: 10000 }], removed: [] });
   });
 
+  it('shows the intensity-based increase instead when the region has no team table (U2-0)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/team-model/status')) return json(STATUS);
+      if (url.includes('/team-model/predict-area')) return json({ detail: '이 지역은 팀 데이터셋(칸 상태 표)이 없어 변화 모델 예측을 아직 내지 못합니다(준비 중). 원단위 기반 계산 값을 참고하세요' }, 404);
+      return json({}, 404);
+    });
+    render(<TeamAreaPanel grids={GRIDS} region="41130" plannedFloor={50000} plannedRemoved={0} fallback={{ netAddedKgco2eq: 584691.4, baselineYear: 2025 }} />);
+    await screen.findByText(/학습 완료/);
+    fireEvent.click(screen.getByRole('button', { name: '이 구역 배출 변화 예측' }));
+    const box = await screen.findByTestId('team-area-fallback');
+    expect(screen.getByRole('alert').textContent).toContain('준비 중');
+    expect(box.textContent).toContain('+584.7');
+    expect(box.textContent).toContain('전력 운영탄소만');
+    expect(box.textContent).toContain('2025년 관측 원단위');
+    expect(box.textContent).toContain('견주거나 더하지 않습니다');
+  });
+
   it('follows the plan above until the user edits, and blocks areas over 64 cells', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () => json(STATUS));
     const many = Array.from({ length: 65 }, (_, i) => `cell_${1000 + 500 * i}_2000`);

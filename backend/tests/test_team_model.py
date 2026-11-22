@@ -156,3 +156,17 @@ def test_cell_predict_asks_the_team_table_of_the_gu_like_the_area_predict(monkey
     monkeypatch.setattr(team_model, "_model_region", broken)
     assert _client().post("/api/team-model/predict", json={"region": "41110", "plans": [{"grid": "cell_961000_1916500", "new": [{"floor_area_m2": 1000}]}]}).status_code == 200
     assert sent["body"]["region"] == "41110"
+
+
+def test_area_predict_says_why_before_asking_when_the_region_has_no_team_table(monkeypatch):
+    """U2-0(2026-11-23): 팀 표가 없는 지역 · 같은 시 다른 구 표만 있는 구역은 서비스에 묻기 전에 까닭을 담아 404."""
+    from app import team_grid, team_model
+    monkeypatch.setattr(team_model, "_call", lambda *a, **k: pytest.fail("the service must not be asked"))
+    monkeypatch.setattr(team_model, "_model_region", lambda db, code, cells: None)
+    body = {"region": "41130", "grids": ["cell_961000_1916500"], "new": [{"floor_area_m2": 1000}]}
+    monkeypatch.setattr(team_grid, "region_datasets", lambda db, code: [])
+    r = _client().post("/api/team-model/predict-area", json=body)
+    assert r.status_code == 404 and "준비 중" in r.json()["detail"]
+    monkeypatch.setattr(team_grid, "region_datasets", lambda db, code: ["41131_경기도_성남시_수정구"])
+    r = _client().post("/api/team-model/predict-area", json=body)
+    assert r.status_code == 404 and "다른 구 표만" in r.json()["detail"]

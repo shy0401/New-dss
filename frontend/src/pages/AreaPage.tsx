@@ -242,7 +242,8 @@ export function AreaPage() {
       <div className="section-label" id="area-step-plan"><h2>미래 개발과 감축 노력</h2><span>목표 감축률을 넣으면 필요한 노력을 계산합니다</span></div>
       <EffortPanel effort={analysis.effort} plan={plan} setPlan={setPlan} target={target} setTarget={setTarget} pvYield={pvYield} setPvYield={setPvYield} basis={effortBasis} setBasis={setEffortBasis} kcsmAvailable={!!analysis.history.kcsm?.available} />
       <BenchmarkPanel bench={bench} effort={analysis.effort} regionName={options.data?.region?.short_name ?? '시·군·구'} />
-      <TeamAreaPanel grids={analysis.history.area.grid_ids} region={region} plannedFloor={plannedArea(plan)} plannedRemoved={plan.removed_floor_area_m2} />
+      <TeamAreaPanel grids={analysis.history.area.grid_ids} region={region} plannedFloor={plannedArea(plan)} plannedRemoved={plan.removed_floor_area_m2}
+        fallback={intensityFallback(analysis.effort)} />
 
       <div className="section-label" id="area-step-measures"><h2>감축 방안</h2><span>구체적 방안을 순서대로 더해 필요 감축량을 채웁니다. 다른 안과 비교하지 않습니다</span></div>
       <MeasuresPanel effort={analysis.effort} measures={measures} setMeasures={setMeasures} />
@@ -475,6 +476,12 @@ function BeforeAfterPanel({ comparison, candidates, eventYear, setEventYear, win
       {comparison.gaps?.length ? <Note label={`자료 공백 ${comparison.gaps.length}건`}><ul className="area-gaps">{comparison.gaps.map((g) => <li key={g}>{g}</li>)}</ul></Note> : null}
     </>}
   </section>;
+}
+
+/** U2-0(2026-11-23): 변화 모델이 없는 지역에서 대신 보일 원단위 기반 증가분(U4 plan_added 한 필드). 없으면 null. */
+function intensityFallback(effort: EffortResult | null): { netAddedKgco2eq: number | null; baselineYear: number | null } | null {
+  const added = effort?.targets?.find((t) => t.key === 'plan_added');
+  return added ? { netAddedKgco2eq: added.net_added_kgco2eq, baselineYear: effort?.baseline_year ?? null } : null;
 }
 
 function EffortPanel({ effort, plan, setPlan, target, setTarget, pvYield, setPvYield, basis, setBasis, kcsmAvailable = false }: { effort: EffortResult | null; plan: PlanState; setPlan: (p: PlanState) => void; target: number; setTarget: (t: number) => void; pvYield: string; setPvYield: (v: string) => void; basis: EffortBasis; setBasis: (b: EffortBasis) => void; kcsmAvailable?: boolean }) {
