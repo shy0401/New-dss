@@ -83,7 +83,7 @@ def test_markdown_names_the_place_shows_the_plan_and_its_savings_and_hides_cell_
     # 2026-11-16: 사다리 밖 수단은 '따로 본 값' 표로, 시공 단계 내재탄소는 참고 계산으로 같은 절에 (연면적 없이 만든 사다리에는 내재탄소 없음)
     assert '#### 수단별 효과 (따로 본 값, 서로 더하지 않음)' in section and '#### 시공 단계 내재탄소' not in section
     assert '| 신축 통합 기준(ZEB 5등급 수준·효율등급 인증) | 총 최종에너지 −11.4% (−12.1~−5.9%, 준공 시기 비교) | 실측 국내 2곳(원문과 맞는 행) | 지표만 | 지표만 |' in section
-    assert '| 공용부 조명 LED·동작감지 디밍(지하주차장·계단) | 그 조명 전기 −40% (−82.5~−10%) | 기관 실적 국내 5건 | 지표만 | 지표만 |' in section
+    assert '| 공용부 조명 LED·동작감지 디밍(지하주차장·계단) | 그 조명 전기 −40% (LED) ~ −82.5% (LED+디밍) | 기관 실적 국내 2건(조명만) | 지표만 | 지표만 |' in section
     assert '| 녹지·조경 흡수(상쇄) | 녹지 1 m²에 연 1.0 kgCO2 (8.8~15.9 t/ha) | 가정 | 값 없음 (녹지 면적이 없습니다.) | 기본 방안(사다리) |' in section
     assert '- **승강기 회생제동장치**:' in section and '](https://news.seoul.go.kr/citybuild/archives/517382)' in section   # 수단마다 설명·비용·주의·출처
     full = building_plan(scenario['result']['annual']['reference'], 2800.0, snapshot['factors'], {'kwh_per_kw': 1199.9, 'label': '추정'}, 560280.0, floor_area_m2=33600.0, floors=12)
