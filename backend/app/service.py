@@ -216,8 +216,12 @@ def dashboard(db,grid_id=None,year=2025,region=None):
     observed_rows=[{'grid_id':o.grid_id,'energy_type':o.energy_type,'use_ym':o.use_ym,'usage_kwh':o.usage_kwh,'kapt_code':(o.raw_record or {}).get('kapt_code'),'matched_gross_floor_area_m2':(o.raw_record or {}).get('matched_gross_floor_area_m2')} for o in observed]
     # Scenario baseline: one fixed parcel set observed in all 12 months, with its own floor area.
     from .grid_metrics import validated_complex_areas
-    area_by_code,area_issues=validated_complex_areas(db.scalars(select(ApartmentComplex)))
-    all_households={row.kapt_code:row.households for row in db.scalars(select(ApartmentComplex))}
+    # 2026-11-23 U1: one read of the five columns used (was two full reads of 22k complexes with their JSON columns)
+    from sqlalchemy.orm import load_only
+    slim=list(db.scalars(select(ApartmentComplex).options(load_only(ApartmentComplex.kapt_code,ApartmentComplex.gross_floor_area_m2,
+        ApartmentComplex.households,ApartmentComplex.management_area_m2,ApartmentComplex.name))))
+    area_by_code,area_issues=validated_complex_areas(slim)
+    all_households={row.kapt_code:row.households for row in slim}
     base=consistent_baseline(observed_rows,month_range(f'{year}-01',f'{year}-12'),area_by_code,all_households) if observed_rows else None
     factors=factors_for(db,year)
     if observed_rows:area=base['area_m2'] if base else None

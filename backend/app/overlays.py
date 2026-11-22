@@ -271,12 +271,20 @@ def zoning_area_by_category(db: Any, grid_ids: Any = None) -> tuple[dict[str, fl
 
     if not _table_exists(db, "vworld_grid_coverage"):
         return {}, 0
-    covered = len([g for g in db.scalars(select(VworldGridCoverage.grid_id).where(VworldGridCoverage.dataset == "zoning")) if grid_ids is None or g in grid_ids])
+    # 2026-11-23 U1: the cells are chosen in SQL (2,000 per query) and only the three columns read; before, every one of
+    # the ~808k zoning rows of the country came back as an object and was filtered here (8.2 s for 성남). Same result.
+    ids = None if grid_ids is None else sorted(set(grid_ids))
+    chunks = [None] if ids is None else [ids[i:i + 2000] for i in range(0, len(ids), 2000)]
+    covered = 0
     per_grid: dict[str, list[tuple[str | None, float]]] = {}
-    for row in db.scalars(select(GridZoningStat)):
-        if grid_ids is not None and row.grid_id not in grid_ids:
-            continue
-        per_grid.setdefault(row.grid_id, []).append((row.zone_name, float(row.grid_area_ratio or 0)))
+    for chunk in chunks:
+        cq = select(func.count()).select_from(VworldGridCoverage).where(VworldGridCoverage.dataset == "zoning")
+        zq = select(GridZoningStat.grid_id, GridZoningStat.zone_name, GridZoningStat.grid_area_ratio)
+        if chunk is not None:
+            cq, zq = cq.where(VworldGridCoverage.grid_id.in_(chunk)), zq.where(GridZoningStat.grid_id.in_(chunk))
+        covered += db.scalar(cq) or 0
+        for grid_id, zone_name, ratio in db.execute(zq):
+            per_grid.setdefault(grid_id, []).append((zone_name, float(ratio or 0)))
     totals: dict[str, float] = {}
     for entries in per_grid.values():  # 상위 도형을 겹쳐 세지 않도록 칸마다 몫을 낸 뒤 칸 넓이(0.25 km²)를 곱한다
         for category, share in zoning_shares(entries).items():
