@@ -27,7 +27,9 @@ router = APIRouter(prefix="/api/plans", tags=["plans"])
 BLOCKS = ("baseline", "plan_emission", "change_model", "reduction", "district_heat", "ordinance")
 DEFAULT_BLOCKS = ("baseline", "plan_emission", "reduction", "district_heat", "ordinance")
 SMALL_CHANGE_T = 1000.0   # DATA_STANDARD 5.8: below 1,000 tCO2e the change model is read for direction only (same as the screen)
-AREA_TOLERANCE_M2 = 0.5
+AREA_TOLERANCE = 0.01   # relative: a plan typed from rounded numbers differs a little (U3 review)
+# sentences and fields that only exist for a whole-area target; dropped when no target % is given (the engine ran with 0 %)
+TARGET_FACTS = ("effort_target", "effort_met", "effort_new", "effort_all", "effort_offset", "effort_pv", "effort_rec", "effort_split", "effort_mix")
 
 
 class SiteIn(BaseModel):
@@ -54,16 +56,21 @@ def _blank(status: str, reason: str | None = None, **extra: Any) -> dict[str, An
 def normalize_plan(body: BundleIn) -> dict[str, Any]:
     """The engine plan from the per-use lines (their sums are the floor area). Two different floor areas in one plan → 422."""
     plan = body.plan.model_dump() if body.plan else {}
-    if body.uses_new or body.uses_removed:
-        added = sum(i.floor_area_m2 for i in body.uses_new)
-        removed = sum(i.floor_area_m2 for i in body.uses_removed)
-        for key, total in (("added_floor_area_m2", added), ("removed_floor_area_m2", removed)):
-            if plan.get(key) is not None and abs(float(plan[key]) - total) > AREA_TOLERANCE_M2:
-                raise ValueError(f"계획의 {'신축' if key.startswith('added') else '철거'} 연면적({float(plan[key]):,.0f} m²)과 용도 줄의 합({total:,.0f} m²)이 다릅니다")
-        plan["added_floor_area_m2"], plan["removed_floor_area_m2"] = added, removed
-    if plan.get("floors") and plan.get("building_count") and plan.get("footprint_per_building") and plan.get("added_floor_area_m2") is not None:
+
+    def differs(a: float, b: float) -> bool:
+        return abs(a - b) > max(0.5, AREA_TOLERANCE * max(abs(a), abs(b)))
+    for key, lines in (("added_floor_area_m2", body.uses_new), ("removed_floor_area_m2", body.uses_removed)):
+        if not lines:
+            continue   # only the side that has use lines is taken from them (U3 review)
+        total = sum(i.floor_area_m2 for i in lines)
+        if plan.get(key) is not None and differs(float(plan[key]), total):
+            raise ValueError(f"계획의 {'신축' if key.startswith('added') else '철거'} 연면적({float(plan[key]):,.0f} m²)과 용도 줄의 합({total:,.0f} m²)이 다릅니다")
+        plan[key] = total
+    if plan.get("floors") and plan.get("building_count") and plan.get("footprint_per_building"):
         product = float(plan["floors"]) * float(plan["building_count"]) * float(plan["footprint_per_building"])
-        if abs(product - float(plan["added_floor_area_m2"])) > AREA_TOLERANCE_M2:
+        if plan.get("added_floor_area_m2") is None:
+            plan["added_floor_area_m2"] = product   # the engine derives the same; the ratio check needs it here too
+        elif differs(product, float(plan["added_floor_area_m2"])):
             raise ValueError(f"층수 × 동수 × 동당 건축면적({product:,.0f} m²)과 신축 연면적({float(plan['added_floor_area_m2']):,.0f} m²)이 다릅니다. 하나로 맞춰 주세요")
     return plan
 
@@ -74,7 +81,7 @@ def _effort_text(facts: list[dict[str, Any]], fid: str) -> str | None:
 
 def baseline_block(effort: dict[str, Any] | None) -> dict[str, Any]:
     if not effort or not effort.get("available"):
-        return _blank("NO_BASIS", (effort or {}).get("reason") or "감축 노력 계산에 목표 %와 기준이 필요합니다", data_class=None)
+        return _blank("NO_BASIS", (effort or {}).get("reason") or "기준 부하를 정할 관측이 없습니다", data_class=None)
     keys = ("baseline_year", "basis", "basis_label", "fallback_from", "baseline_kwh", "baseline_kgco2eq", "intensity_kwh_per_m2",
             "intensity_area_m2", "factor_kgco2eq_per_kwh")
     return {"status": "OK", "reason": None, "data_class": effort.get("baseline_mode"), "scope": "electricity",
@@ -84,6 +91,8 @@ def baseline_block(effort: dict[str, Any] | None) -> dict[str, Any]:
 def plan_emission_block(effort: dict[str, Any] | None, facts: list[dict[str, Any]]) -> dict[str, Any]:
     if not effort or not effort.get("available") or not effort.get("targets"):
         return _blank("NO_BASIS", (effort or {}).get("reason"), data_class="SCENARIO", net_added_kgco2eq=None)
+    if not effort.get("added_floor_area_m2") and not effort.get("removed_floor_area_m2"):
+        return _blank("NO_PLAN", "신축 · 철거 연면적이 없어 계획 배출을 내지 않았습니다", data_class="SCENARIO", net_added_kgco2eq=None, new_load_kwh=None)
     added = next(t for t in effort["targets"] if t["key"] == "plan_added")
     status = "OK" if added["net_added_kgco2eq"] > 0 else "NO_INCREASE"
     return {"status": status, "reason": None, "data_class": "SCENARIO", "scope": "electricity", "scope_label": effort.get("scope"),
@@ -101,7 +110,7 @@ def reduction_block(effort: dict[str, Any] | None) -> dict[str, Any]:
     return {"status": "OK", "reason": None, "data_class": "SCENARIO", "scope": "electricity", **{k: effort.get(k) for k in keys}}
 
 
-def change_model_block(db: Any, body: BundleIn, grid_ids: list[str], region: str | None, request: Request,
+def change_model_block(body: BundleIn, grid_ids: list[str], region: str | None, request: Request,
                        fallback_text: str | None) -> dict[str, Any]:
     """Checks before asking the service, then the service (SCENARIO). Not OK → null numbers, the reason, and the
     intensity-based increase (②) as the fallback the screen shows instead."""
@@ -115,18 +124,23 @@ def change_model_block(db: Any, body: BundleIn, grid_ids: list[str], region: str
         return no("RESTRICTED", team_model.RESTRICTED)
     if not body.uses_new and not body.uses_removed:
         return no("NO_USES", "용도별 신축 · 철거 연면적이 없어 변화 모델을 돌리지 않았습니다(용도를 짐작해 채우지 않음)")
+    if not grid_ids:
+        return no("NO_CELLS", "구역에 500m 칸이 없습니다")
     if len(grid_ids) > MAX_AREA_CELLS:
         return no("TOO_MANY_CELLS", f"구역이 500m 칸 {len(grid_ids)}개로 변화 모델 한도({MAX_AREA_CELLS}칸)를 넘습니다")
-    if not region_datasets(db, region):
-        return no("NO_TEAM_TABLE_REGION", "이 지역은 팀 데이터셋(칸 상태 표)이 없어 변화 모델 예측을 아직 내지 못합니다(준비 중)")
-    cells = [team_model._xy(g) for g in grid_ids if g.startswith("cell_")]
-    if not any(team_model.cell_dataset(db, region, x, y) for x, y in cells):
-        return no("NO_TEAM_TABLE_CELLS", "같은 시의 다른 구 표만 있고, 이 구역의 칸은 팀 데이터셋 밖입니다")
+    with Session() as db:   # a short session for the checks; none is held while the service computes (13~29 s)
+        if not region_datasets(db, region):
+            return no("NO_TEAM_TABLE_REGION", "이 지역은 팀 데이터셋(칸 상태 표)이 없어 변화 모델 예측을 아직 내지 못합니다(준비 중)")
+        cells = [team_model._xy(g) for g in grid_ids if g.startswith("cell_")]
+        if not any(team_model.cell_dataset(db, region, x, y) for x, y in cells):
+            return no("NO_TEAM_TABLE_CELLS", "같은 시의 다른 구 표만 있고, 이 구역의 칸은 팀 데이터셋 밖입니다")
     st = team_model.service_status()
     if st.get("status") == "off":
         return no("OFF", team_model.OFF)
     if st.get("status") in ("starting", "training"):
         return no("TRAINING", "변화 모델을 학습하는 중입니다(1~3분). 잠시 뒤 다시 시도해 주세요")
+    if st.get("status") in ("unavailable", "error"):
+        return no("UNAVAILABLE", st.get("reason") or st.get("error") or "변화 모델 서비스가 준비되지 않았습니다")
     t0 = time.perf_counter()
     try:
         answer = team_model.predict_area(team_model.AreaPredictIn(region=region, grids=grid_ids, new=body.uses_new, removed=body.uses_removed,
@@ -134,14 +148,18 @@ def change_model_block(db: Any, body: BundleIn, grid_ids: list[str], region: str
     except HTTPException as exc:
         kind = {404: "NO_USABLE_CELL", 503: "OFF", 504: "SLOW"}.get(exc.status_code, "ERROR")
         return no(kind, str(exc.detail))
+    except Exception as exc:  # noqa: BLE001 - the other blocks must still answer
+        return no("ERROR", f"변화 모델 호출 중 오류({type(exc).__name__})")
     combined = answer.get("combined") or ((answer.get("results") or [None])[0]) or {}
     change = combined.get("change_tco2e")
+    if change is None:
+        return no("ERROR", "변화 모델이 변화량 없이 답했습니다")
     band = combined.get("band") or {}
     area = answer.get("area") or {}
     results = answer.get("results") or []
     used = len(area.get("cells_used") or results)
-    rows = team_model.ACCURACY["development"]["rows"]
-    accuracy = rows[2] if used <= 1 else rows[3] if used < 10 else rows[4]
+    want = "교차검증 1칸 개발" if used <= 1 else "교차검증 2~9칸 개발" if used < 10 else "교차검증 10칸 이상 개발"
+    accuracy = next((r for r in team_model.ACCURACY["development"]["rows"] if r["band"] == want), None)
     return {"status": "OK", "reason": None, "data_class": "SCENARIO", "scope": "carbonmap_buildings",
             "scope_label": "탄소공간지도 건물 배출(전기 · 가스 · 지역난방)의 변화, tCO₂e/년",
             "reading": "direction" if change is not None and abs(change) < SMALL_CHANGE_T else "value",
@@ -168,9 +186,12 @@ def district_heat_block(db: Any, effort: dict[str, Any] | None, cell: str | None
     from .regions import scope
     from .service import district_heat_estimate, district_heat_text, heating_share
     if not cell:
-        return _blank("NEEDS_CELL", "지역난방 열은 대상지 칸 하나의 단지로 계산합니다(기준 문서 5.16). 구역이 칸 하나이거나 대지를 정하면 계산합니다", data_class="ESTIMATED", heat_kwh=None)
+        return _blank("NEEDS_CELL", "지역난방 열은 대상지 칸 하나의 단지로 계산합니다(기준 문서 5.16). 구역이 칸 하나이거나 대지 칸(grid_id)을 정하면 계산합니다",
+                      data_class="ESTIMATED", heat_kwh=None)
     if not effort or not effort.get("available"):
         return _blank("NO_BASIS", (effort or {}).get("reason"), data_class="ESTIMATED", heat_kwh=None)
+    if not effort.get("added_floor_area_m2"):
+        return _blank("NO_NEW_FLOOR_AREA", "신축 연면적이 없어 지역난방 열을 계산하지 않았습니다", data_class="ESTIMATED", heat_kwh=None)
     share = heating_share(db.scalars(select(ApartmentComplex).where(ApartmentComplex.grid_id == cell)).all())
     if share is None:
         return _blank("UNKNOWN_HEATING", "대상지 칸에 난방 방식을 아는 단지가 없습니다", data_class="ESTIMATED", heat_kwh=None)
@@ -200,7 +221,8 @@ def ordinance_block(db: Any, body: BundleIn, plan: dict[str, Any], region: str |
                 "bcr_limit_pct": None, "far_limit_pct": None, "plan_bcr_pct": None, "plan_far_pct": None, "check": None}
     lonlat = (site.lon, site.lat) if site.lon is not None and site.lat is not None else grid_center_lonlat(db, site.grid_id) if site.grid_id else None
     if not lonlat:
-        return {"status": "NEEDS_SITE", "reason": "대지 중심 좌표(또는 칸)를 찾지 못했습니다", **out, "check": None}
+        return {"status": "NEEDS_SITE", "reason": "대지 중심 좌표(또는 칸)를 찾지 못했습니다", **out,
+                "bcr_limit_pct": None, "far_limit_pct": None, "plan_bcr_pct": None, "plan_far_pct": None, "check": None}
     zoning = site_zoning(db, lonlat[0], lonlat[1], site.site_area_m2, site.rotation_deg, housing=bool(any(i.use == "residential" for i in body.uses_new)) or not body.uses_new,
                          region_code=region)
     footprint = (float(plan["building_count"]) * float(plan["footprint_per_building"])) if plan.get("building_count") and plan.get("footprint_per_building") else None
@@ -210,9 +232,27 @@ def ordinance_block(db: Any, body: BundleIn, plan: dict[str, Any], region: str |
     far = coverage_ratio_pct(added, site.site_area_m2)
     households = int(sum(i.dwellings or 0 for i in body.uses_new if i.use == "residential")) or None
     zoning["check"] = check_plan(zoning, bcr=bcr, far=far, site_area_m2=site.site_area_m2, households=households)
-    return {"status": "OK" if zoning.get("status") in (None, "OK", "READY") else str(zoning.get("status")), "reason": zoning.get("reason"),
-            **out, "site": zoning, "bcr_limit_pct": zoning.get("bcr_limit"), "far_limit_pct": zoning.get("far_limit"),
-            "plan_bcr_pct": bcr, "plan_far_pct": far, "check": zoning["check"]}
+    status = "OK" if zoning.get("status") in (None, "OK", "READY") else str(zoning.get("status"))
+    reason = zoning.get("reason") or {"NO_ZONING": "대지에 용도지역 자료가 없습니다", "LIMIT_UNKNOWN": "대지의 일부 용도지역 상한을 모릅니다",
+                                      "NOT_COLLECTED": "이 지역 용도지역을 아직 받지 않았습니다"}.get(status)
+    return {"status": status, "reason": reason, **out, "site": zoning, "bcr_limit_pct": zoning.get("bcr_limit"), "far_limit_pct": zoning.get("far_limit"),
+            "plan_bcr_pct": bcr, "plan_far_pct": far, "check": zoning["check"],
+            "note": "구역 전체 신축 연면적을 이 대지 한 곳에 짓는 것으로 보고 비율을 냈습니다. 공동주택 상한은 주거 용도 줄이 있을 때(용도 줄이 없으면 공동주택으로 봄) 적용합니다"}
+
+
+def strip_target(analysis: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None, list[dict[str, Any]]]:
+    """No target % given: the engine ran with 0 % only for the plan's own increase. Everything that reads a whole-area
+    target (sentences, the area target, the recommended plan, the user mix, the effort curve) is removed (U3 review)."""
+    effort = analysis.get("effort")
+    if effort:
+        effort = dict(effort, target_pct=None, target_kgco2eq=None, required_reduction_kgco2eq=None, already_met=None, options=None, curve=None,
+                      recommended=None, mix=None, feasible_with_new_only=None,
+                      targets=[t for t in effort.get("targets") or [] if t["key"] == "plan_added"],
+                      measure_links=[m for m in effort.get("measure_links") or [] if m["target"] == "plan_added"])
+    facts = [f for f in analysis.get("facts") or [] if not any(f.get("id", "").startswith(p) for p in TARGET_FACTS)]
+    history = dict(analysis.get("history") or {})
+    history.pop("industry", None)
+    return dict(analysis, effort=effort, facts=facts, history=history), effort, facts
 
 
 SCOPES = [
@@ -254,16 +294,15 @@ def evaluate(body: BundleIn, request: Request) -> dict[str, Any]:
         area = (analysis.get("history") or {}).get("area") or {}
         grid_ids = list(area.get("grid_ids") or [])
         region = (analysis.get("region") or {}).get("code") or body.region
-        cell = (body.site.grid_id if body.site and body.site.grid_id else None) or (grid_ids[0] if len(grid_ids) == 1 else None)
+        cell = (body.site.grid_id if body.site and body.site.grid_id in grid_ids else None) or (grid_ids[0] if len(grid_ids) == 1 else None)
+        if body.target_pct is None:
+            analysis, effort, facts = strip_target(analysis)
         blocks: dict[str, Any] = {}
         blocks["baseline"] = baseline_block(effort) if "baseline" in wanted else _blank("NOT_REQUESTED")
         blocks["plan_emission"] = plan_emission_block(effort, facts) if "plan_emission" in wanted else _blank("NOT_REQUESTED")
         blocks["reduction"] = reduction_block(effort) if "reduction" in wanted else _blank("NOT_REQUESTED")
-        if body.target_pct is None and blocks["reduction"].get("targets"):
-            # no target given: the engine ran with 0 % only to get the plan's own increase; the whole-area target is not shown
-            blocks["reduction"] = dict(blocks["reduction"], target_pct=None, targets=[t for t in blocks["reduction"]["targets"] if t["key"] == "plan_added"],
-                                       measure_links=[m for m in blocks["reduction"].get("measure_links") or [] if m["target"] == "plan_added"],
-                                       recommended=None, note="목표 %를 넣지 않아 '구역 전체 목표' 기준은 내지 않았습니다")
+        if body.target_pct is None and blocks["reduction"].get("status") == "OK":
+            blocks["reduction"]["note"] = "목표 %를 넣지 않아 '구역 전체 목표' 기준은 내지 않았습니다"
         if "district_heat" in wanted:
             t0 = time.perf_counter()
             blocks["district_heat"] = district_heat_block(db, effort, cell, region)
@@ -276,12 +315,13 @@ def evaluate(body: BundleIn, request: Request) -> dict[str, Any]:
             timing["ordinance"] = round(time.perf_counter() - t0, 2)
         else:
             blocks["ordinance"] = _blank("NOT_REQUESTED")
-        if "change_model" in wanted:
-            t0 = time.perf_counter()
-            blocks["change_model"] = change_model_block(db, body, grid_ids, region, request, (blocks["plan_emission"] or {}).get("text"))
-            timing["change_model"] = round(time.perf_counter() - t0, 2)
-        else:
-            blocks["change_model"] = _blank("NOT_REQUESTED")
+
+    if "change_model" in wanted:
+        t0 = time.perf_counter()
+        blocks["change_model"] = change_model_block(body, grid_ids, region, request, (blocks["plan_emission"] or {}).get("text"))
+        timing["change_model"] = round(time.perf_counter() - t0, 2)
+    else:
+        blocks["change_model"] = _blank("NOT_REQUESTED")
     footprint = (effort or {}).get("plan_roof_m2")
     return {"plan": {"added_floor_area_m2": plan.get("added_floor_area_m2"), "removed_floor_area_m2": plan.get("removed_floor_area_m2"),
                      "uses_new": [i.model_dump() for i in body.uses_new], "uses_removed": [i.model_dump() for i in body.uses_removed],

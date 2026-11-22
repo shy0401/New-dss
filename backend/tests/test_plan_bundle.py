@@ -36,7 +36,8 @@ def fake_analyze(monkeypatch):
         seen.update(plan=plan, target_pct=target_pct, spec=spec)
         e = _effort(added=(plan or {}).get("added_floor_area_m2") or 0.0, removed=(plan or {}).get("removed_floor_area_m2") or 0.0,
                     target=target_pct or 0.0)
-        return {"effort": e, "facts": [{"id": "effort_added", "text": "이 계획으로 전력 운영탄소가 연간 … 늘어납니다", "numbers": []}],
+        return {"effort": e, "facts": [{"id": "effort_added", "text": "이 계획으로 전력 운영탄소가 연간 … 늘어납니다", "numbers": []},
+                                       {"id": "effort_target", "text": "0% 감축을 목표로 하면 …", "numbers": []}],
                 "history": {"area": {"grid_ids": ["cell_959500_1760500", "cell_960000_1760500"]}}, "region": {"code": "52110"}}
     monkeypatch.setattr(area, "analyze", fake)
     return seen
@@ -122,3 +123,45 @@ def test_district_heat_needs_one_cell():
 def test_coverage_ratio_is_the_one_cell_formula():
     from app.domain import coverage_ratio_pct
     assert coverage_ratio_pct(2500, 10000) == 25.0 and coverage_ratio_pct(None, 10000) is None and coverage_ratio_pct(100, 0) is None
+
+
+def test_without_a_target_no_0_percent_sentence_or_area_target_is_returned(fake_analyze):
+    body = {k: v for k, v in BODY.items() if k != "target_pct"}
+    d = _client().post("/api/plans/evaluate", json=body).json()
+    assert "effort_target" not in {f["id"] for f in d["facts"]} and "effort_target" not in {f["id"] for f in d["analysis"]["facts"]}
+    assert d["analysis"]["effort"]["target_pct"] is None and [t["key"] for t in d["analysis"]["effort"]["targets"]] == ["plan_added"]
+    assert d["blocks"]["plan_emission"]["status"] == "OK"
+
+
+def test_no_plan_gives_no_plan_not_zero(fake_analyze):
+    body = {"region": "52110", "area": {"type": "admin", "code": "x"}, "target_pct": 40, "include": ["plan_emission"]}
+    pe = _client().post("/api/plans/evaluate", json=body).json()["blocks"]["plan_emission"]
+    assert pe["status"] == "NO_PLAN" and pe["net_added_kgco2eq"] is None
+
+
+def test_plan_shapes_floors_only_one_side_and_rounding():
+    from app.plan_bundle import BundleIn, normalize_plan
+    base = {"area": {"type": "admin", "code": "x"}}
+    assert normalize_plan(BundleIn(**base, plan={"floors": 20, "building_count": 5, "footprint_per_building": 500}))["added_floor_area_m2"] == 50000
+    p = normalize_plan(BundleIn(**base, uses_new=[{"floor_area_m2": 40000}], plan={"removed_floor_area_m2": 5000}))
+    assert p["added_floor_area_m2"] == 40000 and p["removed_floor_area_m2"] == 5000          # only the side with use lines
+    assert normalize_plan(BundleIn(**base, uses_new=[{"floor_area_m2": 50000}], plan={"floors": 15, "building_count": 6, "footprint_per_building": 555}))
+    with pytest.raises(ValueError):
+        normalize_plan(BundleIn(**base, uses_new=[{"floor_area_m2": 50000}], plan={"floors": 15, "building_count": 6, "footprint_per_building": 500}))
+
+
+@pytest.mark.parametrize("raise_it,status", [(RuntimeError("bad json"), "ERROR"), (None, "ERROR")])
+def test_any_failure_of_the_service_keeps_the_other_blocks(fake_analyze, monkeypatch, raise_it, status):
+    from app import team_grid, team_model
+    monkeypatch.setattr(team_grid, "region_datasets", lambda db, code: ["52110_전주시"])
+    monkeypatch.setattr(team_model, "cell_dataset", lambda db, code, x, y: "52110_전주시")
+    monkeypatch.setattr(team_model, "service_status", lambda: {"status": "ready"})
+
+    def answer(body, request):
+        if raise_it:
+            raise raise_it
+        return {"combined": None, "results": [], "area": {}}
+    monkeypatch.setattr(team_model, "predict_area", answer)
+    r = _client().post("/api/plans/evaluate", json=dict(BODY, include=["plan_emission", "change_model"]))
+    assert r.status_code == 200 and r.json()["blocks"]["change_model"]["status"] == status
+    assert r.json()["blocks"]["plan_emission"]["status"] == "OK"
