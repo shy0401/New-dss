@@ -2,7 +2,7 @@ import json,os,uuid,re
 from contextlib import asynccontextmanager
 from typing import Literal
 from fastapi import FastAPI,HTTPException,Query,Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse,Response
 from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel,Field,model_validator
 from sqlalchemy import select,text,func
@@ -129,6 +129,19 @@ def _warm_map(years=None):
 
 app=FastAPI(title='Carbon Urban DSS',version='0.1.0',lifespan=lifespan)
 app.add_middleware(GZipMiddleware,minimum_size=2048)
+
+# Writes that run collection, change the service or remove records: this PC only, never through the public demo gateway
+# (deploy/gateway.conf sets X-Public-Gateway). Plans, reports and analyses stay open there.
+PUBLIC_BLOCKED_WRITE=re.compile(r'^/api/(model/validate|standard/check|collections|collection/missing|v1/collection-jobs|system/offline|regions/[^/]+/prepare|regions/national/collect|uploads(/.*)?)$')
+PUBLIC_BLOCKED_TEXT='공개 시연 주소에서는 수집 시작 · 모델 재검증 · 기준 점검 · 설정 변경 · 업로드 · 삭제를 할 수 없습니다. 이 PC의 화면(localhost)에서 해 주세요.'
+
+@app.middleware('http')
+async def _public_gateway_writes(request,call_next):
+    from .team_grid import is_public
+    if request.method in ('POST','PUT','PATCH','DELETE') and is_public(request) and (request.method=='DELETE' or PUBLIC_BLOCKED_WRITE.match(request.url.path)):
+        return JSONResponse(status_code=403,content={'detail':PUBLIC_BLOCKED_TEXT})
+    return await call_next(request)
+
 app.include_router(uploads_router)
 app.include_router(reports_router)
 app.include_router(overlays_router)
@@ -160,7 +173,12 @@ from .validation import router as validation_router
 app.include_router(validation_router)
 from .team_model import router as team_model_router
 app.include_router(team_model_router)
-from .regions import RegionNotReady,DEFAULT_REGION,region_for_grid
+from .regions import RegionNotReady,DEFAULT_REGION,region_for_grid,record_region
+
+@app.exception_handler(RegionNotReady)
+def _region_not_ready(_request,exc):
+    """Any reader that reaches an unprepared region (reports, dashboards, …) answers 404 with the reason, never 500."""
+    return JSONResponse(status_code=404,content={'detail':str(exc)})
 
 def _scope(db,region):
     """Study region scope for a reader; an unknown or unprepared region is a 404 with the reason."""
@@ -758,10 +776,26 @@ def models(year:int=Query(DEFAULT_YEAR,ge=2000,le=2100),region:str|None=Query(No
     with Session() as db:return model_status(db,year,region=_scope(db,region).code)
 
 @app.get('/api/scenarios')
-def scenario_history():
+def scenario_history(region:str|None=Query(None,max_length=10)):
+    """The latest 30 plans; with ``region`` only that region's (a plan without a region is placed by its grid)."""
     with Session() as db:
         images={row for row in db.scalars(select(ScenarioImage.scenario_id))}
-        return [dict(serialize(s),result=db.get(ScenarioResult,s.id).result if db.get(ScenarioResult,s.id) else None,has_image=s.id in images) for s in db.scalars(select(Scenario).order_by(Scenario.created_at.desc()).limit(30))]
+        rows=list(db.scalars(select(Scenario).order_by(Scenario.created_at.desc()).limit(200 if region else 30)))
+        if region:
+            cache={};rows=[s for s in rows if record_region(db,(s.inputs or {}).get('region'),(s.inputs or {}).get('grid_id'),cache)==region][:30]
+        return [dict(serialize(s),result=db.get(ScenarioResult,s.id).result if db.get(ScenarioResult,s.id) else None,has_image=s.id in images) for s in rows]
+
+@app.delete('/api/scenarios/{scenario_id}',status_code=204)
+def delete_scenario(scenario_id:str):
+    """Remove a saved plan with its result and 3D image. Reports keep their own copy (snapshot) of the plan."""
+    with Session() as db:
+        s=db.get(Scenario,scenario_id)
+        if not s:raise HTTPException(404,'계획안을 찾을 수 없습니다')
+        for model in (ScenarioImage,ScenarioResult):
+            row=db.get(model,scenario_id)
+            if row:db.delete(row)
+        db.flush();db.delete(s);db.commit()
+    return Response(status_code=204)
 
 class ScenarioImageInput(BaseModel):
     data_url:str=Field(min_length=32,max_length=6_000_000)

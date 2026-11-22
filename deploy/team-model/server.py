@@ -642,7 +642,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"detail": str(exc)})
         except Exception as exc:  # noqa: BLE001 - the team code raises its own ConfigError/RawDataError
             traceback.print_exc()
-            self._send(422 if type(exc).__name__ in ("ConfigError", "RawDataError") else 500, {"detail": f"{type(exc).__name__}: {exc}"})
+            name = type(exc).__name__
+            if name in ("ConfigError", "RawDataError"):  # the team code's own checks: the plan or the table is the cause
+                self._send(422, {"detail": f"변화 모델이 이 계획을 계산하지 못했습니다(입력 · 표 점검: {exc})"})
+            else:
+                self._send(500, {"detail": f"변화 모델 계산 중 예상하지 못한 오류가 났습니다({name}). 서비스 기록(docker logs)에 자세한 내용이 있습니다"})
 
 
 def main() -> None:

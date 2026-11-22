@@ -15,7 +15,7 @@ import uuid
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import Field
 
@@ -264,12 +264,27 @@ def create_area_report(request: AreaReportInput, http: Request) -> dict[str, Any
 
 
 @router.get("")
-def list_area_reports() -> list[dict[str, Any]]:
+def list_area_reports(region: str | None = Query(None, max_length=10)) -> list[dict[str, Any]]:
+    """The latest 50 area reports; with ``region`` only that region's (old reports saved without a region are left out)."""
     from sqlalchemy import select
     with Session() as db:
-        rows = db.scalars(select(DecisionReport).order_by(DecisionReport.created_at.desc()).limit(200))
-        return [{"id": r.id, "created_at": r.created_at.isoformat(), "title": r.snapshot.get("title"), "mode": r.snapshot.get("summary", {}).get("mode")}
-                for r in rows if r.snapshot.get("kind") == "AREA"][:50]
+        rows = [r for r in db.scalars(select(DecisionReport).order_by(DecisionReport.created_at.desc()).limit(500 if region else 200))
+                if r.snapshot.get("kind") == "AREA"]
+    if region:
+        rows = [r for r in rows if str((r.snapshot.get("region") or {}).get("code") or "") == region]
+    return [{"id": r.id, "created_at": r.created_at.isoformat(), "title": r.snapshot.get("title"), "mode": r.snapshot.get("summary", {}).get("mode")}
+            for r in rows][:50]
+
+
+@router.delete("/{report_id}", status_code=204)
+def delete_area_report(report_id: str) -> Response:
+    with Session() as db:
+        r = db.get(DecisionReport, report_id)
+        if not r or r.snapshot.get("kind") != "AREA":
+            raise HTTPException(404, "지역 보고서를 찾을 수 없습니다")
+        db.delete(r)
+        db.commit()
+    return Response(status_code=204)
 
 
 @router.get("/{report_id}")

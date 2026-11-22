@@ -201,6 +201,8 @@ def resolve_area(spec: dict[str, Any], grids: list[dict[str, Any]], complexes: l
         label = f"500m 격자 {gid}"
         method = "선택한 격자와 그 안에 공개 좌표가 있는 단지"
     elif kind == "circle":
+        if spec.get("lon") is None or spec.get("lat") is None:
+            raise ValueError("반경 구역에는 중심 좌표(경도 lon, 위도 lat)가 필요합니다")
         lon, lat, radius = float(spec["lon"]), float(spec["lat"]), float(spec.get("radius_m") or 1000)
         if not (100 <= radius <= 5000):
             raise ValueError("반경은 100~5,000m로 입력하세요")
