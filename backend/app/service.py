@@ -173,7 +173,7 @@ def region_sector(db,sc):
         return db.get(TestbedSector,'prototype')
     if not sc.default_grid_id:return None
     return TestbedSector(id=f'region:{sc.code}',grid_id=sc.default_grid_id,name=f'{sc.short} 기본 대상지',area_m2=250000,
-                         reason='지역 준비 때 K-apt 세대수가 가장 많은 격자(없으면 지역 중심 격자)로 정한 기본 대상지',candidates=[],metadata_json={})
+                         reason='지역 준비 때 정한 기본 대상지: 전력 · 가스가 모두 관측된 격자 중 K-apt 세대수가 가장 많은 격자(없으면 세대수 최다, 단지가 없으면 지역 중심 격자)',candidates=[],metadata_json={})
 
 def sources_for(db,year=2025):
     """The data-source rows the dashboard and /api/sources show (catalogue + quality for ``year``).
@@ -189,6 +189,21 @@ def sources_for(db,year=2025):
         except ImportError:pass
         rows.append(s)
     return rows
+
+def grid_observed_rows(db,grid_id,within):
+    """The observed monthly energy rows of one grid (the dashboard's baseline input)."""
+    observed=db.scalars(select(EnergyMonthly).where(within,EnergyMonthly.grid_id==grid_id,EnergyMonthly.usage_kwh.is_not(None))).all()
+    return [{'grid_id':o.grid_id,'energy_type':o.energy_type,'use_ym':o.use_ym,'usage_kwh':o.usage_kwh,'kapt_code':(o.raw_record or {}).get('kapt_code'),'matched_gross_floor_area_m2':(o.raw_record or {}).get('matched_gross_floor_area_m2')} for o in observed]
+
+def baseline_has_total(db,grid_id,year,clause=None,area_by_code=None,all_households=None):
+    """True when the grid's dashboard baseline has electricity and gas in all 12 months, so its carbon total is not
+    empty (user readiness D5, 2026-11-23: four default sites had a baseline complex with no gas observed)."""
+    from .grid_metrics import consistent_baseline
+    within=EnergyMonthly.use_ym.between(f'{year}01',f'{year}12')
+    if clause is not None:within=within & clause
+    rows=grid_observed_rows(db,grid_id,within)
+    base=consistent_baseline(rows,month_range(f'{year}-01',f'{year}-12'),area_by_code,all_households) if rows else None
+    return bool(base) and all(r.get('electricity_kwh') is not None and r.get('gas_kwh') is not None for r in base['monthly'])
 
 def dashboard(db,grid_id=None,year=2025,region=None):
     from .regions import scope,weather_rows
@@ -212,8 +227,7 @@ def dashboard(db,grid_id=None,year=2025,region=None):
     area=meta.get('baseline_floor_area_m2') if meta.get('baseline_year')==year else None
     from .grid_metrics import consistent_baseline,grid_energy_intensity
     from .kapt import ApartmentComplex
-    observed=db.scalars(select(EnergyMonthly).where(within,EnergyMonthly.grid_id==selected_grid,EnergyMonthly.usage_kwh.is_not(None))).all() if selected_grid else []
-    observed_rows=[{'grid_id':o.grid_id,'energy_type':o.energy_type,'use_ym':o.use_ym,'usage_kwh':o.usage_kwh,'kapt_code':(o.raw_record or {}).get('kapt_code'),'matched_gross_floor_area_m2':(o.raw_record or {}).get('matched_gross_floor_area_m2')} for o in observed]
+    observed_rows=grid_observed_rows(db,selected_grid,within) if selected_grid else []
     # Scenario baseline: one fixed parcel set observed in all 12 months, with its own floor area.
     from .grid_metrics import validated_complex_areas
     area_by_code,area_issues=validated_complex_areas(db.scalars(select(ApartmentComplex)))
