@@ -199,7 +199,7 @@ def read_month(path: Path, energy_type: str, wanted: set[tuple[str, str]] | None
 def import_months(db: Any, regions: Iterable[dict[str, str]], months: Iterable[str], *, root: Path | None = None,
                   progress: Callable[[str], None] | None = None) -> dict[str, Any]:
     """Store the file rows of ``regions`` ([{sigunguCd, bjdongCd}]) for ``months`` (each needs both files)."""
-    from .energy_parcels import place_missing_parcels, request_sigungu, _GRID_CACHE
+    from .energy_parcels import ParcelGrid, file_codes, parcel_pnu, place_missing_parcels, _GRID_CACHE
     from .models import EnergyMonthly
     files = month_files(root)
     regions = list(regions)
@@ -208,15 +208,34 @@ def import_months(db: Any, regions: Iterable[dict[str, str]], months: Iterable[s
         pair = files.get(ym, {})
         if not all(t in pair for t in ENERGY_TYPES):
             raise FileNotFoundError(f"{ym} 대용량 파일(전기 · 가스)이 다 있지 않습니다")
-        # the file uses the code the provider used that month (전북 45xxx up to 2023-10, like the API)
-        to_ours = {(request_sigungu(r["sigunguCd"], ym), r["bjdongCd"]): (r["sigunguCd"], r["bjdongCd"]) for r in regions}
+        # the file uses the code the provider used that month (전북 45xxx up to 2023-10, like the API; 전남광주 · 화성: energy_parcels)
+        to_ours: dict[tuple[str, str], list[tuple[str, str]]] = {}
+        for r in regions:
+            to_ours.setdefault(file_codes(r["sigunguCd"], r["bjdongCd"], ym), []).append((r["sigunguCd"], r["bjdongCd"]))
+        # one old 법정동 split into two (화성 능동 → 병점구 · 동탄구): the parcel decides, by its PNU in the cadastral layer
+        split = {k: v for k, v in to_ours.items() if len(v) > 1}
+        pnus: set[str] = set()
+        if split:
+            prefixes = sorted({sg + bd for ours in split.values() for sg, bd in ours})
+            try:
+                for prefix in prefixes:
+                    pnus.update(db.scalars(select(ParcelGrid.pnu).where(ParcelGrid.pnu.like(prefix + "%"))))
+            except Exception:  # noqa: BLE001 - no parcel layer yet: such rows stay unplaced
+                db.rollback()
         wanted = set(to_ours)
         for energy_type in ENERGY_TYPES:
             rows = read_month(pair[energy_type], energy_type, wanted)
             stats["files"].append(pair[energy_type].name)
             by_dong: dict[tuple[str, str], list[tuple[tuple[str, ...], dict[str, Any]]]] = {}
             for key, item in rows.items():
-                by_dong.setdefault(to_ours[(key[0], key[1])], []).append((key, item))
+                ours = to_ours[(key[0], key[1])]
+                if len(ours) > 1:
+                    hits = [o for o in ours if parcel_pnu(o[0], o[1], key[2], key[3], key[4]) in pnus]
+                    if len(hits) != 1:
+                        stats["split_dong_unplaced"] = stats.get("split_dong_unplaced", 0) + 1
+                        continue
+                    ours = hits
+                by_dong.setdefault(ours[0], []).append((key, item))
             for (sg, bd), items in by_dong.items():
                 existing = {(r.lot_type or "0", r.bun, r.ji): (r.id, r.usage_kwh, r.source) for r in db.execute(
                     select(EnergyMonthly.id, EnergyMonthly.lot_type, EnergyMonthly.bun, EnergyMonthly.ji, EnergyMonthly.usage_kwh,

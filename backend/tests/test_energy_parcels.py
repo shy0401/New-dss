@@ -273,3 +273,51 @@ def test_with_old_sigungu_adds_the_pre_rename_jeonbuk_code():
     assert with_old_sigungu(['52111', '52113']) == ['45111', '45113', '52111', '52113']
     assert with_old_sigungu(['41110']) == ['41110']
     assert with_old_sigungu([]) == []
+
+
+def test_hwaseong_new_gu_dongs_read_the_old_codes_up_to_2025_11():
+    """2026-11-22: 화성은 2025-12분부터 일반구 · 새 법정동 번호. 그 전 달은 옛 41590 · 옛 법정동(법정동코드 전체자료로 207곳 짝)."""
+    from app.energy_parcels import HWASEONG_OLD_BJDONG, file_codes
+    assert len(HWASEONG_OLD_BJDONG) == 207
+    assert file_codes("41597", "10200", "202511") == ("41590", "12700")    # 동탄구 반송동 ← 옛 반송동
+    assert file_codes("41597", "10200", "202512") == ("41597", "10200")    # 12월부터 새 코드
+    assert file_codes("41591", "10100", "202503") == ("41590", "14000")    # 만세구 새솔동 ← 옛 새솔동
+    assert file_codes("41597", "11500", "202503") == ("41597", "11500")    # 여울동: 새로 생긴 동이라 옛 짝 없음
+    assert file_codes("41595", "10300", "202501") == file_codes("41597", "10100", "202501") == ("41590", "11800")   # 옛 능동 → 둘
+    assert file_codes("12170", "10200", "202512") == ("46170", "10200")    # 전남광주는 시군구만
+    assert file_codes("41111", "10100", "202501") == ("41111", "10100")
+
+
+def test_a_split_old_dong_goes_to_the_new_dong_whose_parcel_exists(tmp_path, monkeypatch):
+    """옛 능동 한 행이 병점구 능동 · 동탄구 능동 중 필지(PNU)가 있는 쪽으로만 들어감(두 번 세지 않음)."""
+    import zipfile
+    from app import bulk_energy
+    from app.energy_parcels import parcel_pnu
+    line = lambda bun: f"202501|1|41590|11800|경기도|화성시|능동|0|{bun}|0000|||||||100\n"
+    for kind in ("ELCTY", "GAS"):
+        (tmp_path / "2026-11-21").mkdir(exist_ok=True)
+        with zipfile.ZipFile(tmp_path / "2026-11-21" / f"MART_KEY_{kind}_ENERGY_DATA_202501.zip", "w") as z:
+            z.writestr("a.txt", line("0162") + line("0500") + line("0999"))
+    inserted = []
+    class Db:
+        def scalars(self, query):
+            q = str(query.compile(compile_kwargs={"literal_binds": True}))
+            if "4159510300" in q:
+                return [parcel_pnu("41595", "10300", "0", "0162", "0000")]
+            if "4159710100" in q:
+                return [parcel_pnu("41597", "10100", "0", "0500", "0000")]
+            return []
+        def execute(self, stmt, rows=None):
+            if rows is not None:
+                inserted.extend(rows)
+            return []
+        def commit(self): pass
+        def rollback(self): pass
+    monkeypatch.setattr(bulk_energy, "split_root", lambda: tmp_path / "cut")
+    import app.energy_parcels as ep
+    monkeypatch.setattr(ep, "place_missing_parcels", lambda db, codes: {"placed": 0})
+    stats = bulk_energy.import_months(Db(), [{"sigunguCd": "41595", "bjdongCd": "10300"}, {"sigunguCd": "41597", "bjdongCd": "10100"}],
+                                      ["202501"], root=tmp_path)
+    got = sorted((r["sigungu_code"], r["bun"], r["energy_type"]) for r in inserted)
+    assert got == [("41595", "0162", "ELECTRICITY"), ("41595", "0162", "GAS"), ("41597", "0500", "ELECTRICITY"), ("41597", "0500", "GAS")]
+    assert stats["split_dong_unplaced"] == 2                                     # 0999: 어느 쪽에도 필지가 없음(전기 · 가스)

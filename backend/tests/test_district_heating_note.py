@@ -7,7 +7,7 @@ from app.service import district_heating_note, heating_share
 def test_share_is_floor_area_weighted_and_unknown_is_left_out():
     share = heating_share([C(heating_type="지역난방", gross_floor_area_m2=30000), C(heating_type="개별난방", gross_floor_area_m2=10000),
                            C(heating_type="-", gross_floor_area_m2=50000)])
-    assert share == {"district_share_pct": 75.0, "complexes": 2, "unknown_complexes": 1}
+    assert share == {"district_share_pct": 75.0, "complexes": 2, "unknown_complexes": 1, "district_bjd": {"": 30000}}   # 동 모름 = 빈 키
     assert heating_share([C(heating_type="-", gross_floor_area_m2=1000)]) is None   # 아는 단지가 없으면 0 %가 아니라 None
     assert heating_share([]) is None
 
@@ -120,3 +120,27 @@ def test_new_detailed_regions_get_their_supplier_or_stay_held():
         assert f["factor_kind"] == "SUBSTITUTE" and f["supplier"] == supplier and f["kg_per_kwh"] == 0.1054, code
     # 사업자 둘 이상(성남 · 송파 · 화성), 공급자 모름(대구 서구) → 계산하지 않음
     assert all(district_heat_factor(code, 2025) is None for code in ("41130", "11710", "41590", "27170"))
+
+
+def test_two_supplier_cities_use_the_supplier_of_each_dong():
+    """2026-11-22 (판 1.52): 성남 · 화성은 대상지 지역난방 단지의 법정동마다 공급자, 연면적 가중. 모르는 동이 하나라도 있으면 None."""
+    from types import SimpleNamespace
+    from app.emissions import district_heat_factor
+    from app.service import heating_share
+    f = district_heat_factor("41130", 2025, {"4113510300": 5000})                  # 성남 정자동 = 한난(분당)
+    assert f["factor_kind"] == "PUBLISHED" and f["kg_per_kwh"] == 0.1302
+    f = district_heat_factor("41130", 2025, {"4113110800": 5000})                  # 창곡동(위례) = 나래, 대체
+    assert f["factor_kind"] == "SUBSTITUTE" and f["supplier"] == "나래에너지서비스" and f["kg_per_kwh"] == 0.1054
+    f = district_heat_factor("41130", 2025, {"4113510300": 1000, "4113110800": 1000})
+    assert f["factor_kind"] == "MIXED" and f["kg_per_kwh"] == round((0.1302 + 0.1054) / 2, 4) and "가중" in f["source"]
+    assert district_heat_factor("41130", 2025, {"4113511600": 1000}) is None     # 대장동: 2020년 편람에 공급자 없음
+    assert district_heat_factor("41130", 2025, {"4113510300": 1000, "4113511600": 10}) is None   # 한 단지라도 모르면
+    assert district_heat_factor("41590", 2025, {"4159710600": 1000})["kg_per_kwh"] == 0.1302      # 화성 동탄 영천동
+    assert district_heat_factor("41590", 2025, {"4159110100": 1000})["supplier"] == "안산도시개발"  # 새솔동(송산그린시티)
+    assert district_heat_factor("41590", 2025, {"4159125621": 1000})["supplier"] == "휴세스"       # 남양뉴타운
+    assert district_heat_factor("41590", 2025, {"4159510200": 1000}) is None     # 병점동: 공급자 모름
+    assert district_heat_factor("11710", 2025, {"1171010900": 1000}) is None     # 송파: 동으로 못 가름(보류)
+    assert district_heat_factor("41130", 2025) is None                            # 단지 동을 모르면 계산 안 함
+    share = heating_share([SimpleNamespace(heating_type="지역난방", gross_floor_area_m2=300.0, bjd_code="4113510300"),
+                           SimpleNamespace(heating_type="개별난방", gross_floor_area_m2=100.0, bjd_code="4113510300")])
+    assert share["district_share_pct"] == 75.0 and share["district_bjd"] == {"4113510300": 300.0}

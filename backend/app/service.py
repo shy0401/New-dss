@@ -55,15 +55,19 @@ def heating_share(complexes):
     """대상지 단지의 지역난방 비중(연면적 가중, %). 난방 방식을 아는 단지가 없으면 None(0이 아님). 2026-11-20
 
     지역난방 열의 탄소는 계수가 없어 계산 밖이라(기준 문서 5.14 · 5.15), 비중을 계획안 가정 문장에 적는 데 쓴다."""
-    weights={};known=unknown=0
+    weights={};known=unknown=0;district_bjd={}
     for c in complexes:
         group=heating_group(getattr(c,'heating_type',None))
         if not group:unknown+=1;continue
         known+=1;area=getattr(c,'gross_floor_area_m2',None) or 0
         weights[group]=weights.get(group,0)+(area if area>0 else 1)
+        if group=='district':   # 사업자가 둘 이상인 시군구는 법정동마다 공급자(기준 문서 5.16, 2026-11-22)
+            bjd=str(getattr(c,'bjd_code',None) or '')[:10]
+            district_bjd[bjd]=district_bjd.get(bjd,0)+(area if area>0 else 1)
     total=sum(weights.values())
     if not total:return None
-    return {'district_share_pct':round(weights.get('district',0)/total*100,1),'complexes':known,'unknown_complexes':unknown}
+    return {'district_share_pct':round(weights.get('district',0)/total*100,1),'complexes':known,'unknown_complexes':unknown,
+            'district_bjd':district_bjd}
 
 def district_heating_note(share):
     """지역난방 비중이 0보다 큰 대상지의 가정 문장(계산 엔진 문장, 숫자는 이 함수 인자와 상수에서만)."""
@@ -88,7 +92,7 @@ def district_heat_estimate(db,year,sc,region_code,share,floor_area_m2):
     개별난방 단지가 가스로 쓰는 열). 지사 계수 · 두 원단위 · 비중 중 하나라도 없으면 None(가정 문장만)."""
     from .emissions import district_heat_factor
     if not share or not share.get('district_share_pct') or not floor_area_m2:return None
-    factor=district_heat_factor(region_code,year)
+    factor=district_heat_factor(region_code,year,share.get('district_bjd'))
     if not factor:return None
     individual=_gas_per_m2(pooled_baseline(db,year,sc,'individual'))
     district=_gas_per_m2(pooled_baseline(db,year,sc,'district'))
@@ -103,7 +107,7 @@ def district_heat_estimate(db,year,sc,region_code,share,floor_area_m2):
 
 def district_heat_text(est):
     """계산 엔진 문장(숫자는 est에서만)."""
-    label='지역난방 열(추정, 대체 계수)' if est.get('factor_kind')=='SUBSTITUTE' else '지역난방 열(추정)'
+    label={'SUBSTITUTE':'지역난방 열(추정, 대체 계수)','MIXED':'지역난방 열(추정, 일부 대체 계수)'}.get(est.get('factor_kind'),'지역난방 열(추정)')
     return (f"{label}: 연 {est['heat_kwh']:,.0f} kWh = 계획 연면적 {est['floor_area_m2']:,.0f} m² × 지역난방 비중 {est['district_share_pct']:.0f}% × "
             f"열 원단위 {est['heat_kwh_per_m2']:.1f} kWh/m²({est['year']}년 같은 지역 개별난방 단지 가스 {est['individual_gas_kwh_per_m2']:.1f} − "
             f"지역난방 단지 가스 {est['district_gas_kwh_per_m2']:.1f}, 가정). 탄소는 연 {est['carbon_kg']/1000:,.1f} tCO2eq"
