@@ -320,7 +320,10 @@ def key_results(s: dict[str, Any]) -> list[tuple[str, str]]:
     rec = e.get("recommended")
     if rec and rec.get("steps") and not e.get("already_met"):
         out.append(("구체적 감축 방안", " + ".join(f"{st['title']} {st['detail']}" for st in rec["steps"]) + f" → {_t(rec['total_kgco2eq'])} — "
-                    + ("목표 달성" if rec["met"] else f"목표까지 {_t(rec['gap_kgco2eq'])} 부족")))
+                    + ("위 한계 기준이라 확정 아님(층수 필요)" if rec.get("onsite_status") == "UPPER_BOUND_ONLY"
+                       else "목표 달성" if rec["met"] else f"목표까지 {_t(rec['gap_kgco2eq'])} 부족")))
+    elif rec and rec.get("onsite_status") == "NO_ROOF" and not e.get("already_met"):
+        out.append(("구체적 감축 방안", f"계획 지붕 없음 — 남는 양 {_t(rec.get('remaining_kgco2eq'))}"))
     mix = e.get("mix")
     if mix and not e.get("already_met"):
         out.append(("감축 수단 조합", f"{_t(mix['total_kgco2eq'])} — " + ("목표 달성" if mix["met"] else f"목표까지 {_t(mix['gap_kgco2eq'])} 부족")))

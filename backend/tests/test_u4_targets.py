@@ -118,3 +118,40 @@ def test_the_new_sentences_belong_to_report_sections_4_and_5_not_the_limits():
     four = next(p for t, p in by_title.items() if t.startswith("4."))
     five = next(p for t, p in by_title.items() if t.startswith("5."))
     assert {"effort_added", "effort_added_none", "effort_split"} <= set(four) and "effort_rec_added" in five
+
+
+def test_capping_is_judged_before_the_10_kw_rounding():
+    """375.0 kW 필요 · 한도 375.5 kW: 한도에 걸리지 않음(검토 지적 1). 위 한계 기준이면 '충족'이라 하지 않음."""
+    need_kwh = 375.0 * 1000.0
+    r = _result(kwh_per_kw=1000.0, plan_roof_m2=6258.4, basis="footprint")     # 6,258.4 × 0.6 ÷ 10 = 375.5 kW
+    rec = onsite_plan(r, need_kwh * F)
+    assert not rec["capped"] and rec["onsite_status"] == "MET" and rec["pv_kw"] == 375.5
+    up = onsite_plan(_result(kwh_per_kw=1000.0, added=6258.4), need_kwh * F)
+    assert up["onsite_status"] == "UPPER_BOUND_ONLY" and up["remaining_kgco2eq"] is None
+
+
+def test_a_plan_without_its_own_roof_keeps_the_need_as_remaining():
+    r = _result(added=0.0, removed=1000.0)
+    rec = onsite_plan(r, 100_000.0)
+    assert rec["onsite_status"] == "NO_ROOF" and rec["pv_kw"] is None and rec["remaining_kgco2eq"] == 100_000.0
+    mix = recommended_mix(r)
+    assert mix["pv_kw"] is None and mix["steps"] == [] and mix["remaining_kgco2eq"] > 0
+
+
+def test_explicit_footprints_win_over_floor_area_per_floors_and_never_exceed_the_floor_area():
+    from app.area import _effort_result
+    args = dict(history={}, target_pct=40.0, pv_yield_kwh_per_kw=1200.0, factor=F, base_year=2025, baseline_mode="OBSERVED",
+                intensity=27.0, base_kwh=10_000_000.0, basis_area=100_000.0, basis="apartments", load_text="")
+    e = _effort_result(plan={"added_floor_area_m2": 50000, "floors": 20, "building_count": 5, "footprint_per_building": 500}, **args)
+    assert e["plan_roof_m2"] == 2500 and e["plan_roof_basis"] == "footprint"
+    e = _effort_result(plan={"added_floor_area_m2": 50000, "floors": 20}, **args)
+    assert e["plan_roof_m2"] == 2500 and e["plan_roof_basis"] == "floor_area_per_floors"
+    e = _effort_result(plan={"added_floor_area_m2": 50000, "floors": 0.5}, **args)
+    assert e["plan_roof_m2"] is None                       # floors below 1 are not read as a wider roof
+    e = _effort_result(plan={"added_floor_area_m2": 1000, "building_count": 5, "footprint_per_building": 500}, **args)
+    assert e["plan_roof_m2"] == 1000                       # never above the floor area
+
+
+def test_the_area_target_already_met_has_its_own_status():
+    a = _t(_result(added=0.0, target=0.0), "area_total")
+    assert a["already_met"] and a["recommended"]["onsite_status"] == "ALREADY_MET"

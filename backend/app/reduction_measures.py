@@ -313,6 +313,14 @@ NO_VALUE_REASON = {
 }
 
 
+def _no_value_reason(key: str, status: str | None) -> str:
+    if key == "rooftop_pv":
+        return {"NO_YIELD": "발전량 근거가 없어 태양광 값이 없습니다(상쇄할 전력량만 적음)",
+                "NO_ROOF": "계획에 새 건물(지붕)이 없어 값이 없습니다",
+                "UPPER_BOUND_ONLY": "지붕을 연면적(위 한계)으로만 알아 값을 확정하지 않습니다"}.get(status or "", "이 기준에서는 줄일 양이 없습니다")
+    return NO_VALUE_REASON.get(key, "지표만 있는 수단입니다. 근거표 행의 값을 계획안에 곱하지 않습니다")
+
+
 def applicable_measures(targets: list[dict[str, Any]], added_m2: float, district_share_pct: float | None,
                         cooling_reading: str | None) -> list[dict[str, Any]]:
     """Recommendation lines of the area screen ↔ the measures usable under the site's conditions (U4, 2026-11-23, 5.15).
@@ -325,7 +333,8 @@ def applicable_measures(targets: list[dict[str, Any]], added_m2: float, district
     ev = evidence_summary()["by_measure"]
     out: list[dict[str, Any]] = []
     for t in targets:
-        pv_c = (t.get("recommended") or {}).get("pv_kgco2eq")
+        rec = t.get("recommended") or {}
+        pv_c = rec.get("pv_kgco2eq") or None   # 0 kg is not a value (no roof / no yield)
         for m in MEASURES:
             if m.get("phase") != "operation" and m["key"] != "greenery":
                 continue
@@ -342,7 +351,7 @@ def applicable_measures(targets: list[dict[str, Any]], added_m2: float, district
                 continue
             table = ev.get(m["key"])
             top = table["exclusion"][0]["value"] if table and table.get("exclusion") else None
-            quantified = m["key"] == "rooftop_pv" and pv_c is not None
+            quantified = m["key"] == "rooftop_pv" and pv_c is not None and rec.get("onsite_status") in ("MET", "PARTIAL")
             condition = None
             if m["key"] == "envelope" and district_share_pct:
                 condition = f"이 지역 공동주택 세대의 {district_share_pct:,.1f}%가 지역난방입니다. 지표의 근거는 개별난방 단지 짝 비교입니다"
@@ -351,7 +360,7 @@ def applicable_measures(targets: list[dict[str, Any]], added_m2: float, district
             out.append({"target": t["key"], "key": m["key"], "title": m["title"], "group": m.get("group"), "attach_to": attach,
                         "value_status": "QUANTIFIED" if quantified else "INDICATOR_ONLY",
                         "value_kgco2eq": pv_c if quantified else None,
-                        "no_value_reason": None if quantified else NO_VALUE_REASON.get(m["key"], "지표만 있는 수단입니다. 근거표 행의 값을 계획안에 곱하지 않습니다"),
+                        "no_value_reason": None if quantified else _no_value_reason(m["key"], rec.get("onsite_status")),
                         "indicator_text": indicator_text(m), "evidence": m["evidence"], "evidence_label": EVIDENCE_LABEL[m["evidence"]],
                         "n": m.get("n"), "apply": apply, "evidence_table": table,
                         "group_kind": GROUP_KIND.get(top or "", "계획 수단"), "condition_text": condition})
