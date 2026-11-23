@@ -1,0 +1,1 @@
+\copy (select complex_code, left(year_month,4) y, count(*) filter (where quality_status='SUCCESS' and electricity_quantity is not null) elec_months, sum(electricity_quantity) filter (where quality_status='SUCCESS') elec_kwh, count(*) rows from apartment_energy_monthly where year_month >= '202001' group by 1,2 order by 1,2) to stdout with csv header
