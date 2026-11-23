@@ -720,7 +720,9 @@ def measure_mix(result: dict[str, Any], measures: dict[str, Any]) -> dict[str, A
     if k < 0:
         raise ValueError("태양광 용량은 0 이상입니다")
     factor = float(result["factor_kgco2eq_per_kwh"])
-    removed_kwh = float(result["intensity_kwh_per_m2"]) * float(result.get("removed_floor_area_m2") or 0)
+    # the demolished load as computed (per-use lines when given, 2026-11-23), not the area intensity again
+    removed_kwh = float(result["removed_load_kwh"]) if result.get("removed_load_kwh") is not None else \
+        float(result["intensity_kwh_per_m2"]) * float(result.get("removed_floor_area_m2") or 0)
     existing = max(float(result["baseline_kwh"]) - removed_kwh, 0.0)
     pv_yield = (result.get("pv_yield") or {}).get("kwh_per_kw")
     new_kwh = float(result["new_load_kwh"]) * n / 100
@@ -952,6 +954,47 @@ def _with_pv(pv: dict[str, Any] | None, result: dict[str, Any]) -> dict[str, Any
     return result
 
 
+USE_LABEL = {"residential": "주거", "commercial": "상업", "office": "업무", "officetel": "오피스텔", "large_retail": "대형 판매",
+             "knowledge_industry": "지식산업센터", "education": "교육", "medical_welfare": "의료·복지", "industrial": "공업", "other": "기타 비주거"}
+
+
+def line_loads(lines: list[dict[str, Any]] | None, total_m2: float, intensity: float, region_code: str | None) -> tuple[float, list[dict[str, Any]]]:
+    """Electricity load (kWh/년) of plan lines (2026-11-23, 기준 문서 5.9): each use line × the observed intensity of its
+    use (``reference_tables.use_intensity``: the region's own with enough parcels, else all READY regions); residential,
+    officetel, knowledge industry, industrial and other lines keep the area's intensity (``intensity``). Without use lines
+    the whole floor area takes the area's intensity, as before."""
+    from .reference_tables import use_intensity
+    if not lines:
+        return intensity * total_m2, []
+    out, total = [], 0.0
+    for line in lines:
+        m2 = float(line.get("floor_area_m2") or 0)
+        ref = use_intensity(region_code, str(line.get("use") or ""))
+        rate = ref["kwh_per_m2"] if ref else intensity
+        kwh = rate * m2
+        total += kwh
+        out.append({"use": line.get("use"), "use_label": USE_LABEL.get(str(line.get("use")), str(line.get("use"))), "floor_area_m2": round(m2, 1),
+                    "kwh_per_m2": round(rate, 2), "kwh": round(kwh, 1), "basis": ref["scope"] if ref else "AREA",
+                    "parcels": ref["parcels"] if ref else None, "year": ref["year"] if ref else None,
+                    "register_uses": ref["register_uses"] if ref else None})
+    return total, out
+
+
+def lines_text(new_lines: list[dict[str, Any]], removed_lines: list[dict[str, Any]], area_text: str) -> str:
+    """Engine sentence of the per-use load (numbers only from the lines)."""
+    def part(line: dict[str, Any]) -> str:
+        if line["basis"] == "AREA":
+            where = "구역 원단위"
+        else:
+            where = f"{'이 지역' if line['basis'] == 'REGION' else '분석 지역 전체'} {line['register_uses']} {line['parcels']:,}곳"
+        year = f" {line['year']}년" if line.get("year") else ""
+        return f"{line['use_label']} {line['floor_area_m2']:,.0f}m² × {line['kwh_per_m2']:,.2f} kWh/m²({where}{year})"
+    text = "신축 부하 = 용도별 연면적 × 용도별 관측 전력 원단위: " + " + ".join(part(x) for x in new_lines) if new_lines else area_text
+    if removed_lines:
+        text += ". 철거 부하 = " + " + ".join(part(x) for x in removed_lines)
+    return text + ". 상업 · 업무 · 판매 · 교육 · 의료·복지는 건축HUB 계측 지번의 용도별 원단위, 주거 · 오피스텔 · 지식산업센터 · 공업 · 기타는 " + area_text.split(" = ")[-1]
+
+
 def _effort_result(history: dict[str, Any], plan: dict[str, Any], target_pct: float, pv_yield_kwh_per_kw: float | None, factor: float,
                    base_year: int, baseline_mode: str, intensity: float, base_kwh: float, basis_area: float, basis: str, load_text: str) -> dict[str, Any]:
     added = plan.get("added_floor_area_m2")
@@ -970,13 +1013,15 @@ def _effort_result(history: dict[str, Any], plan: dict[str, Any], target_pct: fl
     removed = float(plan.get("removed_floor_area_m2") or 0)
     if added < 0 or removed < 0:
         raise ValueError("면적은 0 이상이어야 합니다")
-    if removed and intensity > 0 and intensity * removed > base_kwh:
+    region_code = plan.get("region_code")
+    by_use = basis != "kcsm"   # the carbon-map basis (another source) is not mixed with 건축HUB per-use intensities
+    new_kwh, new_lines = line_loads(plan.get("uses_new") if by_use else None, added, intensity, region_code)
+    removed_kwh, removed_lines = line_loads(plan.get("uses_removed") if by_use else None, removed, intensity, region_code)
+    if removed and intensity > 0 and removed_kwh > base_kwh:
         # more demolished than there is: the BAU would go below zero and every option would turn negative
         raise ValueError(f"철거 연면적 {removed:,.0f}m²가 기준 건물 규모(약 {base_kwh / intensity:,.0f}m², {base_year}년 기준 부하 ÷ 원단위)보다 큽니다. "
                          "철거 면적을 줄이거나 구역을 넓히세요")
     base_c = base_kwh * factor
-    new_kwh = intensity * added
-    removed_kwh = intensity * removed
     bau_kwh = base_kwh + new_kwh - removed_kwh
     bau_c = bau_kwh * factor
     target_c = base_c * (1 - target_pct / 100)
@@ -988,7 +1033,8 @@ def _effort_result(history: dict[str, Any], plan: dict[str, Any], target_pct: fl
         "all_buildings_efficiency_pct": round(need_c / bau_c * 100, 1) if bau_c > 0 else None,
         "offset_kwh_per_year": round(max(need_kwh, 0), 1),
         "pv_capacity_kw": round(max(need_kwh, 0) / pv_yield_kwh_per_kw, 1) if pv_yield_kwh_per_kw and pv_yield_kwh_per_kw > 0 else None,
-        "new_building_intensity_target": round(intensity * (1 - need_c / new_c), 3) if new_c > 0 and need_c <= new_c else None,
+        # the plan's own mean intensity (use lines weighted by floor area; the area's intensity without use lines)
+        "new_building_intensity_target": round(new_kwh / added * (1 - need_c / new_c), 3) if new_c > 0 and need_c <= new_c and added > 0 else None,
     }
     feasible_new_only = options["new_only_efficiency_pct"] is not None and options["new_only_efficiency_pct"] <= 100
     curve = []
@@ -1006,12 +1052,13 @@ def _effort_result(history: dict[str, Any], plan: dict[str, Any], target_pct: fl
         "plan_roof_m2": round(footprint_sum, 1) if footprint_sum is not None else None, "plan_roof_basis": footprint_basis,
         "baseline_kwh": round(base_kwh, 1), "baseline_kgco2eq": round(base_c, 1),
         "new_load_kwh": round(new_kwh, 1), "removed_load_kwh": round(removed_kwh, 1), "bau_kwh": round(bau_kwh, 1), "bau_kgco2eq": round(bau_c, 1),
+        "new_load_lines": new_lines, "removed_load_lines": removed_lines,
         "target_kgco2eq": round(target_c, 1), "required_reduction_kgco2eq": round(need_c, 1),
         "already_met": need_c <= 0, "feasible_with_new_only": feasible_new_only or need_c <= 0,
         "options": options, "curve": curve, "factor_kgco2eq_per_kwh": factor,
         "scope": "전력 운영탄소 기준 (가스는 이 계산에 넣지 않음)",
         "assumptions": [
-            load_text,
+            load_text if not (new_lines or removed_lines) else lines_text(new_lines, removed_lines, load_text),
             *(["기준 부하는 구역 격자에 배치된 건축HUB 12개월 계측 지번 전체의 전력입니다(단독주택·200세대 미만 공동주택 등 제공 범위 밖 제외)"] if basis == "buildings" else []),
             "기상은 기준 연도와 같다고 가정합니다 (별도 기상 보정 없음)",
             "가스는 이 계산에 넣지 않았습니다 (필요 감축량은 전력 운영탄소로만 셉니다. 가스 사용량은 '건물 전체 에너지 표'에 따로 있습니다)",
@@ -1819,7 +1866,9 @@ def analyze(db: Any, spec: dict[str, Any], from_year: int, to_year: int, event_y
     area = resolve_area(spec, inputs["grids"], complex_points, inputs["admin"], inputs["zoning"])
     history = build_history(area, years, inputs, include_kcsm=not public)
     comparison = before_after(history, event_year, window)
-    effort_result = effort(history, plan or {}, target_pct, pv_yield, effort_basis, measures) if target_pct is not None else None
+    # the region picks the per-use intensities of the plan lines (reference_tables.use_intensity)
+    effort_plan = {**(plan or {}), "region_code": (inputs.get("region") or {}).get("code")}
+    effort_result = effort(history, effort_plan, target_pct, pv_yield, effort_basis, measures) if target_pct is not None else None
     from .benchmarks import industry_block
     history["industry"] = industry_block(history, effort_result, (inputs.get("region") or {}).get("code"))
     from .reference_tables import region_guide

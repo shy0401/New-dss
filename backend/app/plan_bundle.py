@@ -72,6 +72,10 @@ def normalize_plan(body: BundleIn) -> dict[str, Any]:
             plan["added_floor_area_m2"] = product   # the engine derives the same; the ratio check needs it here too
         elif differs(product, float(plan["added_floor_area_m2"])):
             raise ValueError(f"층수 × 동수 × 동당 건축면적({product:,.0f} m²)과 신축 연면적({float(plan['added_floor_area_m2']):,.0f} m²)이 다릅니다. 하나로 맞춰 주세요")
+    # the use lines go on to the intensity-based load: each line with its use's observed intensity (2026-11-23, 5.9)
+    for key, lines in (("uses_new", body.uses_new), ("uses_removed", body.uses_removed)):
+        if lines:
+            plan[key] = [{"use": i.use, "floor_area_m2": float(i.floor_area_m2)} for i in lines]
     return plan
 
 
