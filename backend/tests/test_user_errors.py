@@ -52,7 +52,8 @@ def test_plans_reports_and_analyses_stay_open_on_the_public_gateway():
 def test_a_slow_team_model_is_told_apart_from_one_that_is_off(monkeypatch):
     from app import team_model
     plan = {"region": "52110", "plans": [{"grid": "cell_959500_1760500", "new": [{"floor_area_m2": 5000}]}]}
-    monkeypatch.setattr(team_model, "_model_region", lambda db, code, cells: None)
+    # the team region is found (the U2-0 check for regions without a team table is a separate test)
+    monkeypatch.setattr(team_model, "_model_region", lambda db, code, cells: "52113")
     monkeypatch.setattr(team_model, "_call", lambda *a, **k: (team_model.TIMEOUT, None))
     r = _client().post("/api/team-model/predict", json=plan)
     assert r.status_code == 504 and "230초 안에" in r.json()["detail"]

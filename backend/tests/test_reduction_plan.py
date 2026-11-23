@@ -75,15 +75,15 @@ def _effort(**kw):
 
 
 def test_recommended_mix_is_solar_only_in_10_kw_steps():
-    """2026-11-20부터 자동 방안에 신축 전력 −11.3% · 기존 운영 −4.8%를 넣지 않는다(전력 절감 근거 없음 · 입주 뒤 행동)."""
-    rec = recommended_mix(_effort())
+    """2026-11-20부터 자동 방안에 신축 전력 −11.3% · 기존 운영 −4.8%를 넣지 않는다(전력 절감 근거 없음 · 입주 뒤 행동).
+    2026-11-23(U4): 지붕 한도 안이면 필요 용량을 10 kW 단위로 올린 값 그대로(건축면적 400,000 m² → 한도 24,000 kW)."""
+    roomy = {"added_floor_area_m2": 2_000_000.0, "plan_roof_m2": 400_000.0, "plan_roof_basis": "footprint"}
+    rec = recommended_mix(_effort(**roomy))
     assert [s["key"] for s in rec["steps"]] == ["pv"]
     assert rec["new_efficiency_pct"] == 0 and rec["existing_efficiency_pct"] == 0 and rec["new_kwh"] == 0 and rec["existing_kwh"] == 0
-    assert rec["pv_kw"] % 10 == 0 and rec["met"] and rec["roof_m2"] == rec["pv_kw"] * 10
-    smaller = recommended_mix(dict(_effort(), pv_kw=None) | {"pv_yield": {"kwh_per_kw": 1199.9}})
-    assert smaller["pv_kw"] == rec["pv_kw"]
+    assert rec["pv_kw"] % 10 == 0 and rec["met"] and rec["roof_m2"] == rec["pv_kw"] * 10 and not rec["capped"]
     # 필요 감축 11,078,232.3 kg ÷ 0.433 ÷ 1,199.9 = 21,322.5 kW → 10 kW 단위 올림 21,330
-    assert rec["pv_kw"] == 21330
+    assert rec["pv_kw"] == 21330 and rec["remaining_kgco2eq"] is None and rec["margin_kgco2eq"] >= 0
 
 
 def test_recommended_mix_without_yield_states_the_offset_kwh_only():
@@ -93,13 +93,15 @@ def test_recommended_mix_without_yield_states_the_offset_kwh_only():
 
 
 def test_recommended_roof_is_compared_with_the_plan_roof():
-    """2026-11-20 점검 A: 필요한 옥상이 계획 건물 지붕보다 크면 표시. 건축면적 합이 있으면 그것, 없으면 연면적(지붕의 위 한계)."""
-    rec = recommended_mix(_effort(added_floor_area_m2=100_000.0, plan_roof_m2=None))
-    assert rec["roof_m2"] == 213_300 and rec["plan_roof_m2"] == 100_000 and rec["plan_roof_basis"] == "floor_area" and rec["roof_over_plan"]
+    """2026-11-20 점검 A → 2026-11-23 U4: 태양광은 계획 지붕 한도(건축면적 합 × 0.60 ÷ 10 m²/kW)까지만, 넘는 몫은 남는 양.
+    건축면적 합을 모르면 연면적이 지붕의 위 한계."""
+    rec = recommended_mix(_effort(added_floor_area_m2=100_000.0, plan_roof_m2=None))      # 위 한계 6,000 kW < 필요 21,330 kW
+    assert rec["pv_kw"] == 6000 and rec["roof_m2"] == 60_000 and rec["plan_roof_m2"] == 100_000 and rec["plan_roof_basis"] == "floor_area"
+    assert rec["roof_over_plan"] and rec["remaining_is_minimum"] and rec["remaining_kgco2eq"] > 0 and rec["pv_needed_kw"] == 21330
     rec = recommended_mix(_effort(added_floor_area_m2=2_000_000.0, plan_roof_m2=None))
-    assert not rec["roof_over_plan"]   # 연면적이 더 크면 지붕이 모자란다고 단정하지 않음
-    rec = recommended_mix(_effort(added_floor_area_m2=2_000_000.0, plan_roof_m2=150_000.0))
-    assert rec["plan_roof_basis"] == "footprint" and rec["plan_roof_m2"] == 150_000 and rec["roof_over_plan"]
+    assert not rec["roof_over_plan"] and rec["onsite_status"] == "UPPER_BOUND_ONLY"   # 위 한계 안: 모자란다고도 된다고도 단정하지 않음
+    rec = recommended_mix(_effort(added_floor_area_m2=2_000_000.0, plan_roof_m2=150_000.0, plan_roof_basis="footprint"))
+    assert rec["plan_roof_basis"] == "footprint" and rec["plan_roof_m2"] == 150_000 and rec["roof_over_plan"] and rec["pv_kw"] == 9000
     assert recommended_mix(_effort(pv_yield=None))["roof_over_plan"] is False   # 태양광 용량이 없으면 견주지 않음
 
 

@@ -3,19 +3,23 @@
  * - 결과 요약 막대: 단계 이동 + 핵심 지표(엔진 값 그대로)
  * - 감축 수단 조합: 신축·기존 건물 절감률과 태양광을 함께 넣어 필요 감축량을 채우는지 확인 (도시·군기본계획 방식)
  * - 같은 시·군·구 행정동 비교: 원단위 분포 속 위치 (ENERGY STAR·서울 건물에너지 등급처럼 동종 비교, 단 등급 아님)
- * - 구체적 감축 방안(자동): 남는 양 태양광(2026-11-20부터 신축 11.3% · 기존 4.8% 단계 없음). 다른 안과 비교하지 않는다(2026-11-05: 시나리오 비교 단계 삭제)
+ * - 구체적 감축 방안(자동): 남는 양 태양광(2026-11-20부터 신축 11.3% · 기존 4.8% 단계 없음), 2026-11-23(U4)부터 계획 지붕 한도까지만 + 남는 양.
+ *   목표 기준 둘(개발 증가분 · 구역 전체)을 나란히. 다른 안과 비교하지 않는다(2026-11-05: 시나리오 비교 단계 삭제)
  * 숫자는 모두 서버 계산 엔진이 낸 값이며 여기서는 고르거나 단위(kg→t)만 바꾼다.
  */
 import { ListChecks, Sun } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { BASELINE_MODE_LABEL, benchmarkPosition, EFFORT_BASIS_LABEL, NO_MEASURES, toTonnes, type AreaAnalysis, type Benchmark, type EffortResult, type MeasuresState } from '../../lib/area';
+import { BASELINE_MODE_LABEL, benchmarkPosition, EFFORT_BASIS_LABEL, NO_MEASURES, toTonnes, type AreaAnalysis, type Benchmark, type EffortResult, type EffortTarget, type MeasureLink, type MeasuresState, type OnsitePlan } from '../../lib/area';
 import { formatMetric } from '../../lib/format';
 import { Note } from '../Fold';
 
+/** 작업 단계(U3 S5, 설계 6.1): 구역 → 계획 넣기 → 결과 → 감축 → 배치·상한(선택) → 보고서. */
 export const AREA_STEPS = [
   { id: 'area-step-area', label: '구역 고르기' },
-  { id: 'area-step-plan', label: '계획·목표' },
+  { id: 'area-step-plan', label: '계획 넣기' },
+  { id: 'area-step-result', label: '결과' },
   { id: 'area-step-measures', label: '감축 방안' },
+  { id: 'area-step-site', label: '배치·상한 (선택)' },
   { id: 'area-step-report', label: '보고서' },
 ] as const;
 
@@ -53,7 +57,7 @@ export function AreaSummaryBar({ analysis, running, bench }: { analysis: AreaAna
         <Kpi label="기준 배출" value={t1(e.baseline_kgco2eq)} sub={`${e.baseline_year}년 ${BASELINE_MODE_LABEL[e.baseline_mode ?? 'OBSERVED']} · ${e.basis === 'kcsm' ? '건물 전체(탄소공간지도)' : e.basis === 'buildings' ? '건물 전체' : '공동주택'}${e.fallback_from ? '(자동 전환)' : ''}`} />
         <Kpi label="계획 반영 (대책 없음)" value={t1(e.bau_kgco2eq)} sub={`목표 ${formatMetric(e.target_pct, '%')} 감축선 ${t1(e.target_kgco2eq)}`} />
         <Kpi label="필요 감축량" value={e.already_met ? '불필요' : t1(e.required_reduction_kgco2eq)} sub="연간 · 전력 운영탄소" tone={e.already_met ? 'good' : undefined} />
-        <Kpi label={e.mix ? '감축 수단 조합' : '구체적 감축 방안'} value={mix ? t1(mix.total_kgco2eq) : '—'} sub={mix ? (mix.met ? '목표 달성' : `${t1(mix.gap_kgco2eq)} 부족`) : '3단계에서 확인'} tone={mix ? (mix.met ? 'good' : 'warn') : undefined} />
+        <Kpi label={e.mix ? '감축 수단 조합' : '구체적 감축 방안'} value={mix ? t1(mix.total_kgco2eq) : '—'} sub={mix ? (mix.met ? '목표 달성' : `${t1(mix.gap_kgco2eq)} 부족`) : '4단계에서 확인'} tone={mix ? (mix.met ? 'good' : 'warn') : undefined} />
         <Kpi label="같은 시·군 비교" value={position ? position.text : '—'} sub={position ? `원단위 낮은 쪽부터${position.pos.quintile ? ` · ${position.pos.quintile}/5분위` : ''}` : '같은 연도·기준 관측일 때만'} />
       </> : analysis ? <Kpi label="감축 노력" value="계산 근거 없음" sub={e?.reason ?? '목표를 넣으면 계산합니다'} tone="warn" /> : null}
     </dl>
@@ -63,6 +67,50 @@ export function AreaSummaryBar({ analysis, running, bench }: { analysis: AreaAna
 export function FallbackNotice({ effort }: { effort: EffortResult | null }) {
   if (!effort?.available || !effort.fallback_from || !effort.basis) return null;
   return <p className="area-fallback" role="note"><b>기준 자동 전환:</b> 요청한 {EFFORT_BASIS_LABEL[effort.fallback_from]} 기준은 {effort.fallback_reason ?? '계산할 근거가 없어'} → {EFFORT_BASIS_LABEL[effort.basis]} 기준으로 계산했습니다.</p>;
+}
+
+/** 지붕 태양광 한 줄 상태 문장(U4). 숫자는 엔진 값 그대로, kg → t만. */
+export function onsiteText(r: OnsitePlan | undefined, need: number | null): string {
+  if (!r) return '';
+  switch (r.onsite_status) {
+    case 'MET': return `계획 지붕 태양광 ${formatMetric(r.pv_kw, 'kW', 1)}로 모두 메웁니다(여유 ${t1(r.margin_kgco2eq)}).`;
+    case 'PARTIAL': return `계획 지붕 태양광 ${formatMetric(r.pv_kw, 'kW', 1)}로 ${formatMetric(r.covered_pct, '%', 1)} — 남는 양 ${r.remaining_is_minimum ? '적어도 ' : ''}${t1(r.remaining_kgco2eq)}(구역 밖 태양광 약 ${formatMetric(r.remaining_offsite_pv_kw, 'kW')} 상당).`;
+    case 'UPPER_BOUND_ONLY': return `지붕을 연면적(위 한계)으로 보면 필요한 ${formatMetric(r.pv_needed_kw, 'kW')}가 한도 안입니다. 층수를 넣어야 확정됩니다.`;
+    case 'NO_ROOF': return `계획에 새 건물(지붕)이 없어 구역 안 태양광을 놓지 못합니다. 남는 양 ${t1(r.remaining_kgco2eq)}.`;
+    case 'NO_YIELD': return `발전량 근거가 없어 태양광 용량으로 바꾸지 못합니다(상쇄할 전력 ${formatMetric(r.offset_kwh, 'kWh')}).`;
+    case 'ALREADY_MET': return '목표선 아래라 추가 감축이 필요하지 않습니다.';
+    default: return need === null ? '이 계획으로 늘지 않습니다.' : '';
+  }
+}
+
+function TargetRow({ t, links }: { t: EffortTarget; links: MeasureLink[] }) {
+  const r = t.recommended;
+  const mine = links.filter((l) => l.target === t.key);
+  return <div className="area-target-basis" data-testid={`area-target-${t.key}`}>
+    <h5>{t.label}</h5>
+    <p className="detail-figure">{t.required_reduction_kgco2eq !== null ? t1(t.required_reduction_kgco2eq) : t.key === 'plan_added' ? '늘지 않음' : '불필요'}</p>
+    <p className="muted">{t.key === 'plan_added' ? '이 계획으로 늘어나는 전력 운영탄소(연간)' : `필요 감축량(연간) = 늘어나는 양 + 기존 건물 몫 ${t1(t.existing_share_kgco2eq)}`}</p>
+    {r && <p className={`area-headline ${r.onsite_status === 'MET' ? 'good' : 'warn'}`} data-testid={`area-target-${t.key}-onsite`}>{onsiteText(r, t.required_reduction_kgco2eq)}</p>}
+    {r?.capped && r.roof_limit_m2 !== null && <p className="muted">태양광은 계획 지붕 한도({r.roof_limit_basis_label} {formatMetric(r.plan_roof_m2, 'm²')}의 60% = {formatMetric(r.roof_limit_m2, 'm²')}, {formatMetric(r.roof_limit_kw, 'kW', 1)})까지만 셉니다. 필요 용량은 {formatMetric(r.pv_needed_kw, 'kW')}입니다.</p>}
+    {mine.length > 0 && <details className="area-measure-links"><summary>이 기준에서 쓸 수 있는 수단 {mine.length}개 (값은 태양광 줄만)</summary>
+      <ul>{mine.map((l) => <li key={`${l.key}-${l.attach_to.join()}`}><b>{l.title}</b> · {l.evidence_label}{l.n ? ` (${l.n})` : ''} · {l.group_kind}
+        {l.value_status === 'QUANTIFIED' ? <span className="num">{t1(l.value_kgco2eq)}/년</span> : <small className="muted"> — 지표만: {l.indicator_text}. {l.no_value_reason}</small>}
+        {l.condition_text && <small className="muted"><br />{l.condition_text}</small>}</li>)}</ul>
+    </details>}
+  </div>;
+}
+
+/** 목표 기준 둘(U4, 기준 문서 5.9): 개발 증가분을 먼저, 구역 전체 목표를 다음에. 두 값은 더하지 않는다. */
+export function TargetBases({ effort }: { effort: EffortResult | null }) {
+  const targets = effort?.targets ?? [];
+  if (!effort?.available || targets.length === 0) return null;
+  const order = ['plan_added', 'area_total'];
+  const sorted = [...targets].sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key));
+  return <div className="area-target-bases" data-testid="area-target-bases">
+    <h4>목표 기준 둘 (나란히 · 서로 더하지 않음)</h4>
+    {sorted.map((t) => <TargetRow key={t.key} t={t} links={effort.measure_links ?? []} />)}
+    <small className="muted">두 기준 모두 같은 기준 건물 · 기준 연도({effort.baseline_year}년) · 전력 계수의 시나리오 값입니다. 전력 운영탄소만(가스 · 열 제외).{effort.measure_links_note ? ` ${effort.measure_links_note}.` : ''}</small>
+  </div>;
 }
 
 export function MeasuresPanel({ effort, measures, setMeasures }: { effort: EffortResult | null; measures: MeasuresState; setMeasures: (m: MeasuresState) => void }) {
@@ -82,15 +130,17 @@ export function MeasuresPanel({ effort, measures, setMeasures }: { effort: Effor
   let left = 100;
   const rec = effort?.recommended ?? null;
   // 자동 방안은 태양광만이라 태양광 칸만 채우고, 사용자가 넣은 신축 · 기존 % 는 그대로 둔다(2026-11-20 점검 B)
-  const applyRecommended = () => { if (rec) setMeasures({ ...measures, pv_kw: rec.pv_kw }); };
+  const applyRecommended = () => { if (rec && rec.pv_kw !== null) setMeasures({ ...measures, pv_kw: rec.pv_kw }); };
   return <section className="panel area-measures" aria-label="감축 수단 조합">
     <div className="panel-title"><h3>감축 방안</h3><span className="status-tag neutral">순서대로 더해 필요 감축량을 채움</span></div>
+    <TargetBases effort={effort} />
     {effort?.available && !effort.already_met && rec && (rec.steps.length > 0 || !!rec.offset_kwh) && <div className="area-recommended" data-testid="area-recommended">
       <h4>구체적 감축 방안 (자동 계산)</h4>
       {rec.steps.length > 0 && <ol>{rec.steps.map((s) => <li key={s.key}><b>{s.title}</b> — {s.detail}<span className="num">{t1(s.kgco2eq)}/년</span></li>)}</ol>}
       <p className={`area-headline ${rec.met ? 'good' : 'warn'}`}>{rec.met ? `합계 ${t1(rec.total_kgco2eq)}로 필요 감축량 ${t1(rec.required_kgco2eq)}를 채웁니다.` : `합계 ${t1(rec.total_kgco2eq)}로 필요 감축량 ${t1(rec.required_kgco2eq)}의 ${formatMetric(rec.share_pct, '%', 1)}입니다.${rec.offset_kwh ? ` 발전량 근거가 없어 남는 ${formatMetric(rec.offset_kwh, 'kWh')}는 재생에너지 상쇄량으로 적습니다.` : ''}`}</p>
-      {rec.roof_over_plan && rec.roof_m2 != null && <p className="area-headline warn" data-testid="area-roof-warning">필요한 옥상 약 {formatMetric(rec.roof_m2, 'm²')}가 {rec.plan_roof_basis === 'footprint' ? '계획 건물 지붕(건축면적 합)' : '계획 연면적(1층으로 지어도 지붕은 이보다 작음)'} {formatMetric(rec.plan_roof_m2 ?? 0, 'm²')}보다 큽니다. 모자라는 몫은 구역 안 기존 건물 지붕이나 구역 밖 발전으로 채워야 합니다.</p>}
-      {rec.pv_kw > 0 && <div className="area-measures-actions"><button type="button" className="button small" onClick={applyRecommended}><ListChecks size={14} />태양광 값을 아래 칸에 넣기</button><small className="muted">태양광은 남는 양을 10 kW 단위로 올려 채운 값입니다(기준 문서 5.15). 아래 칸의 신축·기존 건물 %는 바꾸지 않습니다(넣은 값이 있으면 합계가 필요 감축량을 넘을 수 있음).</small></div>}
+      {rec.roof_over_plan && rec.roof_limit_kw == null && rec.roof_m2 != null && <p className="area-headline warn" data-testid="area-roof-warning">필요한 옥상 약 {formatMetric(rec.roof_m2, 'm²')}가 {rec.plan_roof_basis === 'footprint' ? '계획 건물 지붕(건축면적 합)' : '계획 연면적(1층으로 지어도 지붕은 이보다 작음)'} {formatMetric(rec.plan_roof_m2 ?? 0, 'm²')}보다 큽니다. 모자라는 몫은 구역 안 기존 건물 지붕이나 구역 밖 발전으로 채워야 합니다.</p>}
+      {rec.roof_over_plan && rec.roof_limit_kw != null && <p className="area-headline warn" data-testid="area-roof-warning">필요한 태양광 {formatMetric(rec.pv_needed_kw ?? null, 'kW')} 가운데 계획 지붕 한도({rec.roof_limit_basis_label ?? ''} {formatMetric(rec.plan_roof_m2 ?? null, 'm²')}의 60%, {formatMetric(rec.roof_limit_kw ?? null, 'kW', 1)})까지만 셉니다. 남는 양 {rec.remaining_is_minimum ? '적어도 ' : ''}{t1(rec.remaining_kgco2eq)}는 구역 안 기존 건물의 절감 · 기존 건물 지붕 · 구역 밖 발전(약 {formatMetric(rec.remaining_offsite_pv_kw ?? null, 'kW')} 상당)으로 채워야 합니다.</p>}
+      {(rec.pv_kw ?? 0) > 0 && <div className="area-measures-actions"><button type="button" className="button small" onClick={applyRecommended}><ListChecks size={14} />태양광 값을 아래 칸에 넣기</button><small className="muted">태양광은 남는 양을 10 kW 단위로 올려 채우되 계획 지붕 한도까지만 센 값입니다(기준 문서 5.15). 아래 칸의 신축·기존 건물 %는 바꾸지 않습니다(넣은 값이 있으면 합계가 필요 감축량을 넘을 수 있음).</small></div>}
     </div>}
     {!effort?.available ? <p className="muted">감축 노력을 계산할 수 있는 구역에서 씁니다.</p> : effort.already_met ? <p className="area-headline good">계획을 반영해도 목표선 아래라 추가 수단이 필요하지 않습니다.</p> : <>
       <div className="field-grid area-measures-form">
