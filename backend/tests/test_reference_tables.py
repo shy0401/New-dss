@@ -13,10 +13,10 @@ def rows(name: str) -> list[dict[str, str]]:
 
 def test_evidence_table_rows_grades_and_exclusions():
     r = rows("reduction_evidence.csv")
-    assert len(r) == 645   # 2026-11-20 냉방 쪽 보강 35행
+    assert len(r) == 653   # 2026-11-20 냉방 쪽 보강 35행, 2026-11-24 팀 감축 방안 조사 8행(T-)
     grades = Counter(x["근거_등급"] for x in r)
     assert set(grades) == {"실측_국내", "실측_국외_조건맞음", "문헌_계산", "실측_국외_참고", "가정", "해당_없음"}
-    assert grades["실측_국내"] == 139 and grades["문헌_계산"] == 146
+    assert grades["실측_국내"] == 140 and grades["문헌_계산"] == 153   # 2026-11-24 T- 행: 실측_국내 1 · 문헌_계산 7
     a10 = [x for x in r if x["번호"].startswith("A10-")]
     assert len(a10) == 35 and all(x["쓰임"].startswith("범위 참고") for x in a10)
     assert {x["추천_제외"] for x in r} == {"예", "아니오", "따로 추천 안 함", "해당 없음"}
@@ -80,8 +80,10 @@ def test_evidence_summary_links_rows_to_tool_measures():
     assert ev["by_measure"]["operation"]["exclusion"] == [{"value": "예", "rows": 16}]
     groups = {g["group"]: g for g in ev["unlinked_groups"]}
     assert groups["heat_pump"]["exclusion"][0]["value"] == "예" and groups["heat_pump"]["reasons"]
-    assert groups["layout_form"]["rows"] == 38 and groups["layout_form"]["exclusion"][0]["value"] == "아니오"
-    assert sum(g["rows"] for g in ev["unlinked_groups"]) == 224
+    assert groups["layout_form"]["rows"] == 39 and groups["layout_form"]["exclusion"][0]["value"] == "아니오"   # 2026-11-24 T-008 더함
+    # 2026-11-24 팀 감축 방안 조사: 입면 · 발코니 태양광은 아직 도구 수단이 아니라 따로 묶음(지붕 태양광 근거로 세지 않음)
+    assert groups["facade_pv"]["label"] == "입면·발코니 태양광" and groups["facade_pv"]["rows"] == 5 and groups["facade_pv"]["sources"] == 2
+    assert sum(g["rows"] for g in ev["unlinked_groups"]) == 230
 
 
 def test_region_guide_joins_zone_climate_and_plans():
