@@ -360,6 +360,21 @@ export interface EffortResult {
   mix?: MeasureMix;
   /** 구체적 감축 방안(자동, 기준 문서 5.15): 남는 양 태양광(10 kW 단위). 2026-11-20부터 신축 · 기존 전력 절감 단계 없음. 사용자 조합과 따로. */
   recommended?: RecommendedMix | null;
+  /** 목표 기준 둘(U4, 기준 문서 5.9): 개발 증가분 상쇄(plan_added)와 구역 전체 목표(area_total). 서로 더하지 않음. */
+  targets?: EffortTarget[];
+}
+
+/** 목표 기준 하나(U4). 숫자가 없으면 null(0이 아님). */
+export interface EffortTarget {
+  key: 'plan_added' | 'area_total';
+  label: string;
+  data_class: 'SCENARIO';
+  net_added_kwh: number | null;
+  /** 이 계획으로 늘어나는 전력 운영탄소(원단위 기반 계산, 부호 있음). 변화 모델이 없는 지역의 대신 값. */
+  net_added_kgco2eq: number | null;
+  required_reduction_kgco2eq: number | null;
+  existing_share_kgco2eq: number | null;
+  already_met: boolean;
 }
 
 export interface RecommendedMix extends MeasureMix {
