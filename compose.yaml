@@ -9,7 +9,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     # 2026-11-24: 첫 지역 조회 때 DB 파일 캐시가 이 컨테이너 몫으로 21 GB까지 쌓였다(프로세스 자체는 공유 버퍼 128 MB).
-    # 한도를 걸면 캐시만 줄어든다(꺼지지 않음). 32 GB PC 기준(docs/TEAM_SETUP.md 1절)
+    # 한도를 걸면 캐시만 줄어든다(꺼지지 않음, 관측 최대 2.7 GB에서도 조회 정상). PC 크기와 무관한 상한(docs/TEAM_SETUP.md 1절)
     mem_limit: 3g
     healthcheck:
       test: [CMD-SHELL, pg_isready -U carbon -d carbon]

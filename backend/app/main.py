@@ -1,4 +1,4 @@
-import json,os,uuid,re
+import asyncio,json,os,time,uuid,re
 from contextlib import asynccontextmanager
 from typing import Literal
 from fastapi import FastAPI,HTTPException,Query,Request
@@ -141,6 +141,17 @@ async def _public_gateway_writes(request,call_next):
     if request.method in ('POST','PUT','PATCH','DELETE') and is_public(request) and (request.method=='DELETE' or PUBLIC_BLOCKED_WRITE.match(request.url.path)):
         return JSONResponse(status_code=403,content={'detail':PUBLIC_BLOCKED_TEXT})
     return await call_next(request)
+
+@app.middleware('http')
+async def _release_freed_memory(request,call_next):
+    # 2026-11-24: glibc keeps the memory a heavy request freed (measured 406 of 1,098 MB); hand it back afterwards, off the
+    # event loop. Values do not change (memtrim, docs/records/2026-11-24-docker-memory-trim.md)
+    from . import memtrim
+    started=time.monotonic()
+    response=await call_next(request)
+    if time.monotonic()-started>=memtrim.HEAVY_S:
+        asyncio.get_running_loop().run_in_executor(None,memtrim.release)
+    return response
 
 app.include_router(uploads_router)
 app.include_router(reports_router)

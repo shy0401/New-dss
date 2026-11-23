@@ -601,6 +601,19 @@ def predict_area(body: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+try:  # glibc keeps memory Python freed; hand it back after training and after each prediction (2026-11-24, values unchanged)
+    import ctypes
+    _MALLOC_TRIM = ctypes.CDLL("libc.so.6").malloc_trim
+    _MALLOC_TRIM.argtypes = [ctypes.c_size_t]
+except (OSError, AttributeError):
+    _MALLOC_TRIM = None
+
+
+def release_memory() -> None:
+    if _MALLOC_TRIM is not None:
+        _MALLOC_TRIM(0)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "team-model/1"
 
@@ -636,6 +649,7 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length) or b"{}")
             with _PREDICT_LOCK:
                 self._send(200, predict_area(body) if self.path.startswith("/predict-area") else predict(body))
+                release_memory()
         except (ValueError, KeyError, TypeError) as exc:
             self._send(422, {"detail": str(exc)})
         except LookupError as exc:
@@ -650,7 +664,13 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    threading.Thread(target=train, daemon=True).start()
+    def train_then_release() -> None:
+        train()
+        import gc
+        gc.collect()
+        release_memory()
+
+    threading.Thread(target=train_then_release, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 
