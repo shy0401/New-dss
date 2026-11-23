@@ -74,7 +74,7 @@ def grid_register_summary(db: Any, grid_ids: Any = None) -> dict[str, dict[str, 
     row count (the register changes only when it is collected again; another region's collection keeps
     this region's cache). 10/14: the whole-country summary took 15 s on the first map after a restart."""
     try:
-        from .official import BuildingRegister, register_areas
+        from .official import BuildingRegister, register_areas, register_attributes
         key = None if grid_ids is None else frozenset(grid_ids)
         ids = sorted(key) if key is not None else None
         where = [BuildingRegister.grid_id.is_not(None)]
@@ -90,7 +90,8 @@ def grid_register_summary(db: Any, grid_ids: Any = None) -> dict[str, dict[str, 
         return {}
     hit = _CACHE.get(key)
     if hit is None or hit[0] != count:
-        query = select(BuildingRegister.grid_id, BuildingRegister.attributes, BuildingRegister.approval_year)
+        # only the keys read below (2026-11-24): the whole register JSON of a region was hundreds of MB of Python objects
+        query = select(BuildingRegister.grid_id, register_attributes(db, "building_use", "energy_grade"), BuildingRegister.approval_year)
         chunks = [query.where(*where)] if ids is None else [query.where(BuildingRegister.grid_id.in_(ids[i:i + 2000])) for i in range(0, len(ids), 2000)]
         rows = []
         for chunk in chunks:

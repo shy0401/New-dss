@@ -1680,12 +1680,13 @@ def load_inputs(db: Any, years: list[int], region: str | None = None) -> dict[st
              for start in range(0, len(ids), 2000) for g in db.scalars(select(Grid).where(Grid.id.in_(ids[start:start + 2000])))]
     register = []
     try:
-        from .official import BuildingRegister, register_areas
+        from .official import BuildingRegister, register_areas, register_attributes
+        attributes_column = register_attributes(db, "building_use")  # only the keys read below (2026-11-24, 770 MB at the peak)
         # Only this region's cells, asked in SQL (2026-11-21): reading every register row of the country (2.09 million rows,
         # 1.4 GB of stored JSON during the national collection) and dropping the other regions' in Python took over 6 GiB in
         # the start-up warm-up (measured in a 6 GiB container: killed; the API peaked at 29 GiB).
         for start in range(0, len(ids), 2000):
-            query = select(BuildingRegister.grid_id, BuildingRegister.approval_year, BuildingRegister.attributes).where(
+            query = select(BuildingRegister.grid_id, BuildingRegister.approval_year, attributes_column).where(
                 BuildingRegister.grid_id.in_(ids[start:start + 2000]))
             for grid_id, approval_year_value, attributes in db.execute(query):
                 attrs = attributes or {}
