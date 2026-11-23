@@ -350,6 +350,9 @@ def report_cautions(data,detail,scenarios):
         items.append('3D 개념 배치는 대지 안에 같은 크기 블록을 규칙적으로 늘어놓은 규모 비교용 그림이며 실제 배치안이 아닙니다. 그림자는 맑은 날 태양 위치로 그린 개략 그림자입니다.')
     checks=[c for c in ((sc.get('result') or {}).get('zoning_check') for sc in scenarios) if c]
     items.extend(zoning_limitations(checks))
+    if any((sc.get('reduction_plan') or {}).get('available') for sc in scenarios):
+        from .reduction_plan import ZEB_ADDITIONALITY_NOTE
+        items.append(ZEB_ADDITIONALITY_NOTE)
     if data.get('coverage',{}).get('electricity_months',0)<12:
         items.append('전력 관측이 12개월 미만이라 연간 값은 완전하지 않습니다.')
     return items

@@ -292,3 +292,15 @@ def test_snapshot_asks_the_change_model_only_with_use_lines_and_never_on_the_pub
     assert len(calls) == 1 and 'change_model' not in off
     with pytest.raises(ValueError):
         area_report._snapshot(area_report.AreaReportInput(**base, plan={'added_floor_area_m2': 10000}, uses_new=uses))
+
+
+def test_new_buildings_carry_the_additionality_limit_and_existing_only_plans_do_not():
+    """2026-11-24: 새 건물 연면적이 있는 계획이면 법정 에너지 기준(고시 제2025-313호 제7조) 몫이 감축량에 섞일 수 있다는 한계를 7절 · 해석 범위에 적는다."""
+    from app.area_report import additionality_note, area_html
+    s = _snapshot_for_html()
+    s['effort']['added_floor_area_m2'] = 30000.0
+    assert '제2025-313호 제7조' in additionality_note(s) and '따로 나누지 않습니다' in additionality_note(s)
+    html = area_html(s)
+    assert html.index('제2025-313호') > html.index('7. 자료 범위와 한계')
+    s['effort']['added_floor_area_m2'] = 0.0
+    assert additionality_note(s) == '' and '제2025-313호' not in area_html(s)
