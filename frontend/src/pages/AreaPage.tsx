@@ -5,6 +5,7 @@ import { AreaMap } from '../components/area/AreaMap';
 import { AreaSummaryBar, BenchmarkPanel, FallbackNotice, MeasuresPanel } from '../components/area/AreaWorkflow';
 import { BeforeAfterChart, DevelopmentChart, EffortBars, EffortCurve, ElectricityChart, RegisterChart, WeatherYearsChart } from '../components/area/AreaCharts';
 import { TeamAreaPanel } from '../components/area/TeamAreaPanel';
+import { DeleteButton } from '../components/DeleteButton';
 import { RegionGuidePanel } from '../components/RegionGuide';
 
 export { RegionGuidePanel };
@@ -15,7 +16,7 @@ import { ProvenanceBadge } from '../components/ProvenanceBadge';
 import { SgisGridSummaryView } from '../components/SgisGridPanel';
 import { EmptyState, ErrorState, LoadingState } from '../components/Status';
 import { setAnalysisScope, useAnalysisScope } from '../hooks/useAnalysisScope';
-import { areaLink, parseAreaLink, type AreaLink } from '../lib/caseLink';
+import { areaLink, DEFAULT_REGION, parseAreaLink, type AreaLink } from '../lib/caseLink';
 import { useApi } from '../hooks/useApi';
 import { useSystemInfo } from '../hooks/useSystemInfo';
 import { slowLoadText, useElapsed } from '../hooks/useElapsed';
@@ -76,10 +77,14 @@ export function AreaPage() {
   const lastSpec = useRef<AreaSpec | null>(null);
   const revision = useRef(0);
   const started = useRef(false);
+  // 지금 지역의 선택지(행정동 · 용도지역)가 도착했는지. 지역을 바꾼 순간에는 앞 지역 선택지 · 행정동 코드가 남아 있어,
+  // 그대로 첫 분석을 보내면 "행정동을 찾을 수 없습니다"(422)가 나고 새 지역 첫 분석도 돌지 않았음(2026-11-23 재현).
+  const optionsReady = useRef(false);
 
   // 처음 열 때: 에코시티 개발이 있는 송천1동(없으면 목록 첫 동)과 가장 넓은 용도지역을 고른다.
   useEffect(() => {
     const o = options.data; if (!o) return;
+    optionsReady.current = true;
     setAdminCode((old) => old || (o.admin.find((a) => a.name.includes('송천1동')) ?? o.admin[0])?.code || '');
     setCategory((old) => old || o.zones.find((z) => z.category === 'COMMERCIAL')?.category || o.zones[0]?.category || '');
   }, [options.data]);
@@ -111,7 +116,7 @@ export function AreaPage() {
   useEffect(() => {
     if (shownRegion.current === region) return;
     shownRegion.current = region;
-    revision.current++; lastSpec.current = null; started.current = false;
+    revision.current++; lastSpec.current = null; started.current = false; optionsReady.current = false;
     setAnalysis(null); setAdminCode(''); setCategory(''); setCenter(null); setVertices([]); setError(null);
   }, [region]);
 
@@ -121,7 +126,7 @@ export function AreaPage() {
   // First analysis once the defaults are known (declared before the region reset above uses it).
 
   useEffect(() => {
-    if (started.current || !options.data) return;
+    if (started.current || !options.data || !optionsReady.current) return;   // the previous region's options are still on screen
     if (link && link.region !== undefined && link.region !== region) return;   // wait for the linked region
     const first = link?.spec ?? (adminCode ? { type: 'admin' as const, code: adminCode } : null);
     if (!first) return;
@@ -248,7 +253,7 @@ export function AreaPage() {
       <MeasuresPanel effort={analysis.effort} measures={measures} setMeasures={setMeasures} />
 
       <div className="section-label" id="area-step-report"><h2>보고서</h2><span>계산 엔진의 근거 문장으로 작성하고, 로컬 AI 문장은 숫자 검증을 통과할 때만 씁니다</span></div>
-      <ReportPanel request={() => ({ area: lastSpec.current, region, from_year: fromYear, to_year: toYear, event_year: eventYear, window: windowSize, plan: planBody(plan), target_pct: target, pv_yield_kwh_per_kw: pvYield && Number(pvYield) > 0 ? Number(pvYield) : null, effort_basis: effortBasis, measures: measuresBody(measures) })} label={analysis.history.area.label} />
+      <ReportPanel region={region} request={() => ({ area: lastSpec.current, region, from_year: fromYear, to_year: toYear, event_year: eventYear, window: windowSize, plan: planBody(plan), target_pct: target, pv_yield_kwh_per_kw: pvYield && Number(pvYield) > 0 ? Number(pvYield) : null, effort_basis: effortBasis, measures: measuresBody(measures) })} label={analysis.history.area.label} />
     </>}
   </div>;
 }
@@ -527,8 +532,9 @@ function EffortPanel({ effort, plan, setPlan, target, setTarget, pvYield, setPvY
   </section>;
 }
 
-function ReportPanel({ request, label }: { request: () => Record<string, unknown>; label: string }) {
-  const recent = useApi<Array<{ id: string; created_at: string; title: string; mode: string }>>('/area-reports');
+function ReportPanel({ request, label, region = null }: { request: () => Record<string, unknown>; label: string; region?: string | null }) {
+  // 이 지역의 보고서만(U0 API ?region=, 2026-11-23). 지역을 고르지 않은 상태(null)는 원래 지역(전주)
+  const recent = useApi<Array<{ id: string; created_at: string; title: string; mode: string }>>(`/area-reports?region=${encodeURIComponent(region ?? DEFAULT_REGION)}`);
   const [useLocal, setUseLocal] = useState(false);
   const [title, setTitle] = useState('');
   const [report, setReport] = useState<AreaReport | null>(null);
@@ -561,6 +567,6 @@ function ReportPanel({ request, label }: { request: () => Record<string, unknown
       {s.mode === 'LOCAL_SLM_NARRATIVE' && <details><summary>근거 문장 {report.facts.length}개</summary><ul>{report.facts.map((f) => <li key={f.id}>{f.text}</li>)}</ul></details>}
       <footer><small>검증: {s.validation} · 근거 SHA256 <code>{report.evidence_hash.slice(0, 16)}…</code></small><span className="badge-row"><a className="button small primary" href={`/api/area-reports/${report.id}/html`} target="_blank" rel="noopener"><Printer size={14} />인쇄·PDF용 보기</a><a className="button small" href={`/api/area-reports/${report.id}/markdown`}><Download size={14} />마크다운 내려받기</a></span></footer>
     </article>}
-    {recent.data && recent.data.length > 0 && <div className="area-report-recent"><h4>최근 지역 보고서</h4><ul>{recent.data.slice(0, 6).map((r) => <li key={r.id}><button className="button ghost small" onClick={() => void open(r.id)}>{r.title}</button><small>{formatDate(r.created_at)} · {REPORT_MODE_LABEL[r.mode as AreaReport['summary']['mode']] ?? r.mode}</small></li>)}</ul></div>}
+    {recent.data && recent.data.length > 0 && <div className="area-report-recent"><h4>최근 지역 보고서</h4><ul>{recent.data.slice(0, 6).map((r) => <li key={r.id}><button className="button ghost small" onClick={() => void open(r.id)}>{r.title}</button><small>{formatDate(r.created_at)} · {REPORT_MODE_LABEL[r.mode as AreaReport['summary']['mode']] ?? r.mode}</small> <DeleteButton path={`/area-reports/${r.id}`} what="이 지역 보고서" onDeleted={() => { if (report?.id === r.id) setReport(null); void recent.reload(); }} /></li>)}</ul></div>}
   </section>;
 }
