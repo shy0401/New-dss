@@ -96,7 +96,7 @@ docker compose exec api python -m app.cli import-team-grid
 ### 7.3 팀 변화 모델
 
 - **무엇**: 같은 500m 칸의 두 해 쌍 57만여 개로 "배출 변화 = f(전 해 상태, 입력의 변화, 전 해 배출, 간격, 후 해, 전 해 에너지원 구성)"를 배우는 HistGradientBoosting(seed 5개 평균, 개발 사례 쌍 가중 ×10, ADR 0028). 답은 예측 변화(중앙값), 구간(사례 잔차 q10·q25·q75·q90), 에너지원별 몫, 요인별 기여, 자동으로 채운 값, 경고(범위 밖·비주거·집계 몰림).
-- **어디서**: `team-model` 컨테이너(`deploy/team-model`, `docker compose --profile team-model up -d --build team-model`). 팀 코드와 학습 표는 `data/raw/team_urban_carbon`을 **읽기 전용으로** 붙여 쓰고 이미지에 넣지 않습니다. 켜면 1~3분 학습합니다. 바탕화면 [Carbon DSS 켜기]가 한 번 만든 뒤부터 함께 올립니다.
+- **어디서**: `team-model` 컨테이너(`deploy/team-model`, `docker compose --profile team-model up -d --build team-model`). 팀 코드와 학습 표는 `data/raw/team_urban_carbon`을 **읽기 전용으로** 붙여 쓰고 이미지에 넣지 않습니다. 처음 켜면 1~3분 학습하고, 학습한 모델을 Docker 볼륨 `team_model_cache`에 둡니다(학습 표에 국토통계지도 값이 있어 `data/`나 묶음에는 넣지 않음). 팀 코드 · 학습 표 · 서버 파일 · 설정 · 라이브러리 판이 같으면 다음부터 약 10초 만에 불러옵니다(2026-11-24, 같은 답 확인). 하나라도 바뀌면 다시 학습합니다. 끄려면 `TEAM_MODEL_CACHE=off` 바탕화면 [Carbon DSS 켜기]가 한 번 만든 뒤부터 함께 올립니다.
 - **칸 상태**: 학습 42곳은 팀 예시(`predict --name 00_합본_7차`)처럼 합본에서, 나머지(시험 10곳·동탄)는 그 지역 표에서 고릅니다.
 - **바꾼 입력 (2026-11-17)**: 서비스가 표를 읽은 직후 두 입력을 공식 값으로 바꿔 학습·예측합니다(`server.py` `official_inputs`, 받은 묶음은 그대로). `/status`의 `inputs`에 표마다 바뀐 행 수가 나옵니다. `TEAM_INPUTS=team`이면 받은 코드 그대로입니다.
   - 난방 · 가스 비중(`heat_share_ctx`, `gas_share_ctx`): 팀 코드는 100 t 미만 칸에 이웃 3×3 칸이나 지역 비중을 빌려 씁니다. 바꾼 뒤에는 모든 칸이 그 칸 · 그해의 탄소공간지도 값(난방 또는 가스 ÷ 전기 + 가스 + 난방)만 씁니다. 배출이 0인 칸은 NULL입니다.

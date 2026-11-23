@@ -202,3 +202,38 @@ def test_area_predict_keeps_the_same_answer_a_short_while_per_trained_model(monk
     _client().post("/api/team-model/predict-area", json=plan)
     _client().post("/api/team-model/predict-area", json=plan)
     assert calls.count("/predict-area") == 5
+
+
+@pytest.mark.skipif(not TEAM_SERVER.exists(), reason="deploy/team-model/server.py가 없음(api 컨테이너에는 backend/만 들어 있음)")
+def test_saved_model_is_reused_only_while_every_input_is_the_same(tmp_path, monkeypatch):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("team_server_cache", TEAM_SERVER)
+    server = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(server)
+    code = tmp_path / "code"
+    for rel in ("src/urban_carbon/m.py", "config/modeling.yaml", f"data/processed/{server.TRAIN}/training.csv"):
+        (code / rel).parent.mkdir(parents=True, exist_ok=True)
+        (code / rel).write_text("a", encoding="utf-8")
+    versions = {"pandas": "3.1.1"}
+    key = server.model_cache_key(code, versions)
+    assert server.model_cache_key(code, versions) == key
+    assert server.model_cache_key(code, {"pandas": "3.2.0"}) != key          # another library version
+    (code / "config/modeling.yaml").write_text("b", encoding="utf-8")
+    assert server.model_cache_key(code, versions) != key                      # team config changed
+    (code / "config/modeling.yaml").write_text("a", encoding="utf-8")
+    monkeypatch.setenv("TEAM_REGION_DROP", "team")
+    assert server.model_cache_key(code, versions) != key                      # a TEAM_* setting changed
+    monkeypatch.delenv("TEAM_REGION_DROP")
+    (code / f"data/processed/{server.TRAIN}/training.csv").write_text("ab", encoding="utf-8")
+    assert server.model_cache_key(code, versions) != key                      # training table changed (size)
+    # save → load round trip; another key or a broken file is not loaded
+    monkeypatch.setattr(server, "CACHE_DIR", tmp_path / "cache")
+    server.STATE["model_cache"] = {}
+    server.save_model("k1", {"key": "k1", "trained": {"x": 1}, "tables": {}, "train_seconds": 1.0})
+    assert server.STATE["model_cache"]["state"] == "saved"
+    assert server.load_model("k1")["trained"] == {"x": 1}
+    assert server.load_model("k2") is None
+    server.save_model("k2", {"key": "k2", "trained": {"x": 2}, "tables": {}, "train_seconds": 1.0})
+    assert sorted(p.name for p in (tmp_path / "cache").glob("model_*.pkl")) == ["model_k2.pkl"]  # only the current one kept
+    (tmp_path / "cache" / "model_k2.pkl").write_bytes(b"broken")
+    assert server.load_model("k2") is None and server.STATE["model_cache"]["state"] == "load_error"

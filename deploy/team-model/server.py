@@ -5,6 +5,7 @@
   학습 표에는 국토통계지도(국외 반출 금지) 값이 들어 있어 이 컨테이너 밖으로 표를 내보내지 않는다.
 * 시작하면 뒤에서 ``00_합본_7차``로 변화 모델을 학습한다. 팀의 ``urban-carbon predict``와 같은 함수(``_Trained``,
   ``_predict_one``)를 그대로 불러 같은 답을 낸다(seed 5개 × 합계·에너지원 3, 사례 쌍 가중 ×10). 1~3분.
+  학습한 모델은 Docker 볼륨(``/cache``)에 두고, 입력이 같으면 다음 시작 때 불러온다(약 10초, ``model_cache_key``).
 * 칸의 지금 상태는 그 지역 표(``data/processed/<코드>_<이름>/training.csv``)에서, 모델·환산 계수·구간은 ``00_합본_7차``에서.
 
 GET /health, GET /status, POST /predict {"region": "52110", "plans": [{"x": 959500, "y": 1760500, "new": [...],
@@ -15,8 +16,10 @@ POST /predict-area {"region": "52110", "cells": [{"x": .., "y": ..}, ...], "new"
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
+import pickle
 import sys
 import tempfile
 import threading
@@ -81,6 +84,13 @@ _OWN_STATION = {"11": "108", "26": "159", "27": "143", "28": "112", "30": "133",
                 "51130": "114", "52110": "146"}
 _STATION = "weather_station_id"
 
+# Trained model kept between starts (2026-11-24, record docker-memory-trim follow-up): training takes 2~3 minutes and peaks
+# at 2.4 GB, and the change model answers nothing meanwhile. The trained object is saved once and loaded while every input
+# that shaped it is the same (``model_cache_key``); anything else trains again. A Docker named volume, never data/ — the
+# training table inside holds 국토통계지도 values, which stay on this PC. TEAM_MODEL_CACHE=off trains every start as before.
+CACHE_DIR = Path(os.environ.get("TEAM_MODEL_CACHE_DIR", "/cache"))
+MODEL_CACHE = os.environ.get("TEAM_MODEL_CACHE", "on") == "on"
+
 STATE: dict[str, Any] = {"status": "starting", "snapshot": None, "train": TRAIN, "started_at": None, "ready_at": None,
                          "train_seconds": None, "error": None, "versions": {}, "regions": [], "acceptance": [], "pair_inputs": None,
                          "inputs": {"mode": INPUTS, "tables": {}}}
@@ -102,6 +112,60 @@ def find_code() -> tuple[str | None, Path | None]:
 
 def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S%z")
+
+
+def model_cache_key(code: Path, versions: dict[str, str]) -> str:
+    """Everything that shapes the trained model: this server and its files (contents), the TEAM_* settings, the team code
+    and config (contents), the training folder (name, size, mtime of every file) and the library versions."""
+    h = hashlib.sha256()
+
+    def add_file(f: Path, content: bool) -> None:
+        st = f.stat()
+        h.update(str(f).encode())
+        h.update(f.read_bytes() if content else f"{st.st_size}:{st.st_mtime_ns}".encode())
+
+    for f in sorted(p for p in Path(__file__).resolve().parent.iterdir() if p.is_file() and p.suffix in (".py", ".csv")):
+        add_file(f, True)
+    for k in sorted(k for k in os.environ if k.startswith("TEAM_") and k not in ("TEAM_MODEL_CACHE", "TEAM_MODEL_CACHE_DIR")):
+        h.update(f"{k}={os.environ[k]}".encode())
+    for f in sorted(p for p in (code / "src").rglob("*") if p.is_file() and "__pycache__" not in p.parts):
+        add_file(f, True)
+    for f in sorted(p for p in (code / "config").rglob("*") if p.is_file()):
+        add_file(f, True)
+    for f in sorted(p for p in (code / "data" / "processed" / TRAIN).rglob("*") if p.is_file()):
+        add_file(f, False)
+    h.update(json.dumps(versions, sort_keys=True).encode())
+    return h.hexdigest()[:24]
+
+
+def load_model(key: str) -> dict[str, Any] | None:
+    f = CACHE_DIR / f"model_{key}.pkl"
+    if not (MODEL_CACHE and f.is_file()):
+        return None
+    try:
+        with f.open("rb") as fh:
+            saved = pickle.load(fh)  # our own file in our own volume (written by save_model below)
+        return saved if saved.get("key") == key else None
+    except Exception as exc:  # noqa: BLE001 - a broken file: train again
+        STATE["model_cache"].update(state="load_error", error=f"{type(exc).__name__}: {exc}")
+        return None
+
+
+def save_model(key: str, saved: dict[str, Any]) -> None:
+    if not MODEL_CACHE:
+        return
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = CACHE_DIR / f".model_{key}.tmp"
+        with tmp.open("wb") as fh:
+            pickle.dump(saved, fh, protocol=5)
+        os.replace(tmp, CACHE_DIR / f"model_{key}.pkl")
+        for old in CACHE_DIR.glob("model_*.pkl"):
+            if old.name != f"model_{key}.pkl":
+                old.unlink()
+        STATE["model_cache"]["state"] = "saved"
+    except Exception as exc:  # noqa: BLE001 - not picklable or no volume: keep serving the trained model
+        STATE["model_cache"].update(state="save_error", error=f"{type(exc).__name__}: {exc}")
 
 
 def _fix_band_sign(P: Any) -> None:
@@ -354,11 +418,25 @@ def train() -> None:
         acceptance = processed / TRAIN / "baseline" / "change_acceptance.csv"
         if acceptance.is_file():
             STATE["acceptance"] = pandas.read_csv(acceptance, encoding="utf-8").to_dict("records")
-        STATE.update(status="training", started_at=_now())
+        STATE.update(started_at=_now())
         t0 = time.time()
-        trained = P._Trained(paths, TRAIN, settings, change, None)
+        key = model_cache_key(code, STATE["versions"])
+        STATE["model_cache"] = {"key": key, "state": "off" if not MODEL_CACHE else "missing"}
+        saved = load_model(key)
+        if saved is not None:
+            trained = saved["trained"]
+            STATE["inputs"]["tables"].update(saved["tables"])
+            STATE["model_cache"].update(state="loaded", load_seconds=round(time.time() - t0, 1))
+            train_seconds = saved["train_seconds"]
+        else:
+            STATE.update(status="training")
+            trained = P._Trained(paths, TRAIN, settings, change, None)
+            train_seconds = round(time.time() - t0, 1)
+            t1 = time.time()
+            save_model(key, {"key": key, "trained": trained, "tables": copy.deepcopy(STATE["inputs"]["tables"]), "train_seconds": train_seconds})
+            STATE["model_cache"]["save_seconds"] = round(time.time() - t1, 1)
         _CTX.update(P=P, paths=paths, settings=settings, change=change, trained=trained, processed=processed, pandas=pandas)
-        STATE.update(status="ready", ready_at=_now(), train_seconds=round(time.time() - t0, 1), pair_inputs=int(len(trained.fitted.columns)))
+        STATE.update(status="ready", ready_at=_now(), train_seconds=train_seconds, pair_inputs=int(len(trained.fitted.columns)))
     except Exception as exc:  # noqa: BLE001 - reported on /status
         traceback.print_exc()
         STATE.update(status="error", error=f"{type(exc).__name__}: {exc}")

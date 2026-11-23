@@ -79,8 +79,11 @@ services:
       TEAM_TRAIN: 00_합본_7차
     volumes:
       - ./data/raw/team_urban_carbon:/team-root:ro
+      # 학습한 모델을 다음 시작 때 다시 씀(2026-11-24). 학습 표에 국토통계지도 값이 있어 data/가 아닌 Docker 볼륨에만 둔다
+      - team_model_cache:/cache
     mem_limit: 6g
 volumes:
+  team_model_cache:
   ollama_data:
   postgres_data:
   redis_data:
