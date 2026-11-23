@@ -10,19 +10,19 @@
 - 없는 값은 빈칸(NULL). 0으로 채우지 않는다
 - 값의 성격(관측 · 계산 · 추정 · 계획값)을 열에 함께 적었다. 섞어서 더하지 않는다
 - 원본은 이 폴더에 없다. 원본 경로 · 해시는 PC `data/raw/<자료>/<받은 날>/MANIFEST.txt`와 [기준 문서 2절](../../docs/DATA_STANDARD.md)
-- 다시 만드는 스크립트는 PC `project/tools/experiments/`(아래 표). 표를 바꿀 때는 이 파일 · 기록(`docs/records`)을 같은 PR에서 고친다
+- 다시 만드는 스크립트는 저장소 `scripts/reduction_evidence/`(2026-11-23 옮김, [설명](../../scripts/reduction_evidence/README.md)) · `scripts/build_use_intensity.py`. 표를 바꿀 때는 이 파일 · 기록(`docs/records`)을 같은 PR에서 고친다
 
 | 파일 | 행 | 무엇 | 만든 곳(PC) | 갈래 |
 |---|---|---|---|---|
-| `reduction_evidence.csv` | 645 | 감축 근거표: 문헌 · 실증 조사표 543행 정리 + 보강 67행 + 냉방 쪽 보강 35행(2026-11-20). 수단 · 층 · 줄이는 용도 · 효과 범위 · 근거 등급 · 추천 제외와 까닭 · 원문 대조 | `reduction_evidence/a10/evidence_table_all_v2.csv` | (가) |
-| `local_plans_building.csv` | 447 | 지자체 탄소중립 · 녹색성장 기본계획의 건물 부문 과제(시도 17 + 수원 · 전주 · 군산, 20개 지역). 단위 맞춤 열 포함 | `reduction_evidence/a4/local_plans_building_units.csv` | (가) |
+| `reduction_evidence.csv` | 645 | 감축 근거표: 문헌 · 실증 조사표 543행 정리 + 보강 67행 + 냉방 쪽 보강 35행(2026-11-20). 수단 · 층 · 줄이는 용도 · 효과 범위 · 근거 등급 · 추천 제외와 까닭 · 원문 대조 | `scripts/reduction_evidence/evidence_table/` (+ 11-21 · 11-22 기록의 칸 고침) | (가) |
+| `local_plans_building.csv` | 447 | 지자체 탄소중립 · 녹색성장 기본계획의 건물 부문 과제(시도 17 + 수원 · 전주 · 군산, 20개 지역). 단위 맞춤 열 포함 | `scripts/reduction_evidence/local_plans/` | (가) |
 | `design_zone_sigungu.csv` | 269 | 시군구 → 설계기준 지역 구분(중부1 · 중부2 · 남부 · 제주) | `regional_adjust/design_zone_sigungu.csv` | (나) |
 | `design_zone_uvalue_apartment.csv` | 11 | 공동주택 부위별 열관류율 기준(지역 구분별) | `regional_adjust/design_zone_uvalue_apartment.csv` | (나) |
 | `regional_conditions_sigungu.csv` | 23 | 지역 조건표: DB에 기상 · 단지가 있는 시군구의 지역 구분 · 평년 도일 · 단지 수 · 용도 몫 · 2025 통계 원단위 | `regional_adjust/regional_conditions_sigungu.csv` | (나) |
-| `apartment_energy_stats_2025.csv` | 249 | 시군구 아파트 에너지 통계(건물에너지사용량통계 2025, TOE) · 지역난방 열 비중 | `regional_guide/build_heat_stats.py` | (나) |
+| `apartment_energy_stats_2025.csv` | 249 | 시군구 아파트 에너지 통계(건물에너지사용량통계 2025, TOE) · 지역난방 열 비중 | `scripts/reduction_evidence/regional_guide/` | (나) |
 | `use_intensity_2025.csv` | 285 | 용도별 전력 원단위(건축HUB 2025 · 대장, READY 지역별 + 전체) | `scripts/build_use_intensity.py`(저장소) | 계산 |
 | `region_priority.csv` | 207 | 전국 수집 지역 순위(2026-11-21 사용자 확정 기준): 1 수집 중 · 덜 끝남 → 2 더운 지역(냉방도일 전주 이상) · 제주 → 3 공동주택 지역난방 비중 30% 이상 → 4 나머지, 단계 안에서는 K-apt 단지가 많은 순. 그날 READY 22곳은 뺌 | `region_priority/build_region_priority.py`(입력: DB `national_complexes` 202610 · `study_regions` 상태, 이 폴더의 기후 가이드 · 아파트 통계) | (나) |
-| `regional_climate_guide.csv` | 269 | 지역 기후 가이드: 전국 시군구의 기상청 평년값(1991~2020) 기후 값 · 전주 대비 냉난방도일 비 · 기준 배출 방향 가이드(추정) · 지자체 과제 수 | `regional_guide/out/regional_climate_guide.csv` | (나) |
+| `regional_climate_guide.csv` | 269 | 지역 기후 가이드: 전국 시군구의 기상청 평년값(1991~2020) 기후 값 · 전주 대비 냉난방도일 비 · 기준 배출 방향 가이드(추정) · 지자체 과제 수 | `scripts/reduction_evidence/regional_guide/` | (나) |
 
 ## `reduction_evidence.csv`
 | 열 | 뜻 |

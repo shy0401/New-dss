@@ -1,0 +1,1 @@
+\copy (select kapt_code, name, bjd_code, bun, ji, parcel_address, road_address, approval_date, gross_floor_area_m2, households, building_count, heating_type, longitude, latitude, grid_id, (detail_json->'resultMap_kapt_addrList')::text addr_list from apartment_complexes order by kapt_code) to stdout with csv header

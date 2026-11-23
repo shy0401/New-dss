@@ -1,0 +1,1 @@
+\copy (select c.kapt_code, p.pnu from apartment_complexes c join cadastral_parcels p on ST_Contains(p.geom, ST_Transform(ST_SetSRID(ST_MakePoint(c.longitude, c.latitude),4326),5179)) where p.pnu is not null order by 1,2) to stdout with csv header
