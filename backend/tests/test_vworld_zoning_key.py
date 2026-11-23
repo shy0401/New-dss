@@ -22,3 +22,16 @@ def test_zoning_key_ignores_float_noise_and_vertex_order():
     b = _f("y", box(0.001, 0, 100.002, 100), "보전녹지지역")
     assert zoning_key("zoning", a) == zoning_key("zoning", b)
     assert zoning_key("zoning", a) != zoning_key("zoning_management", a)
+
+
+def test_feature_key_parcels_by_pnu_others_by_shape():
+    from app.vworld import feature_key
+    p1 = {"id": "LP_PA_CBND_BUBUN.5", "geometry": box(0, 0, 10, 10), "properties": {"pnu": "5211310100100010000"}}
+    p2 = {"id": "LP_PA_CBND_BUBUN.9", "geometry": box(0, 0, 10, 10.5), "properties": {"pnu": "5211310100100010000"}}
+    assert feature_key("cadastral", p1) == feature_key("cadastral", p2) == "cadastral:pnu:5211310100100010000"
+    b1 = {"id": "LT_C_SPBD.1", "geometry": box(0, 0, 10, 10), "properties": {}}
+    b2 = {"id": "LT_C_SPBD.1", "geometry": box(20, 0, 30, 10), "properties": {}}
+    assert feature_key("buildings", b1) != feature_key("buildings", b2)
+    assert feature_key("greenbelt", b1).startswith("greenbelt:sha:")
+    nopnu = {"id": "x", "geometry": box(0, 0, 1, 1), "properties": {}}
+    assert feature_key("cadastral", nopnu).startswith("cadastral:sha:")
