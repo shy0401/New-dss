@@ -27,6 +27,138 @@ const analysis = {
   admin_year: 2024,
 };
 
+// /api/plans/evaluate 응답(U3 S5): analysis는 /api/areas/analyze와 같은 모양, 블록 · 세 범위 줄을 함께
+const SCOPES = [
+  { key: 'plan_emission', label: '원단위 기반 계획 배출(이 화면 계산)', data_class: 'SCENARIO', scope: '전력 운영탄소만(가스 · 열 제외)', what: '관측 원단위 × 계획 연면적 × 전력 계수' },
+  { key: 'district_heat', label: '지역난방 열(추정)', data_class: 'ESTIMATED', scope: '지역난방 열만', what: '계획 연면적 × 지역난방 비중 × 열 원단위 × 공급자 계수' },
+  { key: 'change_model', label: '팀 변화 모델 예측', data_class: 'SCENARIO', scope: '탄소공간지도 건물 배출(전기 · 가스 · 지역난방)', what: '과거 개발 사례로 학습한 모델의 변화 예측(구간 함께)' },
+  { key: 'simulation', label: '한 칸 계획안(시뮬레이션 화면)', data_class: 'SCENARIO', scope: '전력 + 가스', what: '그 화면의 계획안 계산(여기서는 계산하지 않음)' },
+];
+function bundleOf(a: object, blocks: Record<string, unknown> = {}) {
+  const x = a as typeof analysis;
+  return { plan: { added_floor_area_m2: x.effort?.added_floor_area_m2 ?? null, removed_floor_area_m2: null, grid_ids: x.history.area.grid_ids, grid_count: x.history.area.grid_ids.length },
+    analysis: a, scopes: SCOPES, facts: x.facts, timing_s: { analyze: 0.6 },
+    blocks: { baseline: { status: 'OK', reason: null }, reduction: { status: 'OK', reason: null }, change_model: { status: 'NOT_REQUESTED', reason: null },
+      plan_emission: { status: 'OK', reason: null, net_added_kgco2eq: 703173, text: '이 계획으로 전력 운영탄소가 연간 703,173 kgCO2eq 늘어납니다(신축 1,548,500 kWh − 철거 0 kWh, 2020년 원단위 · 계수 0.4541). 이만큼을 줄이거나 메우면 개발 전 수준입니다.' },
+      district_heat: { status: 'NEEDS_CELL', reason: '지역난방 열은 대상지 칸 하나의 단지로 계산합니다', heat_kwh: null },
+      ordinance: { status: 'NEEDS_SITE', reason: '대지(중심 · 면적)를 정하면 용도지역 · 상한과 계획 판정을 냅니다' }, ...blocks } };
+}
+const withTargets = { ...analysis, effort: { ...analysis.effort, targets: [{ key: 'plan_added', label: '개발 증가분 상쇄', data_class: 'SCENARIO', net_added_kwh: 1548500, net_added_kgco2eq: 703173, required_reduction_kgco2eq: 703173, existing_share_kgco2eq: null, already_met: false }] } };
+const OPTIONS = { admin: [{ code: '35012650', name: '덕진구 송천1동' }], admin_geojson: { type: 'FeatureCollection', features: [] }, admin_year: 2024, zones: [], energy_years: [2025], default_grid: 'cell_1' };
+const TEAM_READY = { status: 'ready', train: '00_합본_7차' };
+const teamResult = (change: number) => ({ dataset: '52110_전주시', train: 't', snapshot: null, data_class: 'SCENARIO', note: 'n',
+  results: [{ grid: 'g1', cell: 'g1', region: null, before_year: 2021, after_year: 2028, emission_before_tco2e: 1000, floor_area_before_m2: 1, floor_area_after_m2: 2, site_kind: 'new_site', use_class: 'residential',
+    change_tco2e: change, band: {}, sources_tco2e: {}, filled: [], factors: [], warnings: [], out_of_range: [], attribution: {} }],
+  combined: { cells: ['g1'], site_kind: 'new_site', change_tco2e: change, band: { q10: 1200, q90: 5400 } },
+  area: { split: 'equal', year: 2021, cells_total: 1, seconds: 4, cells_used: [{ x: 1, y: 2, grid: 'g1', year: 2021, start: 'shared' }], cells_skipped: [], per_cell: { new: [], removed: [] } } });
+
+describe('AreaPage — 계획 한 번 넣기 → 결과 한 화면 (U3 S5)', () => {
+  afterEach(() => { vi.restoreAllMocks(); window.history.pushState({}, '', '/'); });
+
+  it('용도 줄의 합을 계획 연면적으로 /plans/evaluate에 보내고, 목표만 바꾸면 빠른 답만 · 용도 줄을 바꾸면 예측도 다시 묻고, 보고서 요청에 용도 줄을 싣는다', async () => {
+    window.history.pushState({}, '', '/area');
+    const bodies: Array<Record<string, unknown>> = [];
+    const predicts: Array<Record<string, unknown>> = [];
+    const reports: Array<Record<string, unknown>> = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/api/areas/options')) return new Response(JSON.stringify(OPTIONS));
+      if (url.endsWith('/api/areas/collection')) return new Response(JSON.stringify({ items: {}, runs: [], summary: {} }));
+      if (url.endsWith('/api/areas/analyze')) throw new Error('the page asks the bundle address now');
+      if (url.endsWith('/api/plans/evaluate')) { bodies.push(JSON.parse(String(init?.body))); return new Response(JSON.stringify(bundleOf(withTargets))); }
+      if (url.endsWith('/api/team-model/status')) return new Response(JSON.stringify(TEAM_READY));
+      if (url.endsWith('/api/team-model/predict-area')) { predicts.push(JSON.parse(String(init?.body))); return new Response(JSON.stringify(teamResult(3200))); }
+      if (url.endsWith('/api/area-reports') && init?.method === 'POST') {
+        reports.push(JSON.parse(String(init.body)));
+        return new Response(JSON.stringify({ id: 'r1', title: '보고서', created_at: '2026-11-23T00:00:00Z', area: {}, facts: [], evidence_hash: 'a'.repeat(64), summary: { mode: 'TEMPLATE', model: null, paragraphs: ['본문'], validation: 'ok', violations: [] } }));
+      }
+      if (url.endsWith('/api/area-reports')) return new Response(JSON.stringify([]));
+      return new Response('{}', { status: 404 });
+    });
+    render(<MemoryRouter><AreaPage /></MemoryRouter>);
+    await waitFor(() => expect(bodies.length).toBe(1));
+    const first = bodies[0] as { plan: { added_floor_area_m2: number }; uses_new: Array<{ floor_area_m2: number }>; uses_removed: unknown[]; years_after: number; include: string[] };
+    expect(first).toMatchObject({ uses_new: [{ use: 'residential', floor_area_m2: 50000 }], uses_removed: [], years_after: 7, plan: { added_floor_area_m2: 50000 } });
+    expect(first.uses_new.reduce((a, r) => a + r.floor_area_m2, 0)).toBe(first.plan.added_floor_area_m2);   // one floor area per plan (422 otherwise)
+    expect(first.include).not.toContain('change_model');   // 13~29 s: asked separately after the quick answer
+    // 빠른 답 뒤에 변화 모델이 같은 계획으로 한 번
+    await waitFor(() => expect(predicts.length).toBe(1));
+    expect(predicts[0]).toEqual({ region: null, grids: ['g1'], new: [{ use: 'residential', floor_area_m2: 50000 }], removed: [], years_after: 7 });
+    // 결과: 한 줄 결론은 엔진 문장, 세 범위 표는 kg → t만, 더하지 않는다는 문장
+    expect(screen.getByTestId('area-plan-headline').textContent).toContain('703,173 kgCO2eq 늘어납니다');
+    expect(screen.getByTestId('area-scope-plan_emission').textContent).toContain('+703.2');
+    expect(screen.getByTestId('area-scope-plan_emission').textContent).toContain('원단위 기반 계획 배출');
+    await waitFor(() => expect(screen.getByTestId('area-scope-change_model').textContent).toContain('+3,200 tCO₂e/년'));
+    expect(screen.getByTestId('area-scope-simulation').querySelector('a')?.getAttribute('href')).toBe('/simulation');
+    expect(screen.getByTestId('area-scopes-note').textContent).toContain('더하거나 평균하지 않습니다');
+    expect(screen.queryByTestId('area-district-heat')).toBeNull();   // NEEDS_CELL: no line
+    expect(screen.getByTestId('area-plan-received').textContent).toContain('50,000');
+
+    // 목표 %만 바꿈 → 빠른 답은 다시, 예측은 그대로
+    fireEvent.change(screen.getByLabelText('목표 감축률'), { target: { value: '30' } });
+    await waitFor(() => expect(bodies.some((b) => b.target_pct === 30)).toBe(true), { timeout: 3000 });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(predicts.length).toBe(1);
+
+    // 용도 줄을 바꿈 → 빠른 답과 예측 둘 다
+    fireEvent.change(screen.getByLabelText('신축 연면적 1'), { target: { value: '60000' } });
+    await waitFor(() => expect(bodies.some((b) => (b.plan as { added_floor_area_m2: number }).added_floor_area_m2 === 60000)).toBe(true), { timeout: 3000 });
+    const changed = bodies[bodies.length - 1] as { uses_new: Array<{ floor_area_m2: number }> };
+    expect(changed.uses_new).toEqual([{ use: 'residential', floor_area_m2: 60000 }]);
+    await waitFor(() => expect(predicts.length).toBe(2));
+    expect((predicts[1].new as Array<{ floor_area_m2: number }>)[0].floor_area_m2).toBe(60000);
+
+    // 보고서 요청에 용도 줄 · 몇 년 뒤(변화 예측 절)
+    fireEvent.click(screen.getByRole('button', { name: /현재 조건으로 보고서 작성/ }));
+    await waitFor(() => expect(reports.length).toBe(1));
+    expect(reports[0]).toMatchObject({ uses_new: [{ use: 'residential', floor_area_m2: 60000 }], uses_removed: [], years_after: 7, plan: { added_floor_area_m2: 60000 }, target_pct: 30 });
+  });
+
+  it('변화 모델 표가 없는 지역(404)이면 까닭과 원단위 기반 대신 값을 보이고, 지역난방 열은 OK일 때만 한 줄 보인다', async () => {
+    window.history.pushState({}, '', '/area');
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith('/api/areas/options')) return new Response(JSON.stringify(OPTIONS));
+      if (url.endsWith('/api/areas/collection')) return new Response(JSON.stringify({ items: {}, runs: [], summary: {} }));
+      if (url.endsWith('/api/plans/evaluate')) return new Response(JSON.stringify(bundleOf(withTargets, { district_heat: { status: 'OK', reason: null, data_class: 'ESTIMATED', text: '지역난방 열(추정): 연 1,234,000 kWh = 계획 연면적 50,000 m² × 지역난방 비중 80% × …' } })));
+      if (url.endsWith('/api/team-model/status')) return new Response(JSON.stringify(TEAM_READY));
+      if (url.endsWith('/api/team-model/predict-area')) return new Response(JSON.stringify({ detail: '이 지역은 팀 데이터셋(칸 상태 표)이 없어 변화 모델 예측을 아직 내지 못합니다(준비 중). 원단위 기반 계산 값을 참고하세요' }), { status: 404 });
+      if (url.endsWith('/api/area-reports')) return new Response(JSON.stringify([]));
+      return new Response('{}', { status: 404 });
+    });
+    render(<MemoryRouter><AreaPage /></MemoryRouter>);
+    const box = await screen.findByTestId('team-area-fallback');
+    await waitFor(() => expect(screen.getByTestId('team-area-panel').textContent).toContain('준비 중'));
+    expect(box.textContent).toContain('+703.2');
+    expect(box.textContent).toContain('2020년 관측 원단위');
+    expect(screen.getByTestId('area-scope-change_model').textContent).toContain('예측 없음');
+    expect(screen.getByTestId('area-district-heat').textContent).toContain('지역난방 열(추정): 연 1,234,000 kWh');
+  });
+
+  it('옛 링크(용도 없이 연면적만)는 용도를 짐작하지 않고 용도 줄 없이 보내며 변화 모델은 돌리지 않는다', async () => {
+    window.history.pushState({}, '', '/area?area=admin:35012650&plan=75000');
+    const bodies: Array<Record<string, unknown>> = [];
+    let predicted = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/api/areas/options')) return new Response(JSON.stringify(OPTIONS));
+      if (url.endsWith('/api/areas/collection')) return new Response(JSON.stringify({ items: {}, runs: [], summary: {} }));
+      if (url.endsWith('/api/plans/evaluate')) { bodies.push(JSON.parse(String(init?.body))); return new Response(JSON.stringify(bundleOf(withTargets))); }
+      if (url.endsWith('/api/team-model/status')) return new Response(JSON.stringify(TEAM_READY));
+      if (url.endsWith('/api/team-model/predict-area')) { predicted++; return new Response(JSON.stringify(teamResult(3200))); }
+      if (url.endsWith('/api/area-reports')) return new Response(JSON.stringify([]));
+      return new Response('{}', { status: 404 });
+    });
+    render(<MemoryRouter><AreaPage /></MemoryRouter>);
+    await waitFor(() => expect(bodies.length).toBe(1));
+    expect(bodies[0]).toMatchObject({ plan: { added_floor_area_m2: 75000 }, uses_new: [], uses_removed: [] });
+    expect(await screen.findByTestId('area-plan-undecided')).toBeInTheDocument();
+    expect((await screen.findByTestId('team-area-blocked')).textContent).toContain('용도를 짐작해 채우지 않음');
+    await new Promise((r) => setTimeout(r, 50));
+    expect(predicted).toBe(0);
+  });
+});
+
 describe('AreaPage', () => {
   afterEach(() => vi.restoreAllMocks());
 
@@ -44,7 +176,7 @@ describe('AreaPage', () => {
         return new Response(JSON.stringify({ admin: [dong[region]], admin_geojson: { type: 'FeatureCollection', features: [] }, admin_year: 2024, zones: [], energy_years: [2025], default_grid: 'cell_1' }));
       }
       if (url.endsWith('/api/areas/collection')) return new Response(JSON.stringify({ items: {}, runs: [], summary: {} }));
-      if (url.endsWith('/api/areas/analyze')) { bodies.push(JSON.parse(String(init?.body))); return new Response(JSON.stringify(analysis)); }
+      if (url.endsWith('/api/plans/evaluate')) { bodies.push(JSON.parse(String(init?.body))); return new Response(JSON.stringify(bundleOf(analysis))); }
       if (url.includes('/api/area-reports')) return new Response(JSON.stringify([]));
       return new Response('{}', { status: 404 });
     });
@@ -65,7 +197,7 @@ describe('AreaPage', () => {
       const url = String(input);
       if (url.endsWith('/api/areas/options')) return new Response(JSON.stringify({ admin: [{ code: '35011600', name: '완산구 동서학동' }, { code: '35012650', name: '덕진구 송천1동' }], admin_geojson: { type: 'FeatureCollection', features: [] }, admin_year: 2024, zones: [{ category: 'COMMERCIAL', label: '상업지역', grids: 18 }], energy_years: [2025], default_grid: 'cell_1' }));
       if (url.endsWith('/api/areas/collection')) return new Response(JSON.stringify({ items: {}, runs: [], summary: {} }));
-      if (url.endsWith('/api/areas/analyze')) { bodies.push(JSON.parse(String(init?.body))); return new Response(JSON.stringify(analysis)); }
+      if (url.endsWith('/api/plans/evaluate')) { bodies.push(JSON.parse(String(init?.body))); return new Response(JSON.stringify(bundleOf(analysis))); }
       if (url.endsWith('/api/area-reports')) return new Response(JSON.stringify([]));
       return new Response('{}', { status: 404 });
     });
@@ -89,10 +221,10 @@ describe('AreaPage', () => {
       const url = String(input);
       if (url.endsWith('/api/areas/options')) return new Response(JSON.stringify({ admin: [{ code: '35011790', name: '완산구 효자5동' }], admin_geojson: { type: 'FeatureCollection', features: [] }, admin_year: 2024, zones: [], energy_years: [2025], default_grid: 'cell_1' }));
       if (url.endsWith('/api/areas/collection')) return new Response(JSON.stringify({ items: {}, runs: [], summary: {} }));
-      if (url.endsWith('/api/areas/analyze')) {
+      if (url.endsWith('/api/plans/evaluate')) {
         const body = JSON.parse(String(init?.body)); bodies.push(body);
         const basis = body.effort_basis === 'buildings' ? 'buildings' : 'apartments';
-        return new Response(JSON.stringify({ ...analysis, effort: { ...analysis.effort, basis, baseline_mode: 'OBSERVED' } }));
+        return new Response(JSON.stringify(bundleOf({ ...analysis, effort: { ...analysis.effort, basis, baseline_mode: 'OBSERVED' } })));
       }
       if (url.endsWith('/api/area-reports')) return new Response(JSON.stringify([]));
       return new Response('{}', { status: 404 });
@@ -116,7 +248,7 @@ describe('AreaPage', () => {
       const url = String(input);
       if (url.endsWith('/api/areas/options')) return new Response(JSON.stringify({ admin: [{ code: '35012650', name: '덕진구 송천1동' }], admin_geojson: { type: 'FeatureCollection', features: [] }, admin_year: 2024, zones: [], energy_years: [2025], default_grid: 'cell_1' }));
       if (url.endsWith('/api/areas/collection')) return new Response(JSON.stringify({ items: {}, runs: [], summary: {} }));
-      if (url.endsWith('/api/areas/analyze')) return new Response(JSON.stringify({ ...analysis, history: { ...analysis.history, sgis_grid: sgis } }));
+      if (url.endsWith('/api/plans/evaluate')) return new Response(JSON.stringify(bundleOf({ ...analysis, history: { ...analysis.history, sgis_grid: sgis } })));
       if (url.endsWith('/api/area-reports')) return new Response(JSON.stringify([]));
       return new Response('{}', { status: 404 });
     });
@@ -145,9 +277,9 @@ describe('AreaPage', () => {
       if (url.endsWith('/api/areas/collection')) return new Response(JSON.stringify({ items: {}, runs: [], summary: {} }));
       if (url.includes('/api/areas/benchmark')) return new Response(JSON.stringify({ basis: 'buildings', basis_label: '건물 전체(건축HUB)', years: [2015, 2025], reference_year: 2025, count: 5, admin_total: 13, median: 40, quintiles: [30, 38, 42, 50], min: 20, max: 70, note: '위치입니다.',
         items: [20, 35, 40, 48, 70].map((v, i) => ({ code: String(i), name: `면${i}`, year: 2025, kwh_per_m2: v, area_m2: 1 })) }));
-      if (url.endsWith('/api/areas/analyze')) {
+      if (url.endsWith('/api/plans/evaluate')) {
         const body = JSON.parse(String(init?.body)); bodies.push(body);
-        return new Response(JSON.stringify({ ...analysis, effort: { ...effort, ...(body.measures ? { mix } : {}) } }));
+        return new Response(JSON.stringify(bundleOf({ ...analysis, effort: { ...effort, ...(body.measures ? { mix } : {}) } })));
       }
       if (url.endsWith('/api/area-reports')) return new Response(JSON.stringify([]));
       return new Response('{}', { status: 404 });
@@ -181,7 +313,7 @@ describe('AreaPage', () => {
       const url = String(input);
       if (url.endsWith('/api/areas/options')) return new Response(JSON.stringify({ admin: [{ code: '35012650', name: '덕진구 송천1동' }], admin_geojson: { type: 'FeatureCollection', features: [] }, admin_year: 2024, zones: [{ category: 'COMMERCIAL', label: '상업지역', grids: 18 }], energy_years: [2025], default_grid: 'cell_1' }));
       if (url.endsWith('/api/areas/collection')) return new Response(JSON.stringify({ items: {}, runs: [], summary: {} }));
-      if (url.endsWith('/api/areas/analyze')) { bodies.push(JSON.parse(String(init?.body))); return new Response(JSON.stringify(analysis)); }
+      if (url.endsWith('/api/plans/evaluate')) { bodies.push(JSON.parse(String(init?.body))); return new Response(JSON.stringify(bundleOf(analysis))); }
       if (url.endsWith('/api/area-reports')) return new Response(JSON.stringify([]));
       return new Response('{}', { status: 404 });
     });

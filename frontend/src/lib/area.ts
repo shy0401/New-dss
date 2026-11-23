@@ -5,6 +5,7 @@
  */
 import { TOKENS } from '../theme/palette';
 import type { SgisGridSummary } from '../types';
+import type { TeamUse } from './teamModel';
 
 export type AreaMode = 'admin' | 'circle' | 'polygon' | 'zone' | 'grid';
 export type ZoneCategory = 'RESIDENTIAL' | 'COMMERCIAL' | 'INDUSTRIAL' | 'GREEN' | 'OTHER';
@@ -495,16 +496,43 @@ export interface AreaReport {
   summary: { mode: 'TEMPLATE' | 'LOCAL_SLM_NARRATIVE' | 'TEMPLATE_FALLBACK'; model: string | null; paragraphs: string[]; validation: string; violations: string[]; reason?: string; rejected?: string };
 }
 
+/** 계획의 용도 줄 하나(U3 S5). use가 null이면 용도 미정(옛 링크의 연면적만): 연면적에는 들어가고 용도 줄로는 보내지 않는다. */
+export interface PlanUse { use: TeamUse | null; floor_area_m2: number; dwellings?: number }
+
+/**
+ * 계획 하나(U3 S5, 2026-11-23): 연면적의 원본은 용도 줄의 합이다. 층수 · 동수 · 동당 건축면적은 선택(0이면 보내지 않음).
+ * 셋이 모두 있으면 그 곱이 신축 합과 같아야 한다(다르면 서버가 422, 설계 Q9).
+ */
 export interface PlanState {
-  method: 'area' | 'massing';
-  added_floor_area_m2: number;
+  uses_new: PlanUse[];
+  uses_removed: PlanUse[];
   floors: number;
   building_count: number;
   footprint_per_building: number;
-  removed_floor_area_m2: number;
-  /** 연면적으로 넣을 때의 층수(선택, U4): 넣으면 지붕 = 연면적 ÷ 층수로 확정. 0이면 보내지 않음(지붕은 연면적이 위 한계). */
-  area_floors?: number;
+  /** 변화 모델의 '몇 년 뒤'(1~10). */
+  years_after: number;
 }
+
+/** 묶음 응답(/api/plans/evaluate)에서 화면이 읽는 블록. 상태가 OK가 아니면 숫자는 null(0이 아님). */
+export interface PlanBlock {
+  status: string;
+  reason: string | null;
+  data_class?: string | null;
+  text?: string | null;
+  net_added_kgco2eq?: number | null;
+  intensity_note?: string | null;
+}
+export interface PlanScope { key: string; label: string; data_class: string; scope: string; what: string }
+export interface PlanEvaluation {
+  plan: { added_floor_area_m2: number | null; removed_floor_area_m2: number | null; grid_ids: string[]; grid_count: number };
+  analysis: AreaAnalysis;
+  blocks: Record<'baseline' | 'plan_emission' | 'change_model' | 'reduction' | 'district_heat' | 'ordinance', PlanBlock>;
+  scopes: PlanScope[];
+  facts: AreaFact[];
+  timing_s: Record<string, number>;
+}
+/** 화면의 빠른 답에 쓰는 블록(변화 모델은 뺌: 13~29초라 따로, 설계 3.5 · Q1 가). */
+export const QUICK_BLOCKS = ['baseline', 'plan_emission', 'reduction', 'district_heat', 'ordinance'] as const;
 
 /** Year-keyed lookup that accepts the string keys JSON gives back. */
 export function at<T>(table: Record<string, T> | undefined, year: number): T | undefined {
@@ -538,16 +566,34 @@ export function buildSpec(mode: AreaMode, input: { code?: string; category?: str
 
 const round6 = (v: number) => Math.round(v * 1e6) / 1e6;
 
+const rowSum = (rows: PlanUse[]) => rows.reduce((a, r) => a + (r.floor_area_m2 > 0 ? r.floor_area_m2 : 0), 0);
+
+/** 계획 신축 연면적 = 용도 줄의 합(입력 그대로 더한 값). */
+export function plannedArea(plan: PlanState): number { return rowSum(plan.uses_new); }
+/** 계획 철거 연면적 = 철거 줄의 합. */
+export function plannedRemoved(plan: PlanState): number { return rowSum(plan.uses_removed); }
+
+/**
+ * 엔진 계획(`plan`): 연면적은 용도 줄의 합 하나뿐이다(용도 줄과 다른 숫자를 보내지 않음, 서버 normalize_plan).
+ * 층수는 1 이상일 때, 동수 · 동당 건축면적은 둘 다 있을 때만 보낸다.
+ */
 export function planBody(plan: PlanState): Record<string, number> {
-  const body: Record<string, number> = plan.method === 'massing'
-    ? { floors: plan.floors, building_count: plan.building_count, footprint_per_building: plan.footprint_per_building }
-    : { added_floor_area_m2: plan.added_floor_area_m2, ...(plan.area_floors && plan.area_floors >= 1 ? { floors: plan.area_floors } : {}) };
-  if (plan.removed_floor_area_m2 > 0) body.removed_floor_area_m2 = plan.removed_floor_area_m2;
+  const body: Record<string, number> = { added_floor_area_m2: plannedArea(plan) };
+  const removed = plannedRemoved(plan);
+  if (removed > 0) body.removed_floor_area_m2 = removed;
+  if (plan.floors >= 1) body.floors = plan.floors;
+  if (plan.building_count > 0 && plan.footprint_per_building > 0) { body.building_count = plan.building_count; body.footprint_per_building = plan.footprint_per_building; }
   return body;
 }
 
-export function plannedArea(plan: PlanState): number {
-  return plan.method === 'massing' ? plan.floors * plan.building_count * plan.footprint_per_building : plan.added_floor_area_m2;
+/**
+ * 용도 줄 요청(`uses_new` · `uses_removed`): 연면적이 있는 줄만. 용도 미정 줄이 하나라도 있으면 보내지 않는다
+ * (용도를 짐작해 채우지 않음 — 그 계획은 변화 모델을 돌리지 않고, 연면적은 `plan`으로만 간다). 세대수는 주거 줄에만.
+ */
+export function usesBody(rows: PlanUse[]): Array<{ use: TeamUse; floor_area_m2: number; dwellings?: number }> {
+  const filled = rows.filter((r) => r.floor_area_m2 > 0);
+  if (filled.some((r) => r.use === null)) return [];
+  return filled.map((r) => ({ use: r.use as TeamUse, floor_area_m2: r.floor_area_m2, ...(r.use === 'residential' && r.dwellings && r.dwellings > 0 ? { dwellings: r.dwellings } : {}) }));
 }
 
 /** Cohort of a complex relative to the development year being compared. */

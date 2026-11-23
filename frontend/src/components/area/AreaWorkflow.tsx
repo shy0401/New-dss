@@ -13,10 +13,13 @@ import { BASELINE_MODE_LABEL, benchmarkPosition, EFFORT_BASIS_LABEL, NO_MEASURES
 import { formatMetric } from '../../lib/format';
 import { Note } from '../Fold';
 
+/** 작업 단계(U3 S5, 설계 6.1): 구역 → 계획 넣기 → 결과 → 감축 → 배치·상한(선택) → 보고서. */
 export const AREA_STEPS = [
   { id: 'area-step-area', label: '구역 고르기' },
-  { id: 'area-step-plan', label: '계획·목표' },
+  { id: 'area-step-plan', label: '계획 넣기' },
+  { id: 'area-step-result', label: '결과' },
   { id: 'area-step-measures', label: '감축 방안' },
+  { id: 'area-step-site', label: '배치·상한 (선택)' },
   { id: 'area-step-report', label: '보고서' },
 ] as const;
 
@@ -54,7 +57,7 @@ export function AreaSummaryBar({ analysis, running, bench }: { analysis: AreaAna
         <Kpi label="기준 배출" value={t1(e.baseline_kgco2eq)} sub={`${e.baseline_year}년 ${BASELINE_MODE_LABEL[e.baseline_mode ?? 'OBSERVED']} · ${e.basis === 'kcsm' ? '건물 전체(탄소공간지도)' : e.basis === 'buildings' ? '건물 전체' : '공동주택'}${e.fallback_from ? '(자동 전환)' : ''}`} />
         <Kpi label="계획 반영 (대책 없음)" value={t1(e.bau_kgco2eq)} sub={`목표 ${formatMetric(e.target_pct, '%')} 감축선 ${t1(e.target_kgco2eq)}`} />
         <Kpi label="필요 감축량" value={e.already_met ? '불필요' : t1(e.required_reduction_kgco2eq)} sub="연간 · 전력 운영탄소" tone={e.already_met ? 'good' : undefined} />
-        <Kpi label={e.mix ? '감축 수단 조합' : '구체적 감축 방안'} value={mix ? t1(mix.total_kgco2eq) : '—'} sub={mix ? (mix.met ? '목표 달성' : `${t1(mix.gap_kgco2eq)} 부족`) : '3단계에서 확인'} tone={mix ? (mix.met ? 'good' : 'warn') : undefined} />
+        <Kpi label={e.mix ? '감축 수단 조합' : '구체적 감축 방안'} value={mix ? t1(mix.total_kgco2eq) : '—'} sub={mix ? (mix.met ? '목표 달성' : `${t1(mix.gap_kgco2eq)} 부족`) : '4단계에서 확인'} tone={mix ? (mix.met ? 'good' : 'warn') : undefined} />
         <Kpi label="같은 시·군 비교" value={position ? position.text : '—'} sub={position ? `원단위 낮은 쪽부터${position.pos.quintile ? ` · ${position.pos.quintile}/5분위` : ''}` : '같은 연도·기준 관측일 때만'} />
       </> : analysis ? <Kpi label="감축 노력" value="계산 근거 없음" sub={e?.reason ?? '목표를 넣으면 계산합니다'} tone="warn" /> : null}
     </dl>

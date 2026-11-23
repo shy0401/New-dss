@@ -4,9 +4,12 @@
  *
  * 시뮬레이션: /simulation?region=52110&grid=cell_966500_1764500&site=127.13219,35.880124,0&site_area=40000&building_count=10&…
  * 지역 시뮬레이션: /area?region=52110&area=admin:35012650&from=2015&to=2025&plan=90000&target=20&basis=apartments
+ *   용도 줄(U3 S5): `uses=residential:60000:500,commercial:30000`(용도:연면적[:세대]) · `ruses=commercial:2000` · `years=5` ·
+ *   `floors=20` · `buildings=5` · `footprint=800`. `plan` · `removed`는 줄의 합이고, 용도 줄이 없는 옛 링크는 그 합을 '용도 미정' 한 줄로 받는다.
  */
 import type { ScenarioInput } from '../types';
-import type { AreaMode, AreaSpec, EffortBasis, MeasuresState, PlanState } from './area';
+import { usesBody, plannedArea, plannedRemoved, type AreaMode, type AreaSpec, type EffortBasis, type MeasuresState, type PlanState, type PlanUse } from './area';
+import { TEAM_USES, type TeamUse } from './teamModel';
 
 /** The original study region. The analysis scope keeps it as null; a link always names a region so it opens the same place. */
 export const DEFAULT_REGION = '52110';
@@ -80,6 +83,20 @@ export function scenarioLink(input: ScenarioInput, site: { lon: number; lat: num
 }
 
 const MODES: AreaMode[] = ['admin', 'circle', 'zone', 'grid'];
+const USE_KEYS = new Set<string>(TEAM_USES.map(([k]) => k));
+
+/** `residential:60000:500,commercial:30000` → 용도 줄(1~4줄). 하나라도 읽을 수 없으면 undefined(옛 `plan` 합으로). */
+function parseUses(value: string | null): PlanUse[] | undefined {
+  if (!value) return undefined;
+  const rows = value.split(',').map((part): PlanUse | null => {
+    const [use, area, dwellings] = part.split(':');
+    const floor = Number(area); const d = dwellings === undefined ? undefined : Number(dwellings);
+    if (!USE_KEYS.has(use) || !Number.isFinite(floor) || floor <= 0 || floor > 3_000_000) return null;
+    return { use: use as TeamUse, floor_area_m2: floor, ...(use === 'residential' && d !== undefined && Number.isFinite(d) && d > 0 && d <= 50_000 ? { dwellings: d } : {}) };
+  });
+  return rows.length >= 1 && rows.length <= 4 && rows.every((r) => r !== null) ? (rows as PlanUse[]) : undefined;
+}
+const usesText = (rows: ReturnType<typeof usesBody>) => rows.map((r) => `${r.use}:${r.floor_area_m2}${r.dwellings ? `:${r.dwellings}` : ''}`).join(',');
 
 /** `area=admin:35012650 | grid:cell_… | circle:lon,lat,radius | zone:COMMERCIAL` and the analysis inputs. */
 export function parseAreaLink(search: string): AreaLink | null {
@@ -110,7 +127,19 @@ export function parseAreaLink(search: string): AreaLink | null {
   const window = num(params.get('window'));
   if (window && window >= 1 && window <= 5) link.window = window;
   const added = num(params.get('plan')); const removed = num(params.get('removed'));
-  if (added !== undefined || removed !== undefined) link.plan = { method: 'area', ...(added !== undefined ? { added_floor_area_m2: added } : {}), ...(removed !== undefined ? { removed_floor_area_m2: removed } : {}) };
+  // 용도 줄이 없는 옛 링크: 합을 '용도 미정' 한 줄로(주거로 짐작하지 않음, 설계 2.1)
+  const usesNew = parseUses(params.get('uses')) ?? (added !== undefined && added >= 0 ? [{ use: null, floor_area_m2: added }] : undefined);
+  const usesRemoved = parseUses(params.get('ruses')) ?? (removed !== undefined && removed > 0 ? [{ use: null, floor_area_m2: removed }] : undefined);
+  const plan: Partial<PlanState> = {};
+  if (usesNew) plan.uses_new = usesNew;
+  if (usesRemoved) plan.uses_removed = usesRemoved;
+  const years = num(params.get('years'));
+  if (years !== undefined && Number.isInteger(years) && years >= 1 && years <= 10) plan.years_after = years;
+  for (const [key, field] of [['floors', 'floors'], ['buildings', 'building_count'], ['footprint', 'footprint_per_building']] as const) {
+    const v = num(params.get(key));
+    if (v !== undefined && v > 0) plan[field] = v;
+  }
+  if (Object.keys(plan).length) link.plan = plan;
   const target = num(params.get('target'));
   if (target !== undefined && target >= 0 && target <= 100) link.target = target;
   const pv = num(params.get('pv'));
@@ -134,13 +163,20 @@ export function areaLink(spec: AreaSpec | null, a: { region: string | null; from
   params.set('from', String(a.from)); params.set('to', String(a.to));
   if (a.event) params.set('event', String(a.event));
   params.set('window', String(a.window));
-  if (a.plan.method === 'area') params.set('plan', String(a.plan.added_floor_area_m2));
-  else params.set('plan', String(a.plan.floors * a.plan.building_count * a.plan.footprint_per_building));
-  if (a.plan.removed_floor_area_m2 > 0) params.set('removed', String(a.plan.removed_floor_area_m2));
+  params.set('plan', String(plannedArea(a.plan)));
+  if (plannedRemoved(a.plan) > 0) params.set('removed', String(plannedRemoved(a.plan)));
   params.set('target', String(a.target));
   if (a.pv && Number(a.pv) > 0) params.set('pv', a.pv);
   params.set('basis', a.basis);
   const m = a.measures;
   if (m && (m.new_efficiency_pct > 0 || m.existing_efficiency_pct > 0 || m.pv_kw > 0)) params.set('mx', `${m.new_efficiency_pct},${m.existing_efficiency_pct},${m.pv_kw}`);
+  // 용도 줄 · 몇 년 뒤 · 건물 모양(U3 S5): 있을 때만 뒤에 붙인다(옛 링크와 앞부분이 같음)
+  const usesNew = usesBody(a.plan.uses_new); const usesRemoved = usesBody(a.plan.uses_removed);
+  if (usesNew.length) params.set('uses', usesText(usesNew));
+  if (usesRemoved.length) params.set('ruses', usesText(usesRemoved));
+  if (a.plan.years_after !== 7) params.set('years', String(a.plan.years_after));
+  if (a.plan.floors > 0) params.set('floors', String(a.plan.floors));
+  if (a.plan.building_count > 0) params.set('buildings', String(a.plan.building_count));
+  if (a.plan.footprint_per_building > 0) params.set('footprint', String(a.plan.footprint_per_building));
   return `/area?${readable(params)}`;
 }
