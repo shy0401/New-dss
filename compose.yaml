@@ -9,8 +9,9 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     # 2026-11-24: 첫 지역 조회 때 DB 파일 캐시가 이 컨테이너 몫으로 21 GB까지 쌓였다(프로세스 자체는 공유 버퍼 128 MB).
-    # 한도를 걸면 캐시만 줄어든다(꺼지지 않음, 관측 최대 2.7 GB에서도 조회 정상). PC 크기와 무관한 상한(docs/TEAM_SETUP.md 1절)
-    mem_limit: 3g
+    # 한도를 걸면 캐시만 줄어든다(꺼지지 않음). 작업 중 VM 파일 캐시의 대부분(3.4 GB 중 2.9 GB)이 이 컨테이너 몫.
+    # 2 GB는 3 GB와 첫 조회 시간 차이가 측정 오차 안, 1.5 GB부터 큰 지도가 3~5초 느려짐(docs/records/2026-11-24-wsl-dropcache.md)
+    mem_limit: 2g
     healthcheck:
       test: [CMD-SHELL, pg_isready -U carbon -d carbon]
       interval: 5s
