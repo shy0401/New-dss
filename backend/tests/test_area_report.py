@@ -165,3 +165,130 @@ def test_markdown_section_and_table_counts_stay_the_same_with_key_results(monkey
     without = area_report.area_markdown(_snapshot_for_html())
     assert with_key.count('\n## ') == without.count('\n## ') and with_key.count('\n| ') == without.count('\n| ')
     assert '- 필요 감축량: 1.0 tCO2eq/년' in with_key and '공동주택 전력 kWh (K-apt' in with_key
+
+
+# U3 S2 (2026-11-23): the team change model section of the area report (design u3-plan-bundle 5.2 · 5.3 · 5.4)
+def _change_block(change=1500.4, status='OK', **extra):
+    block = {'status': status, 'reason': None if status == 'OK' else '이 지역은 팀 데이터셋(칸 상태 표)이 없어 변화 모델 예측을 아직 내지 못합니다(준비 중)',
+             'data_class': 'SCENARIO', 'change_tco2e': change if status == 'OK' else None,
+             'reading': ('direction' if abs(change) < 1000 else 'value') if status == 'OK' else None,
+             'band_q10_tco2e': 1200.0, 'band_q25_tco2e': 1300.0, 'band_q75_tco2e': 1700.0, 'band_q90_tco2e': 5400.0,
+             'sources_tco2e': {'elec_tco2e_total': 900.0}, 'emission_before_tco2e': 2000.0, 'state_year': 2021, 'after_year': 2028, 'years_after': None,
+             'cells_total': 3, 'cells_used': 2, 'cells_skipped': 1,
+             'cells': [{'grid': 'cell_1000_2000', 'start': 'shared'}, {'grid': 'cell_1500_2000', 'start': 'empty'}],
+             'model': {'name': 'HistGradientBoosting 변화 모델', 'train': '00_합본_7차'}, 'small_text': '1천 tCO₂e 미만 개발은 방향만 읽음(교차검증 방향 0.67)',
+             'accuracy_row': {'band': '교차검증 2~9칸 개발', 'cases': 100, 'median_error': 0.27, 'within_50pct': 0.78, 'sum_ratio': 1.0},
+             'requirement_text': '요구 수준 대비 조금 못 미침', 'filled': ['층수 없음: 지역 중앙값'], 'warnings': [], 'out_of_range': []}
+    block.update(extra)
+    return block
+
+
+EFFORT_ADDED = {'baseline_year': 2025, 'targets': [{'key': 'plan_added', 'net_added_kgco2eq': 584700.0, 'text': '증가분 문장'}]}
+PLAN = {'added_floor_area_m2': 30000.0, 'removed_floor_area_m2': 0.0}
+
+
+def test_change_value_sentence_carries_band_model_and_train_and_its_direction_is_checked():
+    from app.area_report import change_model_facts, verify_narrative
+    facts = change_model_facts(_change_block(1500.4), EFFORT_ADDED, PLAN)
+    assert [f['id'] for f in facts] == ['change_model_scope', 'change_model_value', 'change_model_accuracy', 'change_model_cells']
+    value = facts[1]['text']
+    assert '1,500.4 tCO2e 늘어나는' in value and '80% 구간 1,200.0 ~ 5,400.0' in value and 'HistGradientBoosting' in value and '00_합본_7차' in value
+    assert '2021년 상태에서 7년 뒤(2028년)' in value and '신축 30,000 m²' in value
+    assert '증가를 감소로 서술' in verify_narrative('건물 배출이 연간 1,500.4 tCO2e 감소합니다.', facts)
+    assert verify_narrative('건물 배출이 연간 1,500.4 tCO2e 증가합니다.', facts) == []
+    assert facts[3]['text'] == '칸 3개 중 1개는 기준 해 자료가 없거나 결함 표시라 뺐고, 1개는 건물이 없는 빈 땅으로 보고 시작했습니다(추정). 연면적은 쓴 칸 2개에 같게 나눴습니다.'
+    assert facts[3]['numbers'] == [3, 1, 1, 2]
+    only_skipped = change_model_facts(_change_block(1500.4, cells=[{'start': 'shared'}]), EFFORT_ADDED, PLAN)[-1]
+    assert only_skipped['text'] == '칸 3개 중 1개는 기준 해 자료가 없거나 결함 표시라 뺐습니다. 연면적은 쓴 칸 2개에 같게 나눴습니다.' and only_skipped['numbers'] == [3, 1, 2]
+
+
+def test_change_below_1000_keeps_only_the_direction_in_sentences_and_storage():
+    from app.area_report import change_model_facts, stored_change_block, verify_narrative
+    facts = change_model_facts(_change_block(-640.2), EFFORT_ADDED, PLAN)
+    text = ' '.join(f['text'] for f in facts)
+    assert [f['id'] for f in facts] == ['change_model_scope', 'change_model_direction', 'change_model_cells']
+    assert '줄어드는 방향' in text and '640' not in text and '1,200' not in text and '5,400' not in text
+    assert any('근거에 없는 숫자' in p for p in verify_narrative('건물 배출이 640.2 tCO2e 줄어듭니다.', facts))
+    stored = stored_change_block(_change_block(-640.2))
+    assert stored['direction'] == -1 and stored['change_tco2e'] is None and stored['band_q90_tco2e'] is None and stored['sources_tco2e'] is None
+
+
+def test_missing_prediction_gives_the_reason_and_the_intensity_increase_of_the_same_field():
+    from app.area_report import change_model_facts
+    facts = change_model_facts(_change_block(status='NO_TEAM_TABLE_REGION'), EFFORT_ADDED, PLAN)
+    missing = facts[-1]
+    assert missing['id'] == 'change_model_missing' and missing['numbers'] == [584700, 2025]
+    assert missing['text'].startswith('이 지역은 팀 데이터셋') and '584,700 kgCO2eq' in missing['text'] and '범위가 다른 값' in missing['text']
+    no_increase = change_model_facts(_change_block(status='NO_TEAM_TABLE_REGION'), {'targets': [{'key': 'plan_added', 'net_added_kgco2eq': -10.0}]}, PLAN)
+    assert no_increase[-1]['numbers'] == [] and 'kgCO2eq' not in no_increase[-1]['text']
+
+
+def _report_with_change(block):
+    from app.area_report import _insert_change_facts, change_model_facts, stored_change_block
+    s = _snapshot_for_html()
+    s['effort'] = dict(s['effort'], **EFFORT_ADDED)
+    s['facts'] = _insert_change_facts(s['facts'], change_model_facts(block, s['effort'], PLAN))
+    s['change_model'] = stored_change_block(block)
+    s['summary']['paragraphs'] = [f['text'] for f in s['facts']]
+    return s
+
+
+def test_report_section_3_1_key_rows_and_markdown_section():
+    from app.area_report import area_html, area_markdown, facts_prompt, key_results
+    s = _report_with_change(_change_block(1500.4))
+    html = area_html(s)
+    assert html.index('2. 온실가스 배출 현황') < html.index('3-1. 계획 반영 뒤 변화 예측') < html.index('4. 감축 목표와 필요 감축량')
+    section = html[html.index('3-1.'):html.index('4. 감축 목표')]
+    assert '1,500.4 tCO2e 늘어나는' in section and '두 값은 범위가 달라' in section and '층수 없음: 지역 중앙값' in section
+    key = dict(key_results(s))
+    assert key['개발 증가분(원단위 · 전력)'].startswith('584.7 tCO2eq/년')
+    assert key['변화 모델 예측(다른 범위, 더하지 않음)'].startswith('+1,500.4 tCO2e/년, 80% 구간 1,200.0 ~ 5,400.0')
+    md = area_markdown(s)
+    assert '## 변화 예측 (팀 변화 모델, 시나리오)' in md and '| 개발 증가분(원단위 · 전력) | 584.7' in md
+    assert 'change_model' not in facts_prompt(s['facts'])  # the local summary is not written from these sentences
+    small = _report_with_change(_change_block(-640.2))
+    assert '640' not in area_html(small) and '640' not in area_markdown(small)
+    assert dict(key_results(small))['변화 모델 예측(다른 범위, 더하지 않음)'].startswith('줄어드는 방향')
+
+
+def test_public_view_drops_the_change_model_section():
+    from app.area_report import public_view
+    s = _report_with_change(_change_block(1500.4))
+    out = public_view(s)
+    assert 'change_model' not in out and not any(f['id'].startswith('change_model') for f in out['facts'])
+    assert not any('팀 변화 모델' in p for p in out['summary']['paragraphs'])
+    assert 'change_model' in s  # the stored report is not changed
+
+
+def test_snapshot_asks_the_change_model_only_with_use_lines_and_never_on_the_public_gateway(monkeypatch):
+    import contextlib
+
+    import pytest
+    from app import area_report, plan_bundle
+    calls = []
+
+    def fake_analyze(db, spec, *args, **kwargs):
+        area = {'label': '구역', 'geometry': None, 'grid_ids': ['cell_1000_2000', 'cell_1500_2000']}
+        return {'history': {'area': area, 'years': [2025]}, 'before_after': None, 'effort': dict(EFFORT_ADDED, available=True),
+                'facts': list(FACTS), 'region': {'code': '52110'}}
+
+    def fake_block(body, grid_ids, region, request, fallback_text):
+        calls.append((grid_ids, region, fallback_text))
+        return _change_block(1500.4)
+    monkeypatch.setattr(area_report, 'analyze', fake_analyze)
+    monkeypatch.setattr(area_report, 'Session', lambda: contextlib.nullcontext(None))
+    monkeypatch.setattr(plan_bundle, 'change_model_block', fake_block)
+    base = {'area': {'type': 'grid', 'grid_id': 'cell_1_1'}, 'from_year': 2024, 'to_year': 2025}
+    uses = [{'use': 'residential', 'floor_area_m2': 30000}]
+    plain = area_report._snapshot(area_report.AreaReportInput(**base))
+    assert 'change_model' not in plain and not calls
+    with_uses = area_report._snapshot(area_report.AreaReportInput(**base, uses_new=uses))
+    assert calls == [(['cell_1000_2000', 'cell_1500_2000'], '52110', '증가분 문장')]
+    assert with_uses['change_model']['change_tco2e'] == 1500.4 and with_uses['request']['uses_new'][0]['floor_area_m2'] == 30000
+    assert [f['id'] for f in with_uses['facts']][:3] == ['latest_energy', 'change', 'change_model_scope']  # after the section-3 sentence
+    assert with_uses['evidence_hash'] != plain['evidence_hash']
+    area_report._snapshot(area_report.AreaReportInput(**base, uses_new=uses), public=True)
+    off = area_report._snapshot(area_report.AreaReportInput(**base, uses_new=uses, include_change_model=False))
+    assert len(calls) == 1 and 'change_model' not in off
+    with pytest.raises(ValueError):
+        area_report._snapshot(area_report.AreaReportInput(**base, plan={'added_floor_area_m2': 10000}, uses_new=uses))
