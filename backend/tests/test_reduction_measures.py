@@ -27,6 +27,10 @@ def test_catalog_has_every_field_a_reader_needs_and_matches_the_ladder_constants
     table = {m["key"]: m for m in MEASURES}
     assert table["envelope"]["value"] == ENVELOPE_GAS_SAVING and table["envelope"]["range"] == ENVELOPE_GAS_SAVING_RANGE
     assert table["operation"]["value"] == OPERATION_ELECTRICITY_SAVING and table["operation"]["range"] == OPERATION_ELECTRICITY_SAVING_RANGE
+    # 글자로 적힌 지표도 같은 상수에서(2026-11-24: 숫자만 시험하고 글자는 안 보던 곳)
+    from app.reduction_plan import GREEN_UPTAKE_KG_PER_M2, ROOF_M2_PER_KW, ROOF_USABLE_RATIO
+    assert f"옥상의 {ROOF_USABLE_RATIO * 100:.0f}% · {ROOF_M2_PER_KW:g} m²/kW" in table["rooftop_pv"]["indicator"]
+    assert f"연 {GREEN_UPTAKE_KG_PER_M2:.1f} kgCO2" in table["greenery"]["indicator"]
     # 사다리에는 실측 지표와 가정(태양광·녹지)만: 설계·계산과 기업 발표 값은 '지표만' 또는 내재탄소 참고
     assert {m["key"] for m in MEASURES if m["use"] == "ladder"} == {"envelope", "rooftop_pv", "greenery"}   # 운영은 2026-11-20부터 지표만
     assert all(m["evidence"] in ("measured", "agency") for m in MEASURES if m["use"] == "alone")

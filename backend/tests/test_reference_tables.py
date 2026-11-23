@@ -142,8 +142,19 @@ def test_asos_station_is_the_regions_own_asos_station_only():
     assert asos_station("41360") is None          # 541 남양주: 평년값 지점이지만 ASOS 일자료 없음
     # 대구: 가이드 지점 860(평년값, ASOS 일자료 없음) → 같은 시 ASOS 143 (2026-11-24). 구 · 군 모두
     assert all(asos_station(c) == ("143", "대구") for c in ("27110", "27170", "27200", "27290", "27710", "27720"))
-    assert asos_station("44800") is None          # 홍성: 가이드는 서산 129(다른 시) → 손정리(region_prepare.ASOS_STATIONS)로 177
-    from app.region_prepare import ASOS_STATIONS
-    assert ASOS_STATIONS["44800"] == ("177", "홍성")
+    assert asos_station("44800") == ("177", "홍성")   # 손정리 덮어쓰기(가이드는 서산 129, 다른 시)
     assert asos_station("12190") is None          # 다른 도시 대표 지점(목포)으로 이어진 곳
     assert asos_station(None) is None and asos_station("99999") is None
+
+
+def test_asos_overrides_are_the_one_station_rule_and_only_three_are_needed():
+    """2026-11-24: 손정리(region_prepare)를 reference_tables.ASOS_OVERRIDES로 옮겨 지점 고르는 규칙을 한 곳에 둠.
+    덮어쓰기 13곳 모두 asos_station이 그대로 돌려주고, 가이드 표만으로 다른 곳은 세종 · 순창 · 홍성 셋(까닭은 표 주석)."""
+    from app.reference_tables import ASOS_OVERRIDES, asos_station, guide_asos_station
+    from app.region_prepare import ASOS_STATIONS
+    assert ASOS_STATIONS is ASOS_OVERRIDES and len(ASOS_OVERRIDES) == 13
+    assert all(asos_station(code) == station for code, station in ASOS_OVERRIDES.items())
+    differ = {code for code, station in ASOS_OVERRIDES.items() if guide_asos_station(code) != station}
+    assert differ == {"36110", "52770", "44800"}
+    assert guide_asos_station("36110") is None and guide_asos_station("44800") is None   # 평년값 AWS 611 · 다른 시 129
+    assert guide_asos_station("52770") == ("254", "순창군")                                 # 같은 지점, 이름만 다름

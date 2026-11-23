@@ -74,9 +74,25 @@ def use_intensity(region_code: str | None, use_class: str) -> dict[str, Any] | N
 ASOS_MAPPINGS = ("지점 있음", "광역시 지점")
 # 평년값 지점 번호가 ASOS가 아닌데 같은 시에 ASOS가 있는 곳(2026-11-24): 대구 평년값 860(신암, ASOS 일자료 0행) → ASOS 143(응답 지점명 '대구')
 NORMALS_TO_ASOS = {"860": ("143", "대구")}
+# 손정리 덮어쓰기(2026-11-16 · 11-24, region_prepare에서 옮김 2026-11-24): 같은 시 · 군 안의 ASOS. 가이드 표보다 먼저 쓴다.
+# 가이드 표로는 안 되는 곳은 셋 — 세종(가이드 지점 611 세종연서는 평년값 AWS), 순창(가이드 이름 '순창군'이라 응답 지점명 '순창'과
+# 어긋남), 홍성(가이드는 평년값이 없어 서산 129, 다른 시). 나머지 10곳은 가이드 결과와 같고 처음 손정리(11-16) 그대로 둔다.
+ASOS_OVERRIDES: dict[str, tuple[str, str]] = {
+    "11740": ("108", "서울"), "26440": ("159", "부산"), "36110": ("239", "세종"), "41110": ("119", "수원"),
+    "52130": ("140", "군산"), "52180": ("245", "정읍"), "52190": ("247", "남원"), "52740": ("248", "장수"),
+    "52750": ("244", "임실"), "52770": ("254", "순창"), "52790": ("172", "고창"), "52800": ("243", "부안"),
+    "44800": ("177", "홍성"),
+}
 
 
 def asos_station(code: str | None) -> tuple[str, str] | None:
+    """(ASOS 지점 번호, 지점 이름) the region weather step uses: the hand override (ASOS_OVERRIDES), else the guide rule."""
+    if not code:
+        return None
+    return ASOS_OVERRIDES.get(str(code)) or guide_asos_station(code)
+
+
+def guide_asos_station(code: str | None) -> tuple[str, str] | None:
     """(ASOS 지점 번호, 지점 이름) of the region's own city (regional_climate_guide.csv, 기상청 평년값 지점 연결), or None.
 
     Only ASOS stations: 평년값 지점 번호 300 이상(방재 AWS 등)은 ASOS 일자료 API가 0행을 줌(2026-11-21 시험: 541 남양주 · 572 성남 ·
