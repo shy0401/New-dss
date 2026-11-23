@@ -38,7 +38,7 @@ def build_cell_state_command(args):
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('command',choices=['demo','online','status','enrich','collect','collect-history','collect-missing','validate-models','snapshot','llm-dataset','llm-eval','import-sgis-grid','import-sgis-grid500','import-regional-stats','import-team-grid','import-kcsm100',
         'national-admin','national-sgis','national-complexes','national-grid500','national-ordinances','national-all','prepare-region','regions',
-        'check-standard','apply-standard','backfill-solar','region-energy-history','region-kapt-history','region-sgis-history','verify-cases','place-parcels','estimate-gaps','fetch-kea-rating','prepare-national','build-cell-state']);parser.add_argument('--year',type=int,default=DEFAULT_YEAR)
+        'check-standard','apply-standard','backfill-solar','region-energy-history','region-kapt-history','region-sgis-history','verify-cases','place-parcels','repick-default-grid','estimate-gaps','fetch-kea-rating','prepare-national','build-cell-state']);parser.add_argument('--year',type=int,default=DEFAULT_YEAR)
     parser.add_argument('--from',dest='from_year',type=int,default=2015);parser.add_argument('--to',dest='to_year',type=int,default=DEFAULT_YEAR)
     parser.add_argument('--datasets',default='',help='comma-separated: sgis,kma_asos,kapt_energy,energy,vworld_zoning,vworld_buildings,vworld_cadastral,building_register');parser.add_argument('--force',action='store_true')
     parser.add_argument('--source',choices=['energy','weather','kapt-energy','kma','sgis','vworld-zoning','vworld-cadastral'])
@@ -201,6 +201,28 @@ def main():
             years=[int(y) for y in (args.years or '').split(',') if y.strip()] or list(range(2015,DEFAULT_YEAR))
             for code in [r.strip() for r in (args.region or '').split(',') if r.strip()]:
                 print(json.dumps(collect_sgis_years(db,code,years,log=lambda m:print(m,flush=True)),ensure_ascii=False,default=str),flush=True)
+        elif args.command=='repick-default-grid':
+            # 기본 대상지를 "전력 · 가스가 모두 관측된 격자 중 세대수 최다"로 다시 고름(2026-11-23 D5). 기본은 보기만, --force로 저장
+            from .kapt import ApartmentComplex
+            from .region_prepare import pick_default_grid
+            from .regions import StudyRegion
+            codes=[r.strip() for r in (args.region or '').split(',') if r.strip()]
+            regions=[r for r in db.scalars(select(StudyRegion).where(StudyRegion.status=='READY')) if not codes or r.code in codes]
+            complexes=list(db.scalars(select(ApartmentComplex).where(ApartmentComplex.grid_id.is_not(None))))
+            all_complexes=list(db.scalars(select(ApartmentComplex)))  # once for every region (floor areas, households)
+            from .regions import region_grid_ids
+            from .regions import DEFAULT_REGION
+            for region in sorted(regions,key=lambda r:r.code):
+                if region.code==DEFAULT_REGION:print(json.dumps({'region':region.code,'skip':'원래 지역은 첫 화면이 시험 대상지(TestbedSector)를 씀'},ensure_ascii=False),flush=True);continue
+                ids=region_grid_ids(db,region.code);hh={}
+                for c in complexes:
+                    if c.grid_id in ids and region.legal_codes and (c.bjd_code or '')[:5] in region.legal_codes:hh[c.grid_id]=hh.get(c.grid_id,0)+(c.households or 0)
+                if not hh:print(json.dumps({'region':region.code,'skip':'K-apt 단지 없음'},ensure_ascii=False),flush=True);continue
+                grid,reason=pick_default_grid(db,region,hh,args.year,all_complexes)
+                changed=grid!=region.default_grid_id
+                print(json.dumps({'region':region.code,'before':region.default_grid_id,'after':grid,'changed':changed,'reason':reason,'saved':bool(changed and args.force)},ensure_ascii=False),flush=True)
+                if changed and args.force:region.default_grid_id=grid;db.commit()
+            if args.force:print('저장함. api가 지역 입력을 메모리에 두므로 api를 다시 켜야 첫 화면에 반영됨',flush=True)
         elif args.command=='place-parcels':
             # 지적도에 없는 건축HUB 계량 지번을 격자에 넣기: 같은 본번 → (그래도 없으면) VWorld 주소 좌표. --region 52110,41110 (없으면 모든 지역)
             from .energy_parcels import place_by_address,place_missing_parcels
