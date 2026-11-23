@@ -15,15 +15,17 @@ Git 저장소에는 **코드와 문서만** 있다. PostgreSQL/PostGIS DB, 원�
 
 ### Docker 메모리 (2026-11-24)
 PC 크기에 맞춰 한도를 거는 대신, 각 컨테이너가 쓸데없이 쥐고 있는 메모리를 줄였다. 기본값 그대로 노트북에서도 같은 동작을 한다.
-- 컨테이너 안에서 줄인 것(설정 필요 없음): 무거운 요청 · 작업 · 팀 모델 학습이 끝나면 해제된 메모리를 바로 운영체제에 돌려줌(`backend/app/memtrim.py`), postgres는 DB 파일 캐시만 3 GB에서 멈춤(`compose.yaml`), 워커 프로세스는 작업 50개마다 새로 띄움
+- 컨테이너 안에서 줄인 것(설정 필요 없음): 무거운 요청 · 작업 · 팀 모델 학습이 끝나면 해제된 메모리를 바로 운영체제에 돌려줌(`backend/app/memtrim.py`), postgres는 DB 파일 캐시만 2 GB에서 멈춤(`compose.yaml`), 워커 프로세스는 작업 50개마다 새로 띄움
 - 관측(지역 3곳 계획 평가 + 대시보드 2곳): api는 끝난 뒤 1.27 → 0.80 GB, 계산 중 최대 1.8 GB. postgres 최대 2.5 GB. 팀 모델 · 워커는 [기록](records/2026-11-24-docker-memory-trim.md)
 
-Docker Desktop(WSL2)은 쓰고 난 메모리(특히 파일 캐시)를 윈도우에 바로 돌려주지 않는다. 사용자 폴더(`%UserProfile%`)의 `.wslconfig`에 아래를 두면 천천히 돌려준다(WSL 2.0 이상, `wsl --version`). 넣은 뒤 `wsl --shutdown` → Docker Desktop 실행.
+작업 관리자의 `VmmemWSL`은 WSL2 가상 머신 전체(이 도구의 컨테이너 + 그 안의 리눅스 파일 캐시)다. 작업 중 늘어나는 몫은 대부분 postgres가 읽은 DB 파일 캐시이고, Docker Desktop은 이것을 윈도우에 바로 돌려주지 않는다. 사용자 폴더(`%UserProfile%`)의 `.wslconfig`에 아래를 두면 쉬는 동안 돌려준다(WSL 2.0 이상, `wsl --version`). 넣은 뒤 `wsl --shutdown` → Docker Desktop 실행.
 
 ```ini
 [experimental]
-autoMemoryReclaim=gradual
+autoMemoryReclaim=dropcache
 ```
+
+- `dropcache`: 쉬기 시작하고 약 11분 뒤 캐시를 한 번에 버림(관측 4.3 → 0.6 GB, `VmmemWSL` 7.7 → 5.1 GB). `gradual`: 약 4분 뒤부터 1분에 0.3 GB씩 돌려줌(10분 뒤 캐시 2.0 GB, `VmmemWSL` 5.6 GB). 둘 다 쉬고 난 뒤 첫 조회가 눈에 띄게 느려지지 않음(api가 자체 캐시로 답하고, NVMe에서 DB를 다시 읽는 몫은 작음)
 
 - `[wsl2] memory=`(VM 한도)는 **두지 않는 것을 권한다.** 8 GB로 걸어 본 결과, 측정용 프로세스가 잠깐 늘자 놀던 팀 모델 1.1 GB가 스왑(디스크)으로 밀려났다(다음 예측이 느려짐). 기본값은 PC 메모리의 절반이라 16 GB 노트북이면 8 GB
 - 이 파일은 PC의 모든 WSL 배포판에 함께 적용된다
