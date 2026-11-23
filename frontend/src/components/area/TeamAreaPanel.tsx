@@ -14,7 +14,10 @@ interface UseRow { use: TeamUse; floor: string; dwellings: string }
  * 지역 화면: 고른 구역 전체를 한 개발로 보고 팀 변화 모델로 배출 변화를 추정한다(모델 로드맵 7-B2).
  * 용도별 합계를 구역의 쓸 수 있는 500m 칸에 같게 나눠 칸마다 예측하고 더한다(기록 41절). 이 PC 화면에서만(공개 주소에서는 숨김).
  */
-export function TeamAreaPanel({ grids, region, plannedFloor, plannedRemoved }: { grids: string[]; region: string | null; plannedFloor: number; plannedRemoved: number }) {
+/** 변화 모델이 답하지 못할 때 대신 보일 값: 이 계획으로 늘어나는 전력 운영탄소(원단위 기반 계산, U4 `plan_added`). */
+export interface IntensityFallback { netAddedKgco2eq: number | null; baselineYear: number | null }
+
+export function TeamAreaPanel({ grids, region, plannedFloor, plannedRemoved, fallback = null }: { grids: string[]; region: string | null; plannedFloor: number; plannedRemoved: number; fallback?: IntensityFallback | null }) {
   const [status, setStatus] = useState<TeamStatus | null>(null);
   const [rows, setRows] = useState<UseRow[]>([{ use: 'residential', floor: String(plannedFloor || ''), dwellings: '' }]);
   const [removedUse, setRemovedUse] = useState<TeamUse>('residential');
@@ -120,6 +123,11 @@ export function TeamAreaPanel({ grids, region, plannedFloor, plannedRemoved }: {
       <button type="submit" className="button small primary" disabled={!canRun}>{busy ? `예측 중… (칸 ${grids.length}개)` : '이 구역 배출 변화 예측'}</button>
     </form>
     {error && <p className="form-error" role="alert">{error}</p>}
+    {error && fallback && fallback.netAddedKgco2eq !== null && <div className="team-model-result" data-testid="team-area-fallback">
+      <p className="muted">변화 모델 예측 대신(다른 범위): 원단위 기반 계산</p>
+      <p className="detail-figure">{signed(fallback.netAddedKgco2eq / 1000, 1)}<span className="unit">tCO₂e/년 · 전력 운영탄소만{fallback.baselineYear ? ` · ${fallback.baselineYear}년 관측 원단위` : ''}</span></p>
+      <p className="muted">위 감축 노력의 '이 계획으로 늘어나는 양'과 같은 값입니다(계획 연면적 × 관측 원단위 × 전력 계수). 변화 모델(탄소공간지도 건물 배출: 전기 · 가스 · 지역난방)과는 범위가 달라 서로 견주거나 더하지 않습니다.</p>
+    </div>}
     {c && area && first && <div className="team-model-result" data-testid="team-area-result">
       {(nearest.length > 0 || empty.length > 0 || skipped.length > 0) && <p className={skipped.length * 2 > area.cells_total ? 'form-error' : 'muted'} data-testid="team-area-skipped">
         칸 {area.cells_total}개 중 기준 해({area.year}년) 상태로 {used - nearest.length - empty.length}개

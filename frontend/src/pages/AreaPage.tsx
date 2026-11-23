@@ -5,6 +5,7 @@ import { AreaMap } from '../components/area/AreaMap';
 import { AreaSummaryBar, BenchmarkPanel, FallbackNotice, MeasuresPanel } from '../components/area/AreaWorkflow';
 import { BeforeAfterChart, DevelopmentChart, EffortBars, EffortCurve, ElectricityChart, RegisterChart, WeatherYearsChart } from '../components/area/AreaCharts';
 import { TeamAreaPanel } from '../components/area/TeamAreaPanel';
+import { DeleteButton } from '../components/DeleteButton';
 import { RegionGuidePanel } from '../components/RegionGuide';
 
 export { RegionGuidePanel };
@@ -15,7 +16,7 @@ import { ProvenanceBadge } from '../components/ProvenanceBadge';
 import { SgisGridSummaryView } from '../components/SgisGridPanel';
 import { EmptyState, ErrorState, LoadingState } from '../components/Status';
 import { setAnalysisScope, useAnalysisScope } from '../hooks/useAnalysisScope';
-import { areaLink, parseAreaLink, type AreaLink } from '../lib/caseLink';
+import { areaLink, DEFAULT_REGION, parseAreaLink, type AreaLink } from '../lib/caseLink';
 import { useApi } from '../hooks/useApi';
 import { useSystemInfo } from '../hooks/useSystemInfo';
 import { slowLoadText, useElapsed } from '../hooks/useElapsed';
@@ -76,10 +77,14 @@ export function AreaPage() {
   const lastSpec = useRef<AreaSpec | null>(null);
   const revision = useRef(0);
   const started = useRef(false);
+  // 지금 지역의 선택지(행정동 · 용도지역)가 도착했는지. 지역을 바꾼 순간에는 앞 지역 선택지 · 행정동 코드가 남아 있어,
+  // 그대로 첫 분석을 보내면 "행정동을 찾을 수 없습니다"(422)가 나고 새 지역 첫 분석도 돌지 않았음(2026-11-23 재현).
+  const optionsReady = useRef(false);
 
   // 처음 열 때: 에코시티 개발이 있는 송천1동(없으면 목록 첫 동)과 가장 넓은 용도지역을 고른다.
   useEffect(() => {
     const o = options.data; if (!o) return;
+    optionsReady.current = true;
     setAdminCode((old) => old || (o.admin.find((a) => a.name.includes('송천1동')) ?? o.admin[0])?.code || '');
     setCategory((old) => old || o.zones.find((z) => z.category === 'COMMERCIAL')?.category || o.zones[0]?.category || '');
   }, [options.data]);
@@ -111,7 +116,7 @@ export function AreaPage() {
   useEffect(() => {
     if (shownRegion.current === region) return;
     shownRegion.current = region;
-    revision.current++; lastSpec.current = null; started.current = false;
+    revision.current++; lastSpec.current = null; started.current = false; optionsReady.current = false;
     setAnalysis(null); setAdminCode(''); setCategory(''); setCenter(null); setVertices([]); setError(null);
   }, [region]);
 
@@ -121,7 +126,7 @@ export function AreaPage() {
   // First analysis once the defaults are known (declared before the region reset above uses it).
 
   useEffect(() => {
-    if (started.current || !options.data) return;
+    if (started.current || !options.data || !optionsReady.current) return;   // the previous region's options are still on screen
     if (link && link.region !== undefined && link.region !== region) return;   // wait for the linked region
     const first = link?.spec ?? (adminCode ? { type: 'admin' as const, code: adminCode } : null);
     if (!first) return;
@@ -242,13 +247,14 @@ export function AreaPage() {
       <div className="section-label" id="area-step-plan"><h2>미래 개발과 감축 노력</h2><span>목표 감축률을 넣으면 필요한 노력을 계산합니다</span></div>
       <EffortPanel effort={analysis.effort} plan={plan} setPlan={setPlan} target={target} setTarget={setTarget} pvYield={pvYield} setPvYield={setPvYield} basis={effortBasis} setBasis={setEffortBasis} kcsmAvailable={!!analysis.history.kcsm?.available} />
       <BenchmarkPanel bench={bench} effort={analysis.effort} regionName={options.data?.region?.short_name ?? '시·군·구'} />
-      <TeamAreaPanel grids={analysis.history.area.grid_ids} region={region} plannedFloor={plannedArea(plan)} plannedRemoved={plan.removed_floor_area_m2} />
+      <TeamAreaPanel grids={analysis.history.area.grid_ids} region={region} plannedFloor={plannedArea(plan)} plannedRemoved={plan.removed_floor_area_m2}
+        fallback={intensityFallback(analysis.effort)} />
 
       <div className="section-label" id="area-step-measures"><h2>감축 방안</h2><span>구체적 방안을 순서대로 더해 필요 감축량을 채웁니다. 다른 안과 비교하지 않습니다</span></div>
       <MeasuresPanel effort={analysis.effort} measures={measures} setMeasures={setMeasures} />
 
       <div className="section-label" id="area-step-report"><h2>보고서</h2><span>계산 엔진의 근거 문장으로 작성하고, 로컬 AI 문장은 숫자 검증을 통과할 때만 씁니다</span></div>
-      <ReportPanel request={() => ({ area: lastSpec.current, region, from_year: fromYear, to_year: toYear, event_year: eventYear, window: windowSize, plan: planBody(plan), target_pct: target, pv_yield_kwh_per_kw: pvYield && Number(pvYield) > 0 ? Number(pvYield) : null, effort_basis: effortBasis, measures: measuresBody(measures) })} label={analysis.history.area.label} />
+      <ReportPanel region={region} request={() => ({ area: lastSpec.current, region, from_year: fromYear, to_year: toYear, event_year: eventYear, window: windowSize, plan: planBody(plan), target_pct: target, pv_yield_kwh_per_kw: pvYield && Number(pvYield) > 0 ? Number(pvYield) : null, effort_basis: effortBasis, measures: measuresBody(measures) })} label={analysis.history.area.label} />
     </>}
   </div>;
 }
@@ -477,6 +483,12 @@ function BeforeAfterPanel({ comparison, candidates, eventYear, setEventYear, win
   </section>;
 }
 
+/** U2-0(2026-11-23): 변화 모델이 없는 지역에서 대신 보일 원단위 기반 증가분(U4 plan_added 한 필드). 없으면 null. */
+function intensityFallback(effort: EffortResult | null): { netAddedKgco2eq: number | null; baselineYear: number | null } | null {
+  const added = effort?.targets?.find((t) => t.key === 'plan_added');
+  return added ? { netAddedKgco2eq: added.net_added_kgco2eq, baselineYear: effort?.baseline_year ?? null } : null;
+}
+
 function EffortPanel({ effort, plan, setPlan, target, setTarget, pvYield, setPvYield, basis, setBasis, kcsmAvailable = false }: { effort: EffortResult | null; plan: PlanState; setPlan: (p: PlanState) => void; target: number; setTarget: (t: number) => void; pvYield: string; setPvYield: (v: string) => void; basis: EffortBasis; setBasis: (b: EffortBasis) => void; kcsmAvailable?: boolean }) {
   const headline = effortHeadline(effort);
   const num = (key: keyof PlanState, label: string, unit: string, step = 1) => <label className="field" key={key}><span>{label}</span><div><input type="number" min={0} step={step} value={plan[key] as number} onChange={(e) => setPlan({ ...plan, [key]: Math.max(0, Number(e.target.value)) })} /><em>{unit}</em></div></label>;
@@ -491,7 +503,7 @@ function EffortPanel({ effort, plan, setPlan, target, setTarget, pvYield, setPvY
           <button role="tab" aria-selected={plan.method === 'massing'} onClick={() => setPlan({ ...plan, method: 'massing' })}>층수 × 동수</button>
         </div>
         <div className="field-grid">
-          {plan.method === 'area' ? num('added_floor_area_m2', '추가 연면적', 'm²', 1000) : <>{num('floors', '층수', '층')}{num('building_count', '동수', '동')}{num('footprint_per_building', '동별 건축면적', 'm²', 50)}</>}
+          {plan.method === 'area' ? <>{num('added_floor_area_m2', '추가 연면적', 'm²', 1000)}<label className="field" key="area_floors"><span>층수 (선택)</span><div><input type="number" min={0} step={1} value={plan.area_floors ?? 0} aria-label="층수 (선택)" onChange={(e) => setPlan({ ...plan, area_floors: Math.max(0, Number(e.target.value)) })} /><em>층</em></div><span className="field-hint">넣으면 지붕 태양광 한도를 연면적 ÷ 층수로 확정합니다</span></label></> : <>{num('floors', '층수', '층')}{num('building_count', '동수', '동')}{num('footprint_per_building', '동별 건축면적', 'm²', 50)}</>}
           {num('removed_floor_area_m2', '철거 연면적', 'm²', 1000)}
         </div>
         <p className="muted">계획 연면적 {formatMetric(plannedArea(plan), 'm²')}</p>
@@ -527,8 +539,9 @@ function EffortPanel({ effort, plan, setPlan, target, setTarget, pvYield, setPvY
   </section>;
 }
 
-function ReportPanel({ request, label }: { request: () => Record<string, unknown>; label: string }) {
-  const recent = useApi<Array<{ id: string; created_at: string; title: string; mode: string }>>('/area-reports');
+function ReportPanel({ request, label, region = null }: { request: () => Record<string, unknown>; label: string; region?: string | null }) {
+  // 이 지역의 보고서만(U0 API ?region=, 2026-11-23). 지역을 고르지 않은 상태(null)는 원래 지역(전주)
+  const recent = useApi<Array<{ id: string; created_at: string; title: string; mode: string }>>(`/area-reports?region=${encodeURIComponent(region ?? DEFAULT_REGION)}`);
   const [useLocal, setUseLocal] = useState(false);
   const [title, setTitle] = useState('');
   const [report, setReport] = useState<AreaReport | null>(null);
@@ -561,6 +574,6 @@ function ReportPanel({ request, label }: { request: () => Record<string, unknown
       {s.mode === 'LOCAL_SLM_NARRATIVE' && <details><summary>근거 문장 {report.facts.length}개</summary><ul>{report.facts.map((f) => <li key={f.id}>{f.text}</li>)}</ul></details>}
       <footer><small>검증: {s.validation} · 근거 SHA256 <code>{report.evidence_hash.slice(0, 16)}…</code></small><span className="badge-row"><a className="button small primary" href={`/api/area-reports/${report.id}/html`} target="_blank" rel="noopener"><Printer size={14} />인쇄·PDF용 보기</a><a className="button small" href={`/api/area-reports/${report.id}/markdown`}><Download size={14} />마크다운 내려받기</a></span></footer>
     </article>}
-    {recent.data && recent.data.length > 0 && <div className="area-report-recent"><h4>최근 지역 보고서</h4><ul>{recent.data.slice(0, 6).map((r) => <li key={r.id}><button className="button ghost small" onClick={() => void open(r.id)}>{r.title}</button><small>{formatDate(r.created_at)} · {REPORT_MODE_LABEL[r.mode as AreaReport['summary']['mode']] ?? r.mode}</small></li>)}</ul></div>}
+    {recent.data && recent.data.length > 0 && <div className="area-report-recent"><h4>최근 지역 보고서</h4><ul>{recent.data.slice(0, 6).map((r) => <li key={r.id}><button className="button ghost small" onClick={() => void open(r.id)}>{r.title}</button><small>{formatDate(r.created_at)} · {REPORT_MODE_LABEL[r.mode as AreaReport['summary']['mode']] ?? r.mode}</small> <DeleteButton path={`/area-reports/${r.id}`} what="이 지역 보고서" onDeleted={() => { if (report?.id === r.id) setReport(null); void recent.reload(); }} /></li>)}</ul></div>}
   </section>;
 }
