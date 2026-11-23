@@ -503,7 +503,7 @@ function EffortPanel({ effort, plan, setPlan, target, setTarget, pvYield, setPvY
           <button role="tab" aria-selected={plan.method === 'massing'} onClick={() => setPlan({ ...plan, method: 'massing' })}>층수 × 동수</button>
         </div>
         <div className="field-grid">
-          {plan.method === 'area' ? num('added_floor_area_m2', '추가 연면적', 'm²', 1000) : <>{num('floors', '층수', '층')}{num('building_count', '동수', '동')}{num('footprint_per_building', '동별 건축면적', 'm²', 50)}</>}
+          {plan.method === 'area' ? <>{num('added_floor_area_m2', '추가 연면적', 'm²', 1000)}<label className="field" key="area_floors"><span>층수 (선택)</span><div><input type="number" min={0} step={1} value={plan.area_floors ?? 0} aria-label="층수 (선택)" onChange={(e) => setPlan({ ...plan, area_floors: Math.max(0, Number(e.target.value)) })} /><em>층</em></div><span className="field-hint">넣으면 지붕 태양광 한도를 연면적 ÷ 층수로 확정합니다</span></label></> : <>{num('floors', '층수', '층')}{num('building_count', '동수', '동')}{num('footprint_per_building', '동별 건축면적', 'm²', 50)}</>}
           {num('removed_floor_area_m2', '철거 연면적', 'm²', 1000)}
         </div>
         <p className="muted">계획 연면적 {formatMetric(plannedArea(plan), 'm²')}</p>
