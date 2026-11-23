@@ -1,7 +1,16 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { MeasuresPanel, TargetBases } from './AreaWorkflow';
+import { AREA_STEPS, AreaSummaryBar, MeasuresPanel, TargetBases } from './AreaWorkflow';
 import { NO_MEASURES, type EffortResult } from '../../lib/area';
+
+describe('작업 단계 (U3 S5, 설계 6.1)', () => {
+  it('구역 → 계획 넣기 → 결과 → 감축 → 배치·상한(선택) → 보고서 여섯 단계를 순서대로 보인다', () => {
+    expect(AREA_STEPS.map((s) => s.id)).toEqual(['area-step-area', 'area-step-plan', 'area-step-result', 'area-step-measures', 'area-step-site', 'area-step-report']);
+    render(<AreaSummaryBar analysis={null} running={false} bench={null} />);
+    const links = screen.getByRole('navigation', { name: '작업 단계' }).querySelectorAll('a');
+    expect([...links].map((a) => a.textContent)).toEqual(['1구역 고르기', '2계획 넣기', '3결과', '4감축 방안', '5배치·상한 (선택)', '6보고서']);
+  });
+});
 
 describe('MeasuresPanel 구체적 감축 방안', () => {
   it('발전량 근거가 없어 태양광 단계가 없어도 칸을 지우지 않고 상쇄할 전력량을 적는다(2026-11-20 점검 A)', () => {

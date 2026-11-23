@@ -1,10 +1,10 @@
-import { Download, FileText, Info, Link2, Pause, Play, Printer, RotateCcw, Undo2 } from 'lucide-react';
+import { Download, FileText, Info, Link2, Pause, Play, Plus, Printer, RotateCcw, Undo2, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { AreaMap } from '../components/area/AreaMap';
 import { AreaSummaryBar, BenchmarkPanel, FallbackNotice, MeasuresPanel } from '../components/area/AreaWorkflow';
 import { BeforeAfterChart, DevelopmentChart, EffortBars, EffortCurve, ElectricityChart, RegisterChart, WeatherYearsChart } from '../components/area/AreaCharts';
-import { TeamAreaPanel } from '../components/area/TeamAreaPanel';
+import { TeamAreaPanel, teamScopeText, useTeamAreaPrediction, type TeamAreaRequest, type TeamAreaState } from '../components/area/TeamAreaPanel';
 import { RegionGuidePanel } from '../components/RegionGuide';
 
 export { RegionGuidePanel };
@@ -20,8 +20,9 @@ import { useApi } from '../hooks/useApi';
 import { useSystemInfo } from '../hooks/useSystemInfo';
 import { slowLoadText, useElapsed } from '../hooks/useElapsed';
 import { api } from '../lib/api';
-import { at, BASELINE_MODE_LABEL, buildSpec, EFFORT_BASIS_LABEL, effortHeadline, eventYears, measuresBody, MODE_LABEL, NO_MEASURES, planBody, plannedArea, pvNote, REPORT_MODE_LABEL, type AreaAnalysis, type AreaMode, type AreaOptions, type AreaReport, type AreaSpec, type BeforeAfter, type Benchmark, type EffortBasis, type EffortResult, type MeasuresState, type PlanState } from '../lib/area';
+import { at, BASELINE_MODE_LABEL, buildSpec, EFFORT_BASIS_LABEL, effortHeadline, eventYears, measuresBody, MODE_LABEL, NO_MEASURES, planBody, pvNote, QUICK_BLOCKS, REPORT_MODE_LABEL, usesBody, type AreaAnalysis, type AreaMode, type AreaOptions, type AreaReport, type AreaSpec, type BeforeAfter, type Benchmark, type EffortBasis, type EffortResult, type MeasuresState, type PlanEvaluation, type PlanState, type PlanUse } from '../lib/area';
 import { formatDate, formatMetric } from '../lib/format';
+import { AREA_MAX_USES, signed, TEAM_USES, type TeamAreaItem, type TeamUse } from '../lib/teamModel';
 
 /** 연도 선택지: 2010년부터 자료가 있는 마지막 해(건축HUB 전력 연도·시스템 기준 연도 중 늦은 쪽)까지. 아직 오지 않은 해는 보이지 않는다. */
 function yearChoices(energyYears: number[] | undefined, baselineYear: number | undefined, chosen: number[] = []): number[] {
@@ -29,8 +30,10 @@ function yearChoices(energyYears: number[] | undefined, baselineYear: number | u
   const first = Math.min(2010, ...chosen.filter((y) => y >= 1990));
   return Array.from({ length: last - first + 1 }, (_, i) => first + i);
 }
-/** 예시값(실제 계획이 아님): 화면을 처음 열었을 때 계산이 돌아가도록 채워 둔다. */
-const DEFAULT_PLAN: PlanState = { method: 'area', added_floor_area_m2: 50000, floors: 20, building_count: 5, footprint_per_building: 800, removed_floor_area_m2: 0 };
+/** 예시값(실제 계획이 아님): 화면을 처음 열었을 때 계산이 돌아가도록 채워 둔다. 주거 50,000 m² 한 줄, 건물 모양은 비움. */
+const DEFAULT_PLAN: PlanState = { uses_new: [{ use: 'residential', floor_area_m2: 50000 }], uses_removed: [], floors: 0, building_count: 0, footprint_per_building: 0, years_after: 7 };
+/** 빠른 답과 함께 받은 것: 블록 · 세 범위 줄, 그리고 그 요청의 용도 줄(변화 모델은 이 값으로 묻는다). */
+interface BundleView { blocks: PlanEvaluation['blocks']; scopes: PlanEvaluation['scopes']; plan: PlanEvaluation['plan']; sent: { region: string | null; new: TeamAreaItem[]; removed: TeamAreaItem[]; years_after: number } }
 const DEFAULT_TARGET = 40;
 const MODES: AreaMode[] = ['admin', 'circle', 'polygon', 'zone', 'grid'];
 const DATASET_LABEL: Record<string, string> = { sgis: 'SGIS 인구·가구', kma_asos: '기상청 ASOS', kapt_energy: 'K-apt 단지 에너지', energy: '건축HUB 지번 에너지', vworld_zoning: 'VWorld 용도지역', vworld_buildings: 'VWorld 건물', vworld_cadastral: 'VWorld 연속지적', building_register: '건축물대장', sgis_grid_500m: 'SGIS 500m 격자 경계' };
@@ -68,6 +71,7 @@ export function AreaPage() {
   const [bench, setBench] = useState<Benchmark | null>(null);
   const [linkUrl, setLinkUrl] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<AreaAnalysis | null>(null);
+  const [bundle, setBundle] = useState<BundleView | null>(null);
   const [running, setRunning] = useState(false);
   const elapsed = useElapsed(running);
   const [error, setError] = useState<string | null>(null);
@@ -95,11 +99,15 @@ export function AreaPage() {
     const id = ++revision.current;
     setRunning(true); setError(null);
     const pv = Number(pvYield);
-    const body = { area: spec, region, from_year: fromYear, to_year: toYear, event_year: eventYear, window: windowSize, plan: planBody(plan), target_pct: target, pv_yield_kwh_per_kw: pvYield && pv > 0 ? pv : null, effort_basis: effortBasis, measures: measuresBody(measures) };
+    // 계획 하나 → 답 하나(U3 S5): 묶음 주소의 빠른 블록. 연면적은 용도 줄의 합 하나(planBody · usesBody가 같은 줄을 더함)
+    const body = { area: spec, region, from_year: fromYear, to_year: toYear, event_year: eventYear, window: windowSize, plan: planBody(plan), target_pct: target, pv_yield_kwh_per_kw: pvYield && pv > 0 ? pv : null, effort_basis: effortBasis, measures: measuresBody(measures),
+      uses_new: usesBody(plan.uses_new), uses_removed: usesBody(plan.uses_removed), years_after: plan.years_after, include: [...QUICK_BLOCKS] };
     try {
-      const result = await api<AreaAnalysis>('/areas/analyze', { method: 'POST', body: JSON.stringify(body) });
+      const response = await api<PlanEvaluation>('/plans/evaluate', { method: 'POST', body: JSON.stringify(body) });
       if (id !== revision.current) return;
+      const result = response.analysis;
       setAnalysis(result);
+      setBundle({ blocks: response.blocks, scopes: response.scopes, plan: response.plan, sent: { region, new: body.uses_new, removed: body.uses_removed, years_after: body.years_after } });
       setSlider((s) => Math.min(Math.max(s, result.history.years[0]), result.history.years[result.history.years.length - 1]));
     } catch (reason) {
       if (id === revision.current) setError(reason instanceof Error ? reason.message : '분석에 실패했습니다.');
@@ -116,8 +124,15 @@ export function AreaPage() {
     if (shownRegion.current === region) return;
     shownRegion.current = region;
     revision.current++; lastSpec.current = null; started.current = false; optionsReady.current = false;
-    setAnalysis(null); setAdminCode(''); setCategory(''); setCenter(null); setVertices([]); setError(null);
+    setAnalysis(null); setBundle(null); setAdminCode(''); setCategory(''); setCenter(null); setVertices([]); setError(null);
   }, [region]);
+
+  // 변화 모델(U3 S5, 설계 Q1 가): 빠른 답이 온 뒤 그 요청의 구역 칸 · 용도 줄 · 몇 년 뒤로 한 번 묻는다.
+  // 목표 % · 기준 건물 · 발전량만 바뀌면 이 요청이 같아 다시 묻지 않는다.
+  const grids = analysis?.history.area.grid_ids;
+  const teamRequest = useMemo<TeamAreaRequest | null>(() => (bundle && grids
+    ? { region: bundle.sent.region, grids, new: bundle.sent.new, removed: bundle.sent.removed, years_after: bundle.sent.years_after } : null), [bundle, grids]);
+  const team = useTeamAreaPrediction(teamRequest);
 
   const specFor = useCallback((m: AreaMode, over: Partial<{ code: string; category: string; center: [number, number]; vertices: Array<[number, number]> }> = {}) =>
     buildSpec(m, { code: over.code ?? adminCode, category: over.category ?? category, grid: options.data?.default_grid, center: over.center ?? center, radius, vertices: over.vertices ?? vertices }), [adminCode, category, options.data, center, radius, vertices]);
@@ -223,6 +238,29 @@ export function AreaPage() {
     </div>
 
     {analysis && <>
+      <div className="section-label" id="area-step-plan"><h2>계획 넣기</h2><span>용도별 신축 · 철거 연면적을 한 곳에 넣으면 감축 계산과 변화 모델이 같은 계획을 씁니다. 값을 바꾸면 다시 계산합니다</span></div>
+      <PlanPanel plan={plan} setPlan={setPlan} target={target} setTarget={setTarget} pvYield={pvYield} setPvYield={setPvYield} basis={effortBasis} setBasis={setEffortBasis}
+        kcsmAvailable={!!analysis.history.kcsm?.available} effort={analysis.effort} received={bundle?.plan ?? null} error={error} />
+
+      <div className="section-label" id="area-step-result"><h2>결과</h2><span>원단위 기반 계산을 먼저, 변화 모델은 다른 범위로 나란히 둡니다. 두 값은 더하거나 평균하지 않습니다</span></div>
+      <PlanResultPanel bundle={bundle} effort={analysis.effort} team={team} teamRequest={teamRequest} />
+      <TeamAreaPanel team={team} request={teamRequest} fallback={intensityFallback(analysis.effort)} />
+      <EffortResultPanel effort={analysis.effort} />
+      <BenchmarkPanel bench={bench} effort={analysis.effort} regionName={options.data?.region?.short_name ?? '시·군·구'} />
+
+      <div className="section-label" id="area-step-measures"><h2>감축 방안</h2><span>구체적 방안을 순서대로 더해 필요 감축량을 채웁니다. 다른 안과 비교하지 않습니다</span></div>
+      <MeasuresPanel effort={analysis.effort} measures={measures} setMeasures={setMeasures} />
+
+      <div className="section-label" id="area-step-site"><h2>배치·상한 확인 (선택)</h2><span>3D 배치와 조례 상한은 지금은 한 칸 화면에서 봅니다</span></div>
+      <section className="panel area-site-step" aria-label="배치·상한 확인" data-testid="area-site-step">
+        <p className="muted">구역의 칸 하나에 대지를 놓고 건폐율 · 용적률 상한을 확인하는 단계는 이 화면에 다음에 붙습니다. 지금은 <Link to="/simulation">탄소 시뮬레이션(한 칸 계획안)</Link>에서 대지 · 동수 · 층수를 넣어 3D 배치 · 조례 상한과 전력 + 가스 계획안을 봅니다. 그 값은 위 세 범위 표의 '한 칸 계획안'이며 이 화면의 값과 더하지 않습니다.</p>
+      </section>
+
+      <div className="section-label" id="area-step-report"><h2>보고서</h2><span>계산 엔진의 근거 문장으로 작성하고, 로컬 AI 문장은 숫자 검증을 통과할 때만 씁니다. 용도 줄이 있으면 변화 예측 절이 들어갑니다</span></div>
+      <ReportPanel request={() => ({ area: lastSpec.current, region, from_year: fromYear, to_year: toYear, event_year: eventYear, window: windowSize, plan: planBody(plan), target_pct: target, pv_yield_kwh_per_kw: pvYield && Number(pvYield) > 0 ? Number(pvYield) : null, effort_basis: effortBasis, measures: measuresBody(measures),
+        uses_new: usesBody(plan.uses_new), uses_removed: usesBody(plan.uses_removed), years_after: plan.years_after })} label={analysis.history.area.label} />
+
+      <Fold title="근거 자료" hint="과거와 현재 · 개발 전후 · 기상 · 인구 · 대장 · 건물 전체 에너지" flat={false} id="area-evidence" testId="area-evidence">
       <div className="section-label"><h2>과거와 현재</h2><span>{analysis.history.years[0]}~{analysis.history.years[analysis.history.years.length - 1]} · {analysis.history.area.label}</span></div>
       <div className="content-grid two-up area-charts">
         <section className="panel"><div className="panel-title"><h3>연도별 전력 사용량</h3><div className="badge-row"><ProvenanceBadge kind="observed" detail="12개월 완전 지번" /><ProvenanceBadge kind="estimated" /></div></div><ElectricityChart history={analysis.history} eventYear={activeEvent} /><Note><p className="muted">막대는 12개월이 모두 관측된 단지만 더한 값을 단지 준공 시기별로 나눈 것입니다. 점선은 그 해까지 준공된 단지 연면적 × {analysis.history.region_label ?? '전주'} 관측 원단위로 낸 추정입니다. 전력은 모든 연도를 K-apt 관리비 전력 한 출처로 셉니다(건축HUB 계측값은 같은 단지에서 K-apt보다 커서, 섞으면 사용량이 늘어난 것처럼 보입니다). 건축HUB 값은 아래 '건물 전체 에너지'에 따로 둡니다.</p></Note></section>
@@ -242,18 +280,7 @@ export function AreaPage() {
 
       <div className="section-label"><h2>개발 전후 영향</h2><span>개발 연도는 전환기라 제외하고 앞뒤 {windowSize}년 평균을 비교합니다</span></div>
       <BeforeAfterPanel comparison={analysis.before_after} candidates={eventYears(analysis.history)} eventYear={eventYear} setEventYear={setEventYear} windowSize={windowSize} setWindowSize={setWindowSize} />
-
-      <div className="section-label" id="area-step-plan"><h2>미래 개발과 감축 노력</h2><span>목표 감축률을 넣으면 필요한 노력을 계산합니다</span></div>
-      <EffortPanel effort={analysis.effort} plan={plan} setPlan={setPlan} target={target} setTarget={setTarget} pvYield={pvYield} setPvYield={setPvYield} basis={effortBasis} setBasis={setEffortBasis} kcsmAvailable={!!analysis.history.kcsm?.available} />
-      <BenchmarkPanel bench={bench} effort={analysis.effort} regionName={options.data?.region?.short_name ?? '시·군·구'} />
-      <TeamAreaPanel grids={analysis.history.area.grid_ids} region={region} plannedFloor={plannedArea(plan)} plannedRemoved={plan.removed_floor_area_m2}
-        fallback={intensityFallback(analysis.effort)} />
-
-      <div className="section-label" id="area-step-measures"><h2>감축 방안</h2><span>구체적 방안을 순서대로 더해 필요 감축량을 채웁니다. 다른 안과 비교하지 않습니다</span></div>
-      <MeasuresPanel effort={analysis.effort} measures={measures} setMeasures={setMeasures} />
-
-      <div className="section-label" id="area-step-report"><h2>보고서</h2><span>계산 엔진의 근거 문장으로 작성하고, 로컬 AI 문장은 숫자 검증을 통과할 때만 씁니다</span></div>
-      <ReportPanel request={() => ({ area: lastSpec.current, region, from_year: fromYear, to_year: toYear, event_year: eventYear, window: windowSize, plan: planBody(plan), target_pct: target, pv_yield_kwh_per_kw: pvYield && Number(pvYield) > 0 ? Number(pvYield) : null, effort_basis: effortBasis, measures: measuresBody(measures) })} label={analysis.history.area.label} />
+      </Fold>
     </>}
   </div>;
 }
@@ -488,24 +515,58 @@ function intensityFallback(effort: EffortResult | null): { netAddedKgco2eq: numb
   return added ? { netAddedKgco2eq: added.net_added_kgco2eq, baselineYear: effort?.baseline_year ?? null } : null;
 }
 
-function EffortPanel({ effort, plan, setPlan, target, setTarget, pvYield, setPvYield, basis, setBasis, kcsmAvailable = false }: { effort: EffortResult | null; plan: PlanState; setPlan: (p: PlanState) => void; target: number; setTarget: (t: number) => void; pvYield: string; setPvYield: (v: string) => void; basis: EffortBasis; setBasis: (b: EffortBasis) => void; kcsmAvailable?: boolean }) {
-  const headline = effortHeadline(effort);
-  const num = (key: keyof PlanState, label: string, unit: string, step = 1) => <label className="field" key={key}><span>{label}</span><div><input type="number" min={0} step={step} value={plan[key] as number} onChange={(e) => setPlan({ ...plan, [key]: Math.max(0, Number(e.target.value)) })} /><em>{unit}</em></div></label>;
-  const o = effort?.options;
-  const t = (v: number | undefined | null) => (v == null ? null : v / 1000);
-  return <section className="panel area-effort">
-    <div className="area-effort-layout">
+/** 용도 줄 하나: 용도 · 연면적 · (주거 줄만) 세대수. 용도 미정(옛 링크) 줄은 고르기 전까지 그 선택지를 둔다. */
+function UseRowInput({ row, index, kind, onChange, onRemove }: { row: PlanUse; index: number; kind: '신축' | '철거'; onChange: (patch: Partial<PlanUse>) => void; onRemove?: () => void }) {
+  const n = index + 1;
+  return <div className="team-area-row" data-testid={kind === '신축' ? 'plan-use-row' : 'plan-removed-row'}>
+    <label className="area-select"><span>{kind} 용도 {n}</span><select aria-label={`${kind} 용도 ${n}`} value={row.use ?? ''} onChange={(e) => onChange({ use: (e.target.value || null) as TeamUse | null })}>
+      {row.use === null && <option value="">용도 미정 (변화 모델은 돌리지 않음)</option>}
+      {TEAM_USES.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+    </select></label>
+    <label className="area-select narrow"><span>{kind} 연면적</span><div className="with-unit"><input type="number" min={0} max={3000000} step={1000} inputMode="numeric" aria-label={`${kind} 연면적 ${n}`} value={row.floor_area_m2 || ''} placeholder="예: 120000"
+      onChange={(e) => onChange({ floor_area_m2: Math.max(0, Number(e.target.value) || 0) })} /><em>m²</em></div></label>
+    {kind === '신축' && row.use === 'residential' && <label className="area-select narrow"><span>세대수 (선택)</span><div className="with-unit"><input type="number" min={0} max={50000} step={10} inputMode="numeric" aria-label={`세대수 ${n}`} value={row.dwellings || ''} placeholder="자동"
+      onChange={(e) => onChange({ dwellings: Math.max(0, Number(e.target.value) || 0) || undefined })} /><em>세대</em></div></label>}
+    {onRemove && <button type="button" className="button ghost small" aria-label={`${kind} 용도 ${n} 빼기`} onClick={onRemove}><X size={14} /></button>}
+  </div>;
+}
+
+/**
+ * 2단계 '계획 넣기'(U3 S5): 계획을 넣는 곳은 여기 하나. 연면적은 용도 줄의 합이고, 감축 계산 · 변화 모델 · 보고서가 같은 줄을 받는다.
+ * 목표 % · 기준 건물 · 발전량은 '계산 설정'(접힘)에. 숫자 결과는 3단계에 둔다.
+ */
+function PlanPanel({ plan, setPlan, target, setTarget, pvYield, setPvYield, basis, setBasis, kcsmAvailable = false, effort, received, error }: { plan: PlanState; setPlan: (p: PlanState) => void; target: number; setTarget: (t: number) => void; pvYield: string; setPvYield: (v: string) => void; basis: EffortBasis; setBasis: (b: EffortBasis) => void; kcsmAvailable?: boolean; effort: EffortResult | null; received: PlanEvaluation['plan'] | null; error: string | null }) {
+  const setRow = (side: 'uses_new' | 'uses_removed', i: number, patch: Partial<PlanUse>) => setPlan({ ...plan, [side]: plan[side].map((r, j) => (j === i ? { ...r, ...patch } : r)) });
+  const dropRow = (side: 'uses_new' | 'uses_removed', i: number) => setPlan({ ...plan, [side]: plan[side].filter((_, j) => j !== i) });
+  const shape = (key: 'floors' | 'building_count' | 'footprint_per_building', label: string, unit: string, step: number) => <label className="field" key={key}><span>{label}</span><div><input type="number" min={0} step={step} aria-label={label} value={plan[key] || ''} placeholder="선택"
+    onChange={(e) => setPlan({ ...plan, [key]: Math.max(0, Number(e.target.value) || 0) })} /><em>{unit}</em></div></label>;
+  const undecided = [...plan.uses_new, ...plan.uses_removed].some((r) => r.use === null && r.floor_area_m2 > 0);
+  const nonResidential = plan.uses_new.some((r) => r.use !== null && r.use !== 'residential' && r.floor_area_m2 > 0);
+  return <section className="panel area-plan" aria-label="계획 넣기" data-testid="area-plan">
+    <div className="panel-title"><h3>계획 (한 곳에서 넣기)</h3><span className="status-tag neutral">예시값</span></div>
+    <div className="area-plan-grid">
+      <div className="team-area-rows" aria-label="용도별 신축 연면적">
+        <h4 className="area-subhead">신축 (용도별 연면적 · 1~{AREA_MAX_USES}줄)</h4>
+        {plan.uses_new.map((r, i) => <UseRowInput key={i} row={r} index={i} kind="신축" onChange={(p) => setRow('uses_new', i, p)} onRemove={plan.uses_new.length > 1 ? () => dropRow('uses_new', i) : undefined} />)}
+        {plan.uses_new.length < AREA_MAX_USES && <button type="button" className="button ghost small" onClick={() => setPlan({ ...plan, uses_new: [...plan.uses_new, { use: 'commercial', floor_area_m2: 0 }] })}><Plus size={14} />용도 추가 (복합 개발)</button>}
+      </div>
+      <div className="team-area-rows" aria-label="용도별 철거 연면적">
+        <h4 className="area-subhead">철거 (용도별 연면적 · 선택)</h4>
+        {plan.uses_removed.map((r, i) => <UseRowInput key={i} row={r} index={i} kind="철거" onChange={(p) => setRow('uses_removed', i, p)} onRemove={() => dropRow('uses_removed', i)} />)}
+        {plan.uses_removed.length < AREA_MAX_USES && <button type="button" className="button ghost small" onClick={() => setPlan({ ...plan, uses_removed: [...plan.uses_removed, { use: 'residential', floor_area_m2: 0 }] })}><Plus size={14} />철거 줄 추가</button>}
+      </div>
+    </div>
+    <div className="field-grid">
+      {shape('floors', '층수 (선택)', '층', 1)}{shape('building_count', '동수 (선택)', '동', 1)}{shape('footprint_per_building', '동당 건축면적 (선택)', 'm²', 50)}
+      <label className="field"><span>몇 년 뒤 (변화 모델)</span><div><select aria-label="몇 년 뒤" value={plan.years_after} onChange={(e) => setPlan({ ...plan, years_after: Number(e.target.value) })}>{[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((y) => <option key={y} value={y}>{y}년 뒤</option>)}</select></div><span className="field-hint">평가한 개발 기간 중앙값 7년</span></label>
+    </div>
+    <p className="muted">층수만 넣으면 지붕 태양광 한도를 연면적 ÷ 층수로, 동수 · 동당 건축면적을 넣으면 건축면적 합으로 확정합니다. 셋을 다 넣으면 그 곱이 신축 합과 같아야 합니다(다르면 계산하지 않고 알립니다). 건물 모양은 변화 모델에는 쓰이지 않습니다.</p>
+    <p className="muted" data-testid="area-plan-received">{received ? <>계산에 쓴 계획: 신축 {formatMetric(received.added_floor_area_m2, 'm²')} · 철거 {received.removed_floor_area_m2 ? formatMetric(received.removed_floor_area_m2, 'm²') : '없음'} · 구역 500m 칸 {formatMetric(received.grid_count)}개 (감축 계산 · 변화 모델 · 보고서가 같은 값)</> : '계산하면 서버가 받은 계획을 여기에 적습니다.'}</p>
+    {undecided && <p className="area-fallback" role="note" data-testid="area-plan-undecided">용도 미정 줄이 있어 변화 모델은 돌리지 않습니다(용도를 짐작해 채우지 않음). 줄마다 용도를 고르면 예측합니다.</p>}
+    {nonResidential && basis === 'apartments' && <p className="area-fallback" role="note" data-testid="area-plan-basis-hint">비주거 줄이 있습니다. 원단위는 기준 건물 하나의 값을 모든 용도에 곱하므로 상가 · 업무가 섞이면 '건물 전체(건축HUB)' 기준이 맞습니다. 기준은 자동으로 바꾸지 않습니다(아래 계산 설정에서 고름).</p>}
+    {error && <p className="form-error">계산하지 못했습니다: {error}</p>}
+    <Fold className="slim" title="계산 설정" figures={<>목표 {target}% · {EFFORT_BASIS_LABEL[basis]}</>} hint="목표 % · 기준 건물 · 태양광 발전량" testId="area-calc-settings">
       <div className="area-effort-form">
-        <div className="panel-title"><h3>계획 조건</h3><span className="status-tag neutral">예시값</span></div>
-        <div className="area-modes small" role="tablist" aria-label="계획 입력 방식">
-          <button role="tab" aria-selected={plan.method === 'area'} onClick={() => setPlan({ ...plan, method: 'area' })}>연면적 직접</button>
-          <button role="tab" aria-selected={plan.method === 'massing'} onClick={() => setPlan({ ...plan, method: 'massing' })}>층수 × 동수</button>
-        </div>
-        <div className="field-grid">
-          {plan.method === 'area' ? <>{num('added_floor_area_m2', '추가 연면적', 'm²', 1000)}<label className="field" key="area_floors"><span>층수 (선택)</span><div><input type="number" min={0} step={1} value={plan.area_floors ?? 0} aria-label="층수 (선택)" onChange={(e) => setPlan({ ...plan, area_floors: Math.max(0, Number(e.target.value)) })} /><em>층</em></div><span className="field-hint">넣으면 지붕 태양광 한도를 연면적 ÷ 층수로 확정합니다</span></label></> : <>{num('floors', '층수', '층')}{num('building_count', '동수', '동')}{num('footprint_per_building', '동별 건축면적', 'm²', 50)}</>}
-          {num('removed_floor_area_m2', '철거 연면적', 'm²', 1000)}
-        </div>
-        <p className="muted">계획 연면적 {formatMetric(plannedArea(plan), 'm²')}</p>
         <label className="area-target"><span>목표 감축률 (기준 연도 대비)</span><div><input type="range" min={0} max={100} step={1} value={target} onChange={(e) => setTarget(Number(e.target.value))} aria-label="목표 감축률 슬라이더" /><div className="with-unit"><input type="number" min={0} max={100} value={target} onChange={(e) => setTarget(Math.min(100, Math.max(0, Number(e.target.value))))} aria-label="목표 감축률" /><em>%</em></div></div></label>
         <Note label="목표 감축률 안내"><small className="muted area-target-note" data-testid="target-note">목표는 사용자가 정하는 값이고 기본 {DEFAULT_TARGET}%는 예시입니다. 참고로 국가 감축목표의 건물 부문은 2018년 대비 2030년 −32.8%, 2035년 −53.6~−56.2%입니다(기준 연도가 달라 그대로 비교하지 않습니다).</small></Note>
         <div className="area-effort-basis"><span>기준 건물</span><div className="area-modes small" role="tablist" aria-label="감축 노력 기준 건물">
@@ -513,6 +574,51 @@ function EffortPanel({ effort, plan, setPlan, target, setTarget, pvYield, setPvY
         </div><small className="muted">{basis === 'kcsm' ? '선도소프트가 준 탄소공간지도 100m 건물 전기 배출(단독주택 포함 모든 건물, 2024년까지). 경계 안 100m 칸 합을 기준으로, 신축 부하는 같은 격자의 배출 ÷ 건축물대장 연면적으로 냅니다.' : basis === 'buildings' ? '상가·업무·학교 등 구역의 계측 건물 전체(건축HUB, 최근 12개월 완비 연도). 상업지역은 이 기준이 맞습니다.' : '공동주택 관리비 전력(같은 출처로 연도 비교). 주거지역 기본값.'}</small></div>
         <label className="field"><span>태양광 kW당 연 발전량 (선택)</span><div><input type="number" min={0} step={10} value={pvYield} placeholder={effort?.pv_yield?.basis === 'ESTIMATED' ? `비우면 지역 추정 ${effort.pv_yield.kwh_per_kw.toLocaleString('ko-KR')}` : '근거가 있을 때만 입력'} onChange={(e) => setPvYield(e.target.value)} /><em>kWh/kW</em></div></label>
       </div>
+    </Fold>
+  </section>;
+}
+
+const SCOPE_FALLBACK: Record<string, { label: string; scope: string; what: string }> = {
+  plan_emission: { label: '원단위 기반 계획 배출', scope: '전력 운영탄소만', what: '관측 원단위 × 계획 연면적 × 전력 계수' },
+  change_model: { label: '팀 변화 모델 예측', scope: '탄소공간지도 건물 배출(전기 · 가스 · 지역난방)', what: '과거 개발 사례로 학습한 모델의 변화 예측' },
+  simulation: { label: '한 칸 계획안(시뮬레이션 화면)', scope: '전력 + 가스', what: '그 화면의 계획안 계산(여기서는 계산하지 않음)' },
+};
+
+/**
+ * 3단계 '결과'(U3 S5, 설계 4절 · Q2 가): 한 줄 결론(원단위 기반, 엔진 문장 그대로) → 세 범위 표 → 지역난방 열(추정) 한 줄.
+ * 세 값은 범위가 달라 더하거나 평균하지 않는다. 값은 서버 응답 그대로(kg → t만).
+ */
+function PlanResultPanel({ bundle, effort, team, teamRequest }: { bundle: BundleView | null; effort: EffortResult | null; team: TeamAreaState; teamRequest: TeamAreaRequest | null }) {
+  const pe = bundle?.blocks.plan_emission;
+  const heat = bundle?.blocks.district_heat;
+  const added = effort?.targets?.find((x) => x.key === 'plan_added');
+  const scope = (key: string) => bundle?.scopes.find((s) => s.key === key) ?? SCOPE_FALLBACK[key];
+  const headline = pe ? pe.text ?? pe.reason : null;
+  const rows: Array<{ key: string; value: ReactNode }> = [
+    { key: 'plan_emission', value: added && added.net_added_kgco2eq !== null ? <><b>{signed(added.net_added_kgco2eq / 1000, 1)}</b> tCO₂eq/년<small>{effort?.baseline_year ? ` · ${effort.baseline_year}년 원단위 · 계수` : ''}</small></> : '자료 없음' },
+    { key: 'change_model', value: teamScopeText(team, teamRequest) },
+    { key: 'simulation', value: <><Link to="/simulation">한 칸 화면에서 계산</Link><small> · 이 화면에서는 계산하지 않음</small></> },
+  ];
+  return <section className="panel area-plan-result" aria-label="이 계획의 결과" data-testid="area-plan-result">
+    <div className="panel-title"><h3>이 계획의 결과</h3><ProvenanceBadge kind="scenario" /></div>
+    {headline && <p className="area-headline" data-testid="area-plan-headline">{headline}</p>}
+    {pe?.status === 'OK' && pe.intensity_note && <p className="muted">{pe.intensity_note}</p>}
+    <div className="table-wrap"><table data-testid="area-scopes">
+      <caption>세 범위 (나란히 · 서로 더하거나 평균하지 않음)</caption>
+      <thead><tr><th>범위</th><th>무엇을 재나</th><th className="num">값</th></tr></thead>
+      <tbody>{rows.map((r) => { const s = scope(r.key); return <tr key={r.key} data-testid={`area-scope-${r.key}`}><td>{s.label}</td><td><small>{s.scope} · {s.what}</small></td><td className="num">{r.value}</td></tr>; })}</tbody>
+    </table></div>
+    <p className="muted" data-testid="area-scopes-note">세 값은 재는 에너지원 · 건물 · 해가 달라 서로 더하거나 평균하지 않습니다. 감축 단계는 첫 줄(원단위 기반)에서 이어집니다.</p>
+    {heat?.status === 'OK' && heat.text && <p className="area-district-heat" data-testid="area-district-heat"><ProvenanceBadge kind="estimated" detail="지역난방 열" /> {heat.text}</p>}
+  </section>;
+}
+
+/** 3단계 결과의 '필요한 노력'(목표 % 기준). 예전 계획 조건 칸의 오른쪽을 그대로 옮김. */
+function EffortResultPanel({ effort }: { effort: EffortResult | null }) {
+  const headline = effortHeadline(effort);
+  const o = effort?.options;
+  const t = (v: number | undefined | null) => (v == null ? null : v / 1000);
+  return <section className="panel area-effort">
       <div className="area-effort-result">
         {!effort ? <EmptyState title="목표를 넣으면 계산합니다" /> : !effort.available ? <EmptyState title="계산할 근거가 없습니다" description={effort.reason} /> : <>
           <div className="panel-title"><h3>필요한 노력</h3><div className="badge-row"><ProvenanceBadge kind="scenario" /><span className={`status-tag ${effort.baseline_mode === 'ESTIMATED' ? 'warn' : 'good'}`}>기준 부하 {BASELINE_MODE_LABEL[effort.baseline_mode ?? 'OBSERVED']} · {effort.baseline_year}년{effort.basis ? ` · ${EFFORT_BASIS_LABEL[effort.basis]}` : ''}</span></div></div>
@@ -534,7 +640,6 @@ function EffortPanel({ effort, plan, setPlan, target, setTarget, pvYield, setPvY
           </Fold>
         </>}
       </div>
-    </div>
   </section>;
 }
 
