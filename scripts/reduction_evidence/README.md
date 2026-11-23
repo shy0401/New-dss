@@ -39,6 +39,10 @@
 2. `python .../regional_guide/build_heat_stats.py <greentogether_apt_2025.csv> <apartment_energy_stats_2025.csv>`
 3. `python .../regional_guide/fetch_kma_normals.py <out>`(기상청 평년값, 이미 `data/raw/kma_normals/2026-11-20`에 있음) → `python .../regional_guide/build_guide.py data/raw/kma_normals/2026-11-20 backend/reference <out>` → `regional_climate_guide.csv`
 
+## 5. 지역 조건표 (`regional_conditions_sigungu.csv`) — `regional_conditions/`
+- 설계 지역 구분 · 평년 도일 · 전기 · 가스 냉난방 몫(분해, 관문 G2 · G3) · 2025 통계. 차례와 열 뜻은 [`regional_conditions/README.md`](regional_conditions/README.md), 규칙 [`rules/regional-conditions-2026-11-20.md`](rules/regional-conditions-2026-11-20.md). 2026-11-24에 옮김
+- 지역 가이드(4절)의 규칙 · 결과 문서: [`rules/regional-climate-guide-2026-11-20.md`](rules/regional-climate-guide-2026-11-20.md)(2026-11-24에 옮김)
+
 ## 확인한 것 (2026-11-23, PC의 11-20 입력으로 다시 돌림, sha256 비교)
 | 결과 | 같음 |
 |---|---|
@@ -46,3 +50,4 @@
 | `evidence_table.csv` · `evidence_added.csv` · `evidence_table_all.csv` · `evidence_table_all_v2.csv` | 예 |
 | `local_plans_building.csv` · 단위 맞춘 표(= 저장소 표) | 예 |
 | `apartment_energy_stats_2025.csv` · `regional_climate_guide.csv`(= 저장소 표) | 예 |
+| (2026-11-24) 지역 조건표 결과 9개(`decomp_*` · `diag_gas` · `g2_rejudge` · `kogas_compare` · `regional_conditions_sigungu.csv` = 저장소 표) | 예 |
