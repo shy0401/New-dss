@@ -463,6 +463,12 @@ def key_results(s: dict[str, Any]) -> list[tuple[str, str]]:
     return out
 
 
+def additionality_note(s: dict[str, Any]) -> str:
+    """새 건물 연면적이 있는 계획이면 법정 에너지 기준 몫이 감축량에 섞일 수 있다는 한계 문장(2026-11-24), 없으면 빈 문자열."""
+    from .reduction_plan import ZEB_ADDITIONALITY_NOTE
+    return ZEB_ADDITIONALITY_NOTE if ((s.get("effort") or {}).get("added_floor_area_m2") or 0) > 0 else ""
+
+
 # 보고서 HTML(인쇄·PDF 저장용)의 장 구성: 기후변화영향평가서(온실가스) 항목 순서 — 대상·방법 → 배출 현황 → 영향 → 목표 → 감축 방안 → 한계.
 HTML_SECTIONS = (
     ("1. 검토 대상과 방법", ("scope", "coverage", "rules")),
@@ -628,7 +634,7 @@ def area_html(s: dict[str, Any]) -> str:
             parts.append(f"<h2>{escape(title)}</h2>" + ("<ul>" + "".join(f"<li>{escape(t)}</li>" for t in texts) + "</ul>" if texts else "") + extra)
     rest = [f["text"] for i, f in enumerate(facts) if i not in used]
     limits = [h.get("factor_basis", ""), "관측이 없는 연도는 0이 아니라 자료 없음입니다. 행정동 통계는 격자·반경에 배분하지 않았습니다.",
-              "운영 단계 1차 추정이며 법적 적합성이나 넷제로 달성을 판정하지 않습니다."] + list((s.get("effort") or {}).get("assumptions") or [])
+              "운영 단계 1차 추정이며 법적 적합성이나 넷제로 달성을 판정하지 않습니다.", additionality_note(s)] + list((s.get("effort") or {}).get("assumptions") or [])
     parts.append("<h2>7. 자료 범위와 한계</h2><ul>" + "".join(f"<li>{escape(t)}</li>" for t in rest + [x for x in limits if x]) + "</ul>")
     parts.append(f"<footer>재현 정보 · 근거 SHA256 {escape(s['evidence_hash'])} · 작성 방식 {escape(s['summary']['mode'])} — {escape(s['summary']['validation'])}"
                  f" · 구역 선정 {escape(s['area'].get('method') or '')}</footer></main></body></html>")
@@ -711,7 +717,7 @@ def area_markdown(s: dict[str, Any]) -> str:
                   "\n".join(["| 범위 | 계획 반영 뒤 연간 변화 |", "| --- | --- |"] + [f"| {k} | {v} |" for k, v in change_rows(s)]),
                   "두 값은 범위가 달라 더하거나 평균하지 않습니다." + (" 변화 예측의 가정: " + " · ".join(str(a) for a in assumed) + "." if assumed else "")]
     lines += ["## 해석 범위", h.get("factor_basis", ""), "관측이 없는 연도는 0이 아니라 자료 없음입니다. 행정동 통계는 격자·반경에 배분하지 않았습니다.",
-              "운영 단계 1차 추정이며 법적 적합성이나 넷제로 달성을 판정하지 않습니다."]
+              "운영 단계 1차 추정이며 법적 적합성이나 넷제로 달성을 판정하지 않습니다."] + [x for x in [additionality_note(s)] if x]
     rec = (s.get("effort") or {}).get("recommended")
     if rec and rec.get("steps"):
         rows = ["| 순서 | 방안 | 내용 | 연간 감축 kWh | 연간 감축 tCO2eq |", "| --- | --- | --- | --- | --- |"]

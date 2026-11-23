@@ -169,3 +169,13 @@ def test_local_selection_keeps_scope_first_engine_order_and_at_least_three_sente
     result = summarize(pool, True)
     assert result['mode'] == 'LOCAL_SLM'
     assert result['paragraphs'] == ['범위.', '연간.', '건물 전체.']  # scope added, padded to 3, engine order
+
+
+def test_cautions_name_the_mandatory_energy_rule_only_when_a_plan_has_a_ladder():
+    """2026-11-24: 3D 사다리가 있는 보고서에만 법정 에너지 기준 몫이 섞일 수 있다는 한계를 적는다(계산은 그대로)."""
+    from app.reporting import report_cautions
+    base = ({'coverage': {'electricity_months': 12}}, {'building_energy': None})
+    with_ladder = report_cautions(*base, [{'reduction_plan': {'available': True}}])
+    assert any('제2025-313호 제7조' in c for c in with_ladder)
+    assert not any('제2025-313호' in c for c in report_cautions(*base, [{'reduction_plan': {'available': False}}]))
+    assert not any('제2025-313호' in c for c in report_cautions(*base, []))
