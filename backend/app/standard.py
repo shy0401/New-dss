@@ -59,6 +59,14 @@ def applied_version(data_dir: str | Path | None = None) -> str | None:
         return None
 
 
+def applied_degree_day_rule(data_dir: str | Path | None = None) -> str | None:
+    """The degree-day rule (``degree_days.RULE``) the last apply_standard used, or None when it never ran."""
+    try:
+        return json.loads(marker_path(data_dir).read_text(encoding="utf-8")).get("rule")
+    except (OSError, ValueError):
+        return None
+
+
 # --------------------------------------------------------------------------- apply
 def _kma_degree_days(db: Any) -> dict[str, tuple[float | None, float | None]]:
     """use_ym → (HDD, CDD) from the stored KMA daily means (one value per date)."""
@@ -75,17 +83,22 @@ def _kma_degree_days(db: Any) -> dict[str, tuple[float | None, float | None]]:
 
 
 def recompute_degree_days(db: Any, data_dir: str | Path | None = None, *, log: Log = print, fetch: bool = True) -> dict[str, int]:
-    """Recompute every stored monthly HDD/CDD under the current rule. Returns counts per table."""
+    """Recompute every stored monthly HDD/CDD under the current rule. Returns counts per table.
+
+    Each month is recomputed from its own daily source. A month whose daily source is gone keeps neither value: the stored
+    one follows the old rule, so HDD and CDD both become NULL (counted), never an old-rule value under the new rule
+    (2026-11-24; before, only CDD was cleared, and region ASOS months were kept). apply_standard calls this only when the
+    degree-day rule itself changed (see there)."""
     from .domain import monthly_weather
     from .kma_asos import WeatherMonthlyObservation, refresh_effective_weather
-    stats = {"kma_months": 0, "era5_months": 0, "era5_cleared": 0}
+    stats = {"kma_months": 0, "kma_cleared": 0, "era5_months": 0, "era5_cleared": 0}
     kma = _kma_degree_days(db)
     era5_years: set[int] = set()
     for row in db.scalars(select(WeatherMonthlyObservation)):
         if row.source_type == "OFFICIAL":
             hdd, cdd = kma.get(row.use_ym, (None, None))
             row.hdd, row.cdd = hdd, cdd
-            stats["kma_months"] += 1
+            stats["kma_months" if row.use_ym in kma else "kma_cleared"] += 1
         else:
             era5_years.add(int(row.use_ym[:4]))
     db.flush()
@@ -112,7 +125,7 @@ def recompute_degree_days(db: Any, data_dir: str | Path | None = None, *, log: L
                 row.hdd, row.cdd = m["hdd"], m["cdd"]
                 stats["era5_months"] += 1
             else:
-                row.cdd = None  # no daily data left to apply the new cooling base: missing, not the old-rule value
+                row.hdd = row.cdd = None  # no daily data left to apply the new rule: missing, not the old-rule value
                 stats["era5_cleared"] += 1
     db.flush()
     refresh_effective_weather(db)
@@ -144,15 +157,15 @@ def _recompute_region_degree_days(db: Any, raw: Path, log: Log) -> dict[str, int
     """Region weather months under the current rule, each from its own source.
 
     FALLBACK months come from the ERA5-Land daily file (raw/weather-regions/<code>.json); OFFICIAL months (the same
-    city's ASOS station, provider ``KMA ASOS <station> <place>``) from that station's daily pages. An OFFICIAL month
-    whose daily pages are gone (or not complete) is left as stored and counted — never overwritten with ERA5-Land
-    values under an ASOS label (DATA_STANDARD 5.10).
+    city's ASOS station, provider ``KMA ASOS <station> <place>``) from that station's daily pages — never ERA5-Land values
+    under an ASOS label (DATA_STANDARD 5.10). A month whose own daily source is gone (or not complete) gets NULL HDD and
+    CDD and is counted (2026-11-24: was kept as stored, which under a changed rule mixes the old rule in).
     """
     from .domain import monthly_weather
     from .regions import RegionWeatherMonthly
-    stats = {"region_months": 0, "region_cleared": 0, "region_asos_months": 0, "region_asos_kept": 0}
+    stats = {"region_months": 0, "region_cleared": 0, "region_asos_months": 0, "region_asos_cleared": 0}
     stations: dict[str, dict[str, dict[str, Any]]] = {}
-    kept: dict[str, int] = defaultdict(int)
+    cleared: dict[str, int] = defaultdict(int)
     regions = sorted(set(db.scalars(select(RegionWeatherMonthly.region_code).distinct())))
     for code in regions:
         path = raw / "weather-regions" / f"{code}.json"
@@ -168,8 +181,9 @@ def _recompute_region_degree_days(db: Any, raw: Path, log: Log) -> dict[str, int
                     row.hdd, row.cdd = m["hdd"], m["cdd"]
                     stats["region_asos_months"] += 1
                 else:
-                    stats["region_asos_kept"] += 1
-                    kept[f"{code}:{station or row.provider}"] += 1
+                    row.hdd = row.cdd = None
+                    stats["region_asos_cleared"] += 1
+                    cleared[f"{code}:{station or row.provider}"] += 1
                 continue
             if era5 is None:
                 era5 = {}
@@ -183,11 +197,11 @@ def _recompute_region_degree_days(db: Any, raw: Path, log: Log) -> dict[str, int
                 row.hdd, row.cdd = m["hdd"], m["cdd"]
                 stats["region_months"] += 1
             else:
-                row.cdd = None
+                row.hdd = row.cdd = None
                 stats["region_cleared"] += 1
-    if kept:
-        log(f"ASOS 달 {stats['region_asos_kept']:,}개는 일자료 원본이 없거나 모자라 저장된 값 그대로 둠: "
-            + ", ".join(f"{k} {v}" for k, v in sorted(kept.items())[:10]) + (" …" if len(kept) > 10 else ""))
+    if cleared:
+        log(f"ASOS 달 {stats['region_asos_cleared']:,}개는 일자료 원본이 없거나 모자라 HDD · CDD를 비움(옛 규칙 값을 남기지 않음): "
+            + ", ".join(f"{k} {v}" for k, v in sorted(cleared.items())[:10]) + (" …" if len(cleared) > 10 else ""))
     return stats
 
 
@@ -249,7 +263,14 @@ def apply_standard(db: Any, data_dir: str | Path | None = None, *, log: Log = pr
     except Exception as exc:  # noqa: BLE001 - a missing GIR text is reported by the check, not fatal here
         db.rollback()
         result["factors_error"] = f"{type(exc).__name__}: {exc}"
-    result["degree_days"] = recompute_degree_days(db, data_dir, log=log, fetch=fetch)
+    # 2026-11-24: degree days are recomputed only when their own rule changed. A version bump for something else (K-apt
+    # rules, 1.3 on 2026-11-20) used to recompute them too and overwrote 1,475 region ASOS months with ERA5-Land values.
+    previous_rule = applied_degree_day_rule(data_dir)
+    if previous_rule == RULE:
+        result["degree_days"] = {"skipped": f"도일 규칙 그대로({RULE}): 저장값 유지"}
+        log(f"냉난방도일: 규칙 그대로({RULE}), 다시 계산하지 않음")
+    else:
+        result["degree_days"] = recompute_degree_days(db, data_dir, log=log, fetch=fetch)
     result["solar"] = drop_solar_placeholders(db, log=log)
     result["complex_mapping"] = mark_complexes_outside_grid(db, log=log)
     result["kapt_status"] = reclassify_kapt_months(db, log=log)
@@ -357,6 +378,8 @@ def check_database(db: Any, data_dir: str | Path | None = None, *, raw_sample: i
                        f"ASOS 월 {off}개가 일자료 재계산과 다름, 빠진 날 있는데 값 있는 달 {partial}개, 적용 판 {version or '없음'}"
                        + ("" if status == "OK" else " → apply-standard"), off + partial, hdd_base_c=HDD_BASE_C, cdd_base_c=CDD_BASE_C))
 
+    items.append(region_asos_degree_days_item(db, data_dir))
+
     bad_ids = db.scalar(text(r"SELECT count(*) FROM grid_500m WHERE id !~ '^cell_[0-9]+_[0-9]+$'")) or 0
     off_grid = db.scalar(text(r"SELECT count(*) FROM grid_500m WHERE id ~ '^cell_[0-9]+_[0-9]+$' AND "
                               r"(split_part(id,'_',2)::bigint % 500 <> 0 OR split_part(id,'_',3)::bigint % 500 <> 0)")) or 0
@@ -371,6 +394,36 @@ def check_database(db: Any, data_dir: str | Path | None = None, *, raw_sample: i
     items.append(_item("raw_files", "원본은 data/raw에 그대로 (1·7절)", "OK" if not missing else "WARN",
                        f"{scope}, 파일 없음 {len(missing):,}건" + (f" (예: {missing[0]})" if missing else ""), len(missing)))
     return items
+
+
+def region_asos_degree_days_item(db: Any, data_dir: str | Path | None = None) -> dict[str, Any]:
+    """Region weather months labelled ASOS (OFFICIAL) carry the HDD/CDD of that station's stored daily pages (2026-11-24).
+
+    The 2026-11-20 recompute left ERA5-Land degree days under an ASOS label in 12 regions for four days unnoticed; this
+    item would have shown it. Months whose daily pages are not stored are counted, not judged."""
+    from .regions import RegionWeatherMonthly
+    raw = _root(data_dir) / "raw"
+    stations: dict[str, dict[str, dict[str, Any]]] = {}
+    off: dict[str, int] = defaultdict(int)
+    checked = no_source = 0
+    for row in db.scalars(select(RegionWeatherMonthly).where(RegionWeatherMonthly.source_type == "OFFICIAL")):
+        match = ASOS_PROVIDER_RE.match(row.provider or "")
+        station = match.group(1) if match else None
+        if station and station not in stations:
+            stations[station] = _asos_station_months(raw, station, lambda _m: None)
+        m = stations.get(station or "", {}).get(row.use_ym)
+        if not m or not m["official_asos_complete"]:
+            no_source += 1
+            continue
+        checked += 1
+        if any((a is None) != (b is None) or (a is not None and abs(a - b) > 0.05)
+               for a, b in ((row.hdd, m["hdd"]), (row.cdd, m["cdd"]))):
+            off[row.region_code] += 1
+    bad = sum(off.values())
+    detail = (f"ASOS 달 {checked:,}개 대조, 다름 {bad:,}개" + (f"({len(off)}개 지역: " + ", ".join(sorted(off)[:8]) + ")" if bad else "")
+              + (f", 일자료 원본이 없어 못 본 달 {no_source:,}개" if no_source else ""))
+    return _item("region_asos_degree_days", "지역 기상 ASOS 달의 도일 = 그 지점 일자료 (2 · 5.10절)", "OK" if not bad else "FAIL",
+                 detail + (" → 기상 단계의 ASOS 덮어쓰기(scripts/region_weather)로 되돌림" if bad else ""), bad)
 
 
 def _encoding(raw: bytes) -> tuple[str | None, bool]:

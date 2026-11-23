@@ -110,10 +110,12 @@ def test_region_degree_days_recompute_keeps_asos_months_on_asos(tmp_path):
     jan, feb = db.get(RegionWeatherMonthly, ("27110", "202501")), db.get(RegionWeatherMonthly, ("27110", "202502"))
     assert (jan.hdd, jan.cdd, jan.provider) == (16.0 * 31, 0.0, "KMA ASOS 143 대구")   # ASOS value, not ERA5 18 × 31
     assert (feb.hdd, feb.cdd) == (18.0 * 28, 0.0)                                      # ERA5-Land as before
-    assert stats["region_asos_months"] == 1 and stats["region_months"] == 1 and stats["region_asos_kept"] == 0
+    assert stats["region_asos_months"] == 1 and stats["region_months"] == 1 and stats["region_asos_cleared"] == 0
 
 
-def test_region_asos_month_without_daily_pages_is_left_as_stored_and_counted(tmp_path):
+def test_region_asos_month_without_daily_pages_is_cleared_and_counted_under_a_new_rule(tmp_path):
+    """2026-11-24: recompute runs only when the degree-day rule changed, so a stored value follows the old rule: a month
+    whose own daily pages are gone gets NULL HDD and CDD (counted), not the old-rule value and never ERA5-Land."""
     from app.regions import RegionWeatherMonthly
     from app.standard import recompute_degree_days
     raw = tmp_path / "raw"
@@ -124,6 +126,74 @@ def test_region_asos_month_without_daily_pages_is_left_as_stored_and_counted(tmp
     messages: list[str] = []
     stats = recompute_degree_days(db, tmp_path, log=messages.append, fetch=False)
     jan = db.get(RegionWeatherMonthly, ("44800", "202501"))
-    assert (jan.hdd, jan.cdd) == (450.5, 0.0)                     # untouched: neither ERA5 nor NULL
-    assert stats["region_asos_kept"] == 1 and stats["region_asos_months"] == 0 and stats["region_months"] == 0
+    assert (jan.hdd, jan.cdd, jan.provider) == (None, None, "KMA ASOS 177 홍성")   # missing under the new rule, not ERA5
+    assert stats["region_asos_cleared"] == 1 and stats["region_asos_months"] == 0 and stats["region_months"] == 0
     assert any("44800:177 1" in m for m in messages)
+
+
+def test_fallback_month_without_era5_file_loses_both_values(tmp_path):
+    from app.regions import RegionWeatherMonthly
+    from app.standard import recompute_degree_days
+    db = _region_db()
+    db.add(_region_row("12720", "202501", "Open-Meteo / ERA5-Land", "FALLBACK", 500.0, 3.0))
+    db.commit()
+    stats = recompute_degree_days(db, tmp_path, log=lambda _m: None, fetch=False)
+    jan = db.get(RegionWeatherMonthly, ("12720", "202501"))
+    assert (jan.hdd, jan.cdd) == (None, None) and stats["region_cleared"] == 1   # was: CDD cleared, old HDD kept
+
+
+def test_apply_standard_leaves_degree_days_alone_when_their_rule_did_not_change(tmp_path, monkeypatch):
+    """A version bump for another rule (1.3 was K-apt) must not touch degree days — that is how 1,475 region ASOS
+    months got ERA5-Land values on 2026-11-20."""
+    import json
+    from app import standard
+    from app.degree_days import RULE
+    from app.regions import RegionWeatherMonthly
+    db = _region_db()
+    db.add(_region_row("41110", "202501", "KMA ASOS 119 수원", "OFFICIAL", 450.5, 0.0))   # no pages stored at all
+    db.commit()
+    (tmp_path / "ops").mkdir()
+    (tmp_path / "ops" / "standard.json").write_text(json.dumps({"version": "1.2", "rule": RULE}), encoding="utf-8")
+    for name in ("drop_solar_placeholders", "mark_complexes_outside_grid", "reclassify_kapt_months", "recompute_kapt_carbon"):
+        monkeypatch.setattr(standard, name, lambda *_a, **_k: {})
+    monkeypatch.setattr("app.emissions.collect_factors", lambda _db: 0)
+    result = standard.apply_standard(db, tmp_path, log=lambda _m: None, fetch=False)
+    assert result["degree_days"] == {"skipped": f"도일 규칙 그대로({RULE}): 저장값 유지"}
+    jan = db.get(RegionWeatherMonthly, ("41110", "202501"))
+    assert (jan.hdd, jan.cdd) == (450.5, 0.0)
+    assert json.loads((tmp_path / "ops" / "standard.json").read_text(encoding="utf-8"))["rule"] == RULE
+
+
+def test_apply_standard_recomputes_degree_days_when_the_rule_changed(tmp_path, monkeypatch):
+    import json
+    from app import standard
+    from app.regions import RegionWeatherMonthly
+    raw = tmp_path / "raw"
+    _asos_page(raw, "143", 2.0)
+    db = _region_db()
+    db.add(_region_row("27110", "202501", "KMA ASOS 143 대구", "OFFICIAL", 1.0, 1.0))
+    db.commit()
+    (tmp_path / "ops").mkdir()
+    (tmp_path / "ops" / "standard.json").write_text(json.dumps({"version": "1.2", "rule": "HDD 18°C · CDD 18°C"}), encoding="utf-8")
+    for name in ("drop_solar_placeholders", "mark_complexes_outside_grid", "reclassify_kapt_months", "recompute_kapt_carbon"):
+        monkeypatch.setattr(standard, name, lambda *_a, **_k: {})
+    monkeypatch.setattr("app.emissions.collect_factors", lambda _db: 0)
+    result = standard.apply_standard(db, tmp_path, log=lambda _m: None, fetch=False)
+    assert result["degree_days"]["region_asos_months"] == 1
+    assert db.get(RegionWeatherMonthly, ("27110", "202501")).hdd == 16.0 * 31
+
+
+def test_check_flags_region_asos_months_that_differ_from_their_daily_pages(tmp_path):
+    from app.standard import region_asos_degree_days_item
+    raw = tmp_path / "raw"
+    _asos_page(raw, "143", 2.0)                                               # 16 HDD a day in January
+    db = _region_db()
+    db.add_all([_region_row("27110", "202501", "KMA ASOS 143 대구", "OFFICIAL", 16.0 * 31, 0.0),       # matches
+                _region_row("27140", "202501", "KMA ASOS 143 대구", "OFFICIAL", 18.0 * 31, 0.0),       # ERA5-like value
+                _region_row("44800", "202501", "KMA ASOS 177 홍성", "OFFICIAL", 450.5, 0.0)])          # no pages
+    db.commit()
+    item = region_asos_degree_days_item(db, tmp_path)
+    assert item["status"] == "FAIL" and item["count"] == 1 and "27140" in item["detail"] and "못 본 달 1개" in item["detail"]
+    db.get(__import__("app.regions", fromlist=["RegionWeatherMonthly"]).RegionWeatherMonthly, ("27140", "202501")).hdd = 16.0 * 31
+    db.commit()
+    assert region_asos_degree_days_item(db, tmp_path)["status"] == "OK"
