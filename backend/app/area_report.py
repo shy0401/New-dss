@@ -320,7 +320,10 @@ def key_results(s: dict[str, Any]) -> list[tuple[str, str]]:
     rec = e.get("recommended")
     if rec and rec.get("steps") and not e.get("already_met"):
         out.append(("구체적 감축 방안", " + ".join(f"{st['title']} {st['detail']}" for st in rec["steps"]) + f" → {_t(rec['total_kgco2eq'])} — "
-                    + ("목표 달성" if rec["met"] else f"목표까지 {_t(rec['gap_kgco2eq'])} 부족")))
+                    + ("위 한계 기준이라 확정 아님(층수 필요)" if rec.get("onsite_status") == "UPPER_BOUND_ONLY"
+                       else "목표 달성" if rec["met"] else f"목표까지 {_t(rec['gap_kgco2eq'])} 부족")))
+    elif rec and rec.get("onsite_status") == "NO_ROOF" and not e.get("already_met"):
+        out.append(("구체적 감축 방안", f"계획 지붕 없음 — 남는 양 {_t(rec.get('remaining_kgco2eq'))}"))
     mix = e.get("mix")
     if mix and not e.get("already_met"):
         out.append(("감축 수단 조합", f"{_t(mix['total_kgco2eq'])} — " + ("목표 달성" if mix["met"] else f"목표까지 {_t(mix['gap_kgco2eq'])} 부족")))
@@ -338,8 +341,8 @@ HTML_SECTIONS = (
     ("2-2. 빈 자료 보정·추정 (추정값, 관측과 따로)", ("estimate_",)),
     ("2-3. 업계·정부 기준과 대조 (참고)", ("bench_",)),
     ("3. 개발 이력과 전후 영향", ("development", "register", "event", "before_after", "change", "new_share", "estimated_change", "gap_")),
-    ("4. 감축 목표와 필요 감축량", ("effort_fallback", "effort_basis", "effort_target", "effort_met")),
-    ("5. 감축 방안", ("effort_rec", "effort_new", "effort_all", "effort_offset", "effort_pv", "effort_mix", "effort_mix_gap")),
+    ("4. 감축 목표와 필요 감축량", ("effort_fallback", "effort_basis", "effort_target", "effort_met", "effort_added", "effort_added_none", "effort_split")),
+    ("5. 감축 방안", ("effort_rec_added", "effort_rec", "effort_new", "effort_all", "effort_offset", "effort_pv", "effort_mix", "effort_mix_gap")),
     ("6. 지역 특성 (SGIS 1km 격자)", ("sgis_grid", "sgis_grid_shares")),
 )
 
@@ -471,7 +474,7 @@ def area_html(s: dict[str, Any]) -> str:
                       + "".join(f"<tr><td>{i}</td><td>{escape(st['title'])}</td><td>{escape(st['detail'])}</td><td class=num>{num(st['kwh'])}</td><td class=num>{num(st['kgco2eq'] / 1000, 1)}</td></tr>"
                                 for i, st in enumerate(rec["steps"], 1))
                       + f"<tr><th colspan=3>합계 (필요 감축량 {num(rec['required_kgco2eq'] / 1000, 1)} t)</th><td class=num>{num(rec['total_kwh'])}</td><td class=num>{num(rec['total_kgco2eq'] / 1000, 1)}</td></tr></tbody></table>"
-                      + f"<p class=note>{rec_tail} 신축·기존 절감률은 가정값(기준 문서 5.15), 태양광은 남는 양을 10 kW 단위로 올려 채운 값입니다. 전력 배출계수 {factor} kgCO2eq/kWh.</p>")
+                      + f"<p class=note>{rec_tail} 태양광은 남는 양을 10 kW 단위로 올려 채우되 계획 지붕 한도(건축면적 × 60% ÷ 10 m²/kW)까지만 세고, 넘는 몫은 남는 양으로 따로 적습니다(기준 문서 5.15). 전력 배출계수 {factor} kgCO2eq/kWh.</p>")
         if title.startswith("5.") and (s.get("effort") or {}).get("mix"):
             m = s["effort"]["mix"]
             extra += ("<table><thead><tr><th>감축 수단</th><th>입력</th><th>연간 감축 kWh</th></tr></thead><tbody>"
@@ -570,7 +573,7 @@ def area_markdown(s: dict[str, Any]) -> str:
         rows += [f"| {i} | {st['title']} | {st['detail']} | {fmt(st['kwh'])} | {st['kgco2eq'] / 1000:,.1f} |" for i, st in enumerate(rec["steps"], 1)]
         rows.append(f"| 합계 | | 필요 감축량 {rec['required_kgco2eq'] / 1000:,.1f} t | {fmt(rec['total_kwh'])} | {rec['total_kgco2eq'] / 1000:,.1f} |")
         lines += ["## 구체적 감축 방안 (순서대로)", "\n".join(rows),
-                  ("목표를 채웁니다." if rec["met"] else f"필요 감축량의 {rec['share_pct']:,.1f}%입니다.") + " 신축·기존 절감률은 가정값(기준 문서 5.15), 태양광은 남는 양을 10 kW 단위로 올려 채운 값입니다."]
+                  ("목표를 채웁니다." if rec["met"] else f"필요 감축량의 {rec['share_pct']:,.1f}%입니다.") + " 태양광은 남는 양을 10 kW 단위로 올려 채우되 계획 지붕 한도(건축면적 × 60% ÷ 10 m²/kW)까지만 세고, 넘는 몫은 남는 양으로 따로 적습니다(기준 문서 5.15)."]
     if s.get("effort") and s["effort"].get("available"):
         lines += ["## 감축 노력 계산의 가정"] + [f"- {a}" for a in s["effort"]["assumptions"]]
     lines += ["## 재현 정보", f"근거 SHA256: {s['evidence_hash']}", f"작성 방식: {s['summary']['mode']} — {s['summary']['validation']}"]
