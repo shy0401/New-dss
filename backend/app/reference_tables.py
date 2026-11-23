@@ -71,14 +71,16 @@ def use_intensity(region_code: str | None, use_class: str) -> dict[str, Any] | N
 
 # 기후 가이드 표의 지점 연결 중 같은 시 · 군(광역시는 시 안)인 것만. '같은 시도 · 같은 지역 구분 대표 지점'은 다른 도시라 쓰지 않음.
 ASOS_MAPPINGS = ("지점 있음", "광역시 지점")
+# 평년값 지점 번호가 ASOS가 아닌데 같은 시에 ASOS가 있는 곳(2026-11-24): 대구 평년값 860(신암, ASOS 일자료 0행) → ASOS 143(응답 지점명 '대구')
+NORMALS_TO_ASOS = {"860": ("143", "대구")}
 
 
 def asos_station(code: str | None) -> tuple[str, str] | None:
     """(ASOS 지점 번호, 지점 이름) of the region's own city (regional_climate_guide.csv, 기상청 평년값 지점 연결), or None.
 
     Only ASOS stations: 평년값 지점 번호 300 이상(방재 AWS 등)은 ASOS 일자료 API가 0행을 줌(2026-11-21 시험: 541 남양주 · 572 성남 ·
-    571 화성 · 712 순천 · 860 대구 0행, 108 서울 · 184 제주 · 257 양산시 31행). A city with 일반구(41110 등) uses its own row, else
-    the station most of its 구 rows name."""
+    571 화성 · 712 순천 · 860 대구 0행, 108 서울 · 184 제주 · 257 양산시 31행), except NORMALS_TO_ASOS (대구 860 → 143). A city with
+    일반구(41110 등) uses its own row, else the station most of its 구 rows name."""
     from collections import Counter
     if not code:
         return None
@@ -86,8 +88,9 @@ def asos_station(code: str | None) -> tuple[str, str] | None:
     row = _by_code("regional_climate_guide.csv", code)
     rows = [row] if row else [r for r in _rows("regional_climate_guide.csv")
                               if code.endswith("0") and r["sigungu_code"][:4] == code[:4] and r["sigungu_code"] != code]
-    picks = [(r["station_id"], r["station_name"]) for r in rows
-             if r["mapping"] in ASOS_MAPPINGS and r["station_id"].isdigit() and int(r["station_id"]) < 300]
+    picks = [NORMALS_TO_ASOS.get(r["station_id"], (r["station_id"], r["station_name"])) for r in rows
+             if r["mapping"] in ASOS_MAPPINGS]
+    picks = [p for p in picks if p[0].isdigit() and int(p[0]) < 300]
     return Counter(picks).most_common(1)[0][0] if picks else None
 
 

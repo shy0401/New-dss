@@ -138,6 +138,10 @@ def test_asos_station_is_the_regions_own_asos_station_only():
     assert asos_station("50110") == ("184", "제주") and asos_station("48330") == ("257", "양산시")
     assert asos_station("11740") == ("108", "서울") and asos_station("26440") == ("159", "부산")   # same as the hand list
     assert asos_station("41360") is None          # 541 남양주: 평년값 지점이지만 ASOS 일자료 없음
-    assert asos_station("27290") is None          # 대구 구: 가이드 지점 860(ASOS 아님)
+    # 대구: 가이드 지점 860(평년값, ASOS 일자료 없음) → 같은 시 ASOS 143 (2026-11-24). 구 · 군 모두
+    assert all(asos_station(c) == ("143", "대구") for c in ("27110", "27170", "27200", "27290", "27710", "27720"))
+    assert asos_station("44800") is None          # 홍성: 가이드는 서산 129(다른 시) → 손정리(region_prepare.ASOS_STATIONS)로 177
+    from app.region_prepare import ASOS_STATIONS
+    assert ASOS_STATIONS["44800"] == ("177", "홍성")
     assert asos_station("12190") is None          # 다른 도시 대표 지점(목포)으로 이어진 곳
     assert asos_station(None) is None and asos_station("99999") is None
