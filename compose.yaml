@@ -8,6 +8,9 @@ services:
       POSTGRES_PASSWORD: carbon_local
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    # 2026-11-24: 첫 지역 조회 때 DB 파일 캐시가 이 컨테이너 몫으로 21 GB까지 쌓였다(프로세스 자체는 공유 버퍼 128 MB).
+    # 한도를 걸면 캐시만 줄어든다(꺼지지 않음). 32 GB PC 기준(docs/TEAM_SETUP.md 1절)
+    mem_limit: 3g
     healthcheck:
       test: [CMD-SHELL, pg_isready -U carbon -d carbon]
       interval: 5s
@@ -48,7 +51,8 @@ services:
     env_file: .env
     environment: *backend_env
     # 5 = 지역 수집 차선 4개(기본 · K-apt · VWorld · 건축HUB, 2026-11-21) + 다른 작업 1개
-    command: celery -A app.tasks.celery_app worker --loglevel=WARNING --concurrency=5
+    # --max-tasks-per-child (2026-11-24): 작업 50개마다 프로세스를 새로 띄워, 한 번 커진 메모리(관측 434 · 314 MB)를 놓게 함
+    command: celery -A app.tasks.celery_app worker --loglevel=WARNING --concurrency=5 --max-tasks-per-child=50
     volumes:
       - ./data:/data
     depends_on:
