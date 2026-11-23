@@ -31,15 +31,19 @@ def model_rows(db,year,typ,region=None):
     from .regions import DEFAULT_REGION,scope,weather_rows
     from .service import heating_group
     sc=scope(db,region)
-    complexes={c.kapt_code:c for c in db.scalars(select(ApartmentComplex)) if sc.owns_complex(c.bjd_code,c.grid_id)}
+    # 2026-11-23 U1: only the columns used here (the JSON detail columns of 22k complexes cost seconds per call)
+    from sqlalchemy.orm import load_only
+    cols=load_only(ApartmentComplex.kapt_code,ApartmentComplex.bjd_code,ApartmentComplex.grid_id,ApartmentComplex.households,ApartmentComplex.approval_date,
+                   ApartmentComplex.heating_type,ApartmentComplex.gross_floor_area_m2,ApartmentComplex.management_area_m2,ApartmentComplex.name)
+    complexes={c.kapt_code:c for c in db.scalars(select(ApartmentComplex).options(cols)) if sc.owns_complex(c.bjd_code,c.grid_id)}
     areas,_=validated_complex_areas(complexes.values())
     within=EnergyMonthly.use_ym.between(f'{year}01',f'{year}12')
     clause=sc.legal_clause(EnergyMonthly.sigungu_code)
     if clause is not None:within=within & clause
     parcels=defaultdict(dict)
-    for grid,ym,kwh,raw in db.execute(select(EnergyMonthly.grid_id,EnergyMonthly.use_ym,EnergyMonthly.usage_kwh,EnergyMonthly.raw_record)
-                                      .where(within,EnergyMonthly.energy_type==typ,EnergyMonthly.grid_id.is_not(None),EnergyMonthly.usage_kwh.is_not(None))):
-        code=(raw or {}).get('kapt_code')
+    kapt=EnergyMonthly.raw_record['kapt_code'].as_string()  # the one key used, not the whole JSON record (U1)
+    for grid,ym,kwh,code in db.execute(select(EnergyMonthly.grid_id,EnergyMonthly.use_ym,EnergyMonthly.usage_kwh,kapt)
+                                       .where(within,EnergyMonthly.energy_type==typ,EnergyMonthly.grid_id.is_not(None),EnergyMonthly.usage_kwh.is_not(None))):
         if code and code in complexes:
             months=parcels[(grid,code)];months[ym]=months.get(ym,0.0)+float(kwh)
     chosen=defaultdict(list)
