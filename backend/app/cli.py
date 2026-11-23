@@ -25,7 +25,7 @@ def build_cell_state_command(args):
     """build-cell-state: 칸 · 해 상태 표(팀 변화 모델 변형 H 입력)를 CSV로 쓴다. DB는 읽기만 한다."""
     from .cell_state import build_cell_state,parse_years
     if not args.region:raise SystemExit('--region <5자리 지역 코드>가 필요함')
-    years=parse_years(args.years or '2016-2024')
+    years=parse_years(args.years or '2014-2024')
     out=Path(args.out) if args.out else DATA_DIR/'derived'/'cell_state'/args.region/'cell_state.csv'
     if not str(out.resolve()).startswith(str(Path(DATA_DIR).resolve())):raise SystemExit(f'--out은 data 폴더({DATA_DIR}) 아래여야 함(Git에 올리지 않음)')
     with Session() as db:
