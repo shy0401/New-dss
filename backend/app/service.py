@@ -140,10 +140,11 @@ def _pooled_rows(db,year,sc):
 
 # 2026-11-24: kept as plain tuples, not ORM objects. A db.rollback() later in the filling request expires every ORM object of
 # its session, and once that session closed the remembered objects raised DetachedInstanceError on the next request.
-SlimComplex=namedtuple('SlimComplex','kapt_code heating_type households gross_floor_area_m2 management_area_m2 name')
+# bjd_code · grid_id (2026-11-24): baseline_estimate reads the region's heating mix from this memory too, not the whole table
+SlimComplex=namedtuple('SlimComplex','kapt_code heating_type households gross_floor_area_m2 management_area_m2 name bjd_code grid_id')
 
 def _slim_complexes(db):
-    """All K-apt complexes with the columns pooled_baseline uses (validated_complex_areas + heating), kept for POOLED_TTL."""
+    """All K-apt complexes with the columns pooled_baseline and baseline_estimate use, kept for POOLED_TTL."""
     import time
     from .kapt import ApartmentComplex
     hit=_SLIM_COMPLEXES.get('all')
@@ -185,7 +186,8 @@ def baseline_estimate(db,year,sc,factors,grid_id=None):
     heating=grid_heating(db.scalars(select(ApartmentComplex).where(ApartmentComplex.grid_id==grid_id)).all()) if grid_id else None
     mixed=None
     if not heating:
-        groups=[heating_group(c.heating_type) for c in db.scalars(select(ApartmentComplex)) if region.owns_complex(c.bjd_code,c.grid_id)]
+        # the remembered slim rows (2026-11-24), not every ORM complex with its JSON columns on each request
+        groups=[heating_group(c.heating_type) for c in _slim_complexes(db) if region.owns_complex(c.bjd_code,c.grid_id)]
         known=[g for g in groups if g]
         if known and 0.1<=sum(g=='district' for g in known)/len(known)<=0.9:mixed=True
     for basis,target in (('REGION_POOLED',region),('ALL_REGIONS_POOLED',None)):

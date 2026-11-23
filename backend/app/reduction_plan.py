@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .benchmarks import PRIMARY_ENERGY_FACTOR
+from .benchmarks import PRIMARY_ENERGY_FACTOR, ZEB_GRADES
 from .reduction_measures import embodied, measure_table
 
 # 지표(실측 기반). 근거 표: docs/REDUCTION_INDICATORS.md
@@ -43,7 +43,7 @@ ZEB_ADDITIONALITY_NOTE = ("2025-06-30 이후 사업계획 승인을 신청하는
                           "감축량의 기준안은 지금 있는 공동주택의 관측 원단위라, 새 건물의 감축량(단열·창호, 태양광)에는 이 기준만 지켜도 "
                           "생기는 몫이 섞여 있을 수 있으며 이 도구는 그 몫을 따로 나누지 않습니다.")
 # 제로에너지건축물 인증 등급의 에너지자립률 하한(%) — 참고 위치일 뿐 인증 판정이 아니다(1++ 효율등급·BEMS 등 다른 요건 있음).
-ZEB_GRADES = ((100.0, "1등급"), (80.0, "2등급"), (60.0, "3등급"), (40.0, "4등급"), (20.0, "5등급"))
+# ZEB 등급 구간표는 benchmarks.ZEB_GRADES 하나(2026-11-24). 아래 함수는 20% 미만을 None으로 두는 사다리용(benchmarks는 문구)
 
 
 def zeb_grade(self_sufficiency_pct: float | None) -> str | None:

@@ -413,14 +413,9 @@ def step_weather(db: Any, region: StudyRegion, log: Log) -> dict[str, Any]:
 
 
 # 같은 시 · 군 안의 기상청 ASOS 관측소 (2026-11-16). 다른 도시 관측소는 쓰지 않는다: 그것도 대체이므로 그런 지역은 ERA5-Land 재분석을
-# 그대로 두고 FALLBACK으로 표시한다. 서울 · 부산은 특별 · 광역시 안의 관측소(종로구 108, 중구 159)를 구에 쓴다.
-ASOS_STATIONS: dict[str, tuple[str, str]] = {
-    "11740": ("108", "서울"), "26440": ("159", "부산"), "36110": ("239", "세종"), "41110": ("119", "수원"),
-    "52130": ("140", "군산"), "52180": ("245", "정읍"), "52190": ("247", "남원"), "52740": ("248", "장수"),
-    "52750": ("244", "임실"), "52770": ("254", "순창"), "52790": ("172", "고창"), "52800": ("243", "부안"),
-    # 2026-11-24: 홍성군 안의 ASOS 177(응답 지점명 '홍성'). 기후 가이드 표는 평년값이 없어 서산 129(다른 시)로 이어 둠
-    "44800": ("177", "홍성"),
-}
+# 그대로 두고 FALLBACK으로 표시한다. 지점을 고르는 규칙은 한 곳(reference_tables.asos_station: 손정리 덮어쓰기 → 기후 가이드 표)에
+# 있다(2026-11-24). 이 이름은 그 덮어쓰기 표를 가리키는 별칭으로만 남긴다.
+from .reference_tables import ASOS_OVERRIDES as ASOS_STATIONS  # noqa: E402
 
 
 def _asos_overlay(db: Any, region: StudyRegion, last: int, log: Log) -> dict[str, Any]:
@@ -433,8 +428,8 @@ def _asos_overlay(db: Any, region: StudyRegion, last: int, log: Log) -> dict[str
     from .collectors import client
     from .kma_asos import KMA_ASOS_BASE_URL, aggregate_asos_months, parse_asos_response
     from .reference_tables import asos_station
-    # 손정리 12곳, 그 밖은 기후 가이드 표의 같은 시 · 군(광역시는 시 안) ASOS 지점(2026-11-21, 12 → 149 시군구)
-    station = ASOS_STATIONS.get(region.code) or asos_station(region.code)
+    # 손정리 덮어쓰기 13곳, 그 밖은 기후 가이드 표의 같은 시 · 군(광역시는 시 안) ASOS 지점(2026-11-21, 2026-11-24 한 곳으로)
+    station = asos_station(region.code)
     if not station:
         return {"months": 0, "message": "같은 시 · 군에 기상청 ASOS 관측소가 없어 ERA5-Land 재분석 유지"}
     stn, place = station
