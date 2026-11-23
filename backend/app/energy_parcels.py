@@ -616,8 +616,30 @@ def _parcel_grid(db: Any, grid_ids: Any = None) -> dict[str, str]:
     return _PARCEL_GRID[key][1]
 
 
+REGISTER_AREA_TTL = 300.0  # seconds, the same five minutes as the area inputs (new register rows show up)
+_REGISTER_AREA_CACHE: dict[Any, tuple[float, dict[str, float]]] = {}
+
+
 def _register_area(db: Any, sigungu_codes: Any = None) -> dict[str, float]:
-    """PNU → cleaned 연면적 sum (건축물대장 표제부), for the parcels of ``sigungu_codes`` (None: all)."""
+    """PNU → cleaned 연면적 sum (건축물대장 표제부), for the parcels of ``sigungu_codes`` (None: all).
+
+    2026-11-23 (speed): the area inputs call this once per year (6 times) with the same codes and it read the whole
+    register of the region each time (26 of 38 s for 수원's first analysis). The areas do not depend on the year, so one
+    read is kept for REGISTER_AREA_TTL."""
+    import time
+    key = None if sigungu_codes is None else tuple(sorted(sigungu_codes))
+    hit = _REGISTER_AREA_CACHE.get(key)
+    if hit and time.monotonic() - hit[0] < REGISTER_AREA_TTL:
+        return hit[1]
+    area = _read_register_area(db, sigungu_codes)
+    if area:
+        if len(_REGISTER_AREA_CACHE) > 16:
+            _REGISTER_AREA_CACHE.clear()
+        _REGISTER_AREA_CACHE[key] = (time.monotonic(), area)
+    return area
+
+
+def _read_register_area(db: Any, sigungu_codes: Any = None) -> dict[str, float]:
     try:
         from .official import BuildingRegister, register_areas
         area: dict[str, float] = {}

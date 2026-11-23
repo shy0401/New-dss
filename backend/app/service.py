@@ -113,20 +113,52 @@ def district_heat_text(est):
             f"지역난방 단지 가스 {est['district_gas_kwh_per_m2']:.1f}, 가정). 탄소는 연 {est['carbon_kg']/1000:,.1f} tCO2eq"
             f"({est['source']} {est['factor_kg_per_kwh']:.4f} kgCO2eq/kWh). 관측 전력·가스 합계에 섞지 않고 따로 적으며, 감축 단계(단열·창호 등)는 열에 적용하지 않았습니다.")
 
-def pooled_baseline(db,year,sc=None,heating=None):
-    """Consistent baseline over every K-apt-linked parcel of a region (``sc``; None = all regions).
+# 2026-11-23 (speed): the district heat block asked pooled_baseline twice per request (individual + district heating) and each
+# call read the region's K-apt-linked energy rows (4.5 s for 수원) and all 22k complexes with their JSON columns (3.8 s):
+# 17 s on every request. The rows of one region-year are shared by both heating groups and kept for POOLED_TTL (the same
+# five minutes as the area inputs, so new collections show up); the complexes are read with the columns used only.
+POOLED_TTL=300.0
+_POOLED_ROWS={}
+_SLIM_COMPLEXES={}
 
-    Used when the selected grid has no parcel observed in all 12 months: the plan is then scaled with the
-    region's pooled observed intensity (ESTIMATED), never with zeros."""
-    from .grid_metrics import consistent_baseline,validated_complex_areas
-    from .kapt import ApartmentComplex
+def _pooled_rows(db,year,sc):
+    """The K-apt-linked monthly energy rows of a region-year (None on a query error), kept for POOLED_TTL."""
+    import time
+    key=(sc.code if sc is not None else '*',year)
+    hit=_POOLED_ROWS.get(key)
+    if hit and time.monotonic()-hit[0]<POOLED_TTL:return hit[1]
     code=EnergyMonthly.raw_record['kapt_code'].as_string()
     query=select(EnergyMonthly.energy_type,EnergyMonthly.use_ym,EnergyMonthly.usage_kwh,code).where(EnergyMonthly.use_ym.between(f'{year}01',f'{year}12'),EnergyMonthly.usage_kwh.is_not(None),code.is_not(None))
     if sc is not None:query=query.where(sc.legal_clause(EnergyMonthly.sigungu_code))
     try:rows=[{'energy_type':t,'use_ym':ym,'usage_kwh':v,'kapt_code':c} for t,ym,v,c in db.execute(query)]
     except Exception:
         db.rollback();return None
-    complexes=list(db.scalars(select(ApartmentComplex)))
+    if len(_POOLED_ROWS)>64:_POOLED_ROWS.clear()
+    _POOLED_ROWS[key]=(time.monotonic(),rows)
+    return rows
+
+def _slim_complexes(db):
+    """All K-apt complexes with the columns pooled_baseline uses (validated_complex_areas + heating), kept for POOLED_TTL."""
+    import time
+    from sqlalchemy.orm import load_only
+    from .kapt import ApartmentComplex
+    hit=_SLIM_COMPLEXES.get('all')
+    if hit and time.monotonic()-hit[0]<POOLED_TTL:return hit[1]
+    cols=load_only(ApartmentComplex.kapt_code,ApartmentComplex.heating_type,ApartmentComplex.households,
+                   ApartmentComplex.gross_floor_area_m2,ApartmentComplex.management_area_m2,ApartmentComplex.name)
+    complexes=list(db.scalars(select(ApartmentComplex).options(cols)))
+    _SLIM_COMPLEXES['all']=(time.monotonic(),complexes)
+    return complexes
+
+def pooled_baseline(db,year,sc=None,heating=None):
+    """Consistent baseline over every K-apt-linked parcel of a region (``sc``; None = all regions).
+
+    Used when the selected grid has no parcel observed in all 12 months: the plan is then scaled with the
+    region's pooled observed intensity (ESTIMATED), never with zeros."""
+    from .grid_metrics import consistent_baseline,validated_complex_areas
+    rows=_pooled_rows(db,year,sc)
+    if rows is None:return None
+    complexes=_slim_complexes(db)
     if heating:
         # 지역난방 단지는 가스를 거의 쓰지 않는다(수원 2025 중앙값 3.0 vs 개별난방 71.8 kWh/m²): 같은 난방 방식끼리만 평균
         allowed={c.kapt_code for c in complexes if heating_group(c.heating_type)==heating}
