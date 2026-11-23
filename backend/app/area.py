@@ -577,6 +577,8 @@ def effort(history: dict[str, Any], plan: dict[str, Any], target_pct: float, pv_
         result["mix"] = measure_mix(result, measures)
     if result.get("available") and not result.get("already_met"):
         result["recommended"] = recommended_mix(result)
+    if result.get("available") and result.get("factor_kgco2eq_per_kwh"):
+        result["targets"] = target_bases(result)
     return result
 
 
@@ -586,32 +588,121 @@ def effort(history: dict[str, Any], plan: dict[str, Any], target_pct: float, pv_
 # 운영(계량 · 제어 · 행동)은 입주 뒤 행동이라 계획 단계의 추천에 넣지 않는다. 사용자 조합의 신축 · 기존 % 입력은 그대로 쓸 수 있다.
 
 
+ROOF_LIMIT_BASIS = {"footprint": "계획 건축면적 합(동 수 × 동당 건축면적)", "floor_area_per_floors": "연면적 ÷ 층수",
+                    "floor_area_upper_bound": "연면적(1층으로 지어도 지붕은 이보다 작음, 위 한계)"}
+
+
+def roof_limit(result: dict[str, Any]) -> tuple[float | None, str | None]:
+    """Roof area the plan's own buildings can hold (before the usable ratio) and its basis (U4, DATA_STANDARD 5.15).
+
+    footprint: building count × footprint per building; floor_area_per_floors: added floor area ÷ floors;
+    floor_area_upper_bound: the added floor area itself (no building is wider than its floor area: an upper bound)."""
+    if result.get("plan_roof_m2") is not None:
+        return float(result["plan_roof_m2"]), result.get("plan_roof_basis") or "footprint"
+    added = float(result.get("added_floor_area_m2") or 0)
+    return (added, "floor_area_upper_bound") if added > 0 else (None, None)
+
+
+def onsite_plan(result: dict[str, Any], need_c: float | None, met_status: str = "NO_INCREASE") -> dict[str, Any]:
+    """Rooftop PV of the plan's own buildings up to the roof limit, and what is left (U4, 2026-11-23, DATA_STANDARD 5.15).
+
+    Capacity = min(needed capacity rounded up to 10 kW, limit), limit = roof × ROOF_USABLE_RATIO ÷ ROOF_M2_PER_KW
+    (``reduction_plan.roof_pv``, same rule as the 3D plan). What the roof cannot hold is not counted as PV: it is the
+    remaining amount (kgCO2eq, kWh, off-site PV kW equivalent). A covered need leaves the remaining amount NULL and gives
+    the margin; nothing is written as a negative or as 0."""
+    from .reduction_plan import ROOF_M2_PER_KW, roof_pv
+    factor = float(result["factor_kgco2eq_per_kwh"])
+    kwh_per_kw = (result.get("pv_yield") or {}).get("kwh_per_kw")
+    footprint, basis = roof_limit(result)
+    out: dict[str, Any] = {"pv_needed_kw": None, "pv_kw": None, "pv_kwh": None, "pv_kgco2eq": None, "roof_m2": None,
+                           "roof_limit_m2": None, "roof_limit_kw": None, "roof_limit_basis": basis,
+                           "roof_limit_basis_label": ROOF_LIMIT_BASIS.get(basis or ""), "plan_roof_m2": round(footprint, 1) if footprint else None,
+                           "capped": False, "covered_pct": None, "remaining_kgco2eq": None, "remaining_kwh": None,
+                           "remaining_offsite_pv_kw": None, "remaining_is_minimum": False, "margin_kgco2eq": None, "offset_kwh": None}
+    if need_c is None or need_c <= 0:
+        return dict(out, onsite_status=met_status)
+    need_kwh = need_c / factor
+    if not kwh_per_kw:
+        return dict(out, onsite_status="NO_YIELD", offset_kwh=round(need_kwh, 1))
+    kwh_per_kw = float(kwh_per_kw)
+    exact_kw = need_kwh / kwh_per_kw
+    needed_kw = math.ceil(exact_kw / 10) * 10
+    limit = roof_pv(footprint, kwh_per_kw) if footprint else None
+    if limit is None:
+        # no roof of the plan's own (e.g. demolition only): nothing on site, all of the need is remaining (U4 review)
+        return dict(out, onsite_status="NO_ROOF", pv_needed_kw=float(needed_kw), remaining_kgco2eq=round(need_c, 1),
+                    remaining_kwh=round(need_kwh, 1), remaining_offsite_pv_kw=round(exact_kw, 1), covered_pct=0.0)
+    limit_kw = float(limit["kw"])
+    upper = basis == "floor_area_upper_bound"
+    capped = exact_kw > limit_kw          # judged before the 10 kW rounding (U4 review: 375.0 needed, 375.5 limit is not capped)
+    pv_kw = float(min(needed_kw, limit_kw))
+    pv_kwh = pv_kw * kwh_per_kw
+    pv_c = pv_kwh * factor
+    out.update(pv_needed_kw=float(needed_kw), pv_kw=round(pv_kw, 1), pv_kwh=round(pv_kwh, 1), pv_kgco2eq=round(pv_c, 1),
+               roof_m2=round(pv_kw * ROOF_M2_PER_KW, 1) if pv_kw else None,
+               roof_limit_m2=limit["roof_m2"], roof_limit_kw=limit["kw"], capped=capped,
+               covered_pct=round(min(pv_c / need_c * 100, 100.0), 1))
+    if upper and not capped:
+        return dict(out, onsite_status="UPPER_BOUND_ONLY")   # the real roof is smaller: no verdict without floors / footprints
+    if pv_c >= need_c and not upper:
+        return dict(out, onsite_status="MET", margin_kgco2eq=round(pv_c - need_c, 1))
+    rest_c = max(need_c - pv_c, 0.0)
+    if rest_c <= 0:   # upper bound and exactly covered: still not a verdict
+        return dict(out, onsite_status="UPPER_BOUND_ONLY")
+    rest_kwh = rest_c / factor
+    return dict(out, onsite_status="PARTIAL", remaining_kgco2eq=round(rest_c, 1), remaining_kwh=round(rest_kwh, 1),
+                remaining_offsite_pv_kw=round(rest_kwh / kwh_per_kw, 1), remaining_is_minimum=upper)
+
+
+def target_bases(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """The two target bases side by side (U4, DATA_STANDARD 5.9): the whole area's target and the plan's own increase.
+
+    plan_added: (new load − demolished load) × factor, independent of the target %; area_total = plan_added + the
+    existing buildings' share (baseline × target %). Same baseline buildings, year and factor; never added together."""
+    factor = float(result["factor_kgco2eq_per_kwh"])
+    new_kwh, removed_kwh = float(result["new_load_kwh"]), float(result.get("removed_load_kwh") or 0)
+    net_kwh = new_kwh - removed_kwh
+    net_c = net_kwh * factor
+    new_c = new_kwh * factor
+    bau_c = float(result["bau_kgco2eq"])
+    need_a = float(result["required_reduction_kgco2eq"])
+    common = {"data_class": "SCENARIO", "baseline_mode": result.get("baseline_mode"), "baseline_year": result.get("baseline_year")}
+    added_need = round(net_c, 1) if net_c > 0 else None
+    plan_added = dict(common, key="plan_added", label="개발 증가분 상쇄", net_added_kwh=round(net_kwh, 1), net_added_kgco2eq=round(net_c, 1),
+                      required_reduction_kgco2eq=added_need, existing_share_kgco2eq=None, already_met=net_c <= 0,
+                      new_only_effort_pct=round(net_c / new_c * 100, 1) if new_c > 0 and net_c > 0 else None,
+                      all_buildings_effort_pct=round(net_c / bau_c * 100, 1) if bau_c > 0 and net_c > 0 else None,
+                      recommended=onsite_plan(result, added_need))
+    area_total = dict(common, key="area_total", label=f"구역 전체 {result['target_pct']:,.0f}% 목표", net_added_kwh=None, net_added_kgco2eq=None,
+                      required_reduction_kgco2eq=round(need_a, 1) if need_a > 0 else None,
+                      existing_share_kgco2eq=round(float(result["baseline_kgco2eq"]) * float(result["target_pct"]) / 100, 1),
+                      already_met=need_a <= 0, new_only_effort_pct=(result.get("options") or {}).get("new_only_efficiency_pct"),
+                      all_buildings_effort_pct=(result.get("options") or {}).get("all_buildings_efficiency_pct"),
+                      recommended=onsite_plan(result, need_a if need_a > 0 else None, met_status="ALREADY_MET"))
+    return [plan_added, area_total]
+
+
 def recommended_mix(result: dict[str, Any]) -> dict[str, Any] | None:
-    """남는 양을 태양광으로. 발전량 근거가 없으면 태양광 대신 상쇄할 전력량(kWh)만 적는다."""
-    from .reduction_plan import ROOF_M2_PER_KW
+    """남는 양을 계획 지붕 한도 안의 태양광으로(U4, 2026-11-23). 한도를 넘는 몫은 남는 양으로 따로. 발전량 근거가 없으면 상쇄할 전력량(kWh)만."""
     needed = ("factor_kgco2eq_per_kwh", "new_load_kwh", "baseline_kwh", "required_reduction_kgco2eq", "intensity_kwh_per_m2")
     if any(result.get(k) is None for k in needed) or not result.get("factor_kgco2eq_per_kwh"):
         return None
     base = {"new_efficiency_pct": 0.0, "existing_efficiency_pct": 0.0, "pv_kw": 0.0}   # 전력 절감 단계 없음(2026-11-20)
     first = measure_mix(result, base)
-    pv_kw = 0.0
-    kwh_per_kw = (result.get("pv_yield") or {}).get("kwh_per_kw")
-    remaining_kwh = max(first["gap_kgco2eq"], 0.0) / float(result["factor_kgco2eq_per_kwh"])
-    if remaining_kwh > 0 and kwh_per_kw:
-        pv_kw = math.ceil(remaining_kwh / float(kwh_per_kw) / 10) * 10
+    need_c = max(first["gap_kgco2eq"], 0.0)
+    onsite = onsite_plan(result, need_c if need_c > 0 else None)
+    pv_kw = onsite["pv_kw"] or 0.0
     mix = measure_mix(result, dict(base, pv_kw=pv_kw)) if pv_kw else first
     factor = float(result["factor_kgco2eq_per_kwh"])
     steps: list[dict[str, Any]] = []
     if pv_kw:
-        steps.append({"key": "pv", "title": "태양광", "detail": f"{pv_kw:,.0f} kW (옥상 약 {pv_kw * ROOF_M2_PER_KW:,.0f} m²)", "kwh": mix["pv_kwh"], "kgco2eq": round((mix["pv_kwh"] or 0) * factor, 1)})
-    roof_m2 = round(pv_kw * ROOF_M2_PER_KW, 1) if pv_kw else None
-    # 필요한 옥상과 계획 건물 지붕 견주기(2026-11-20 점검 A): 건축면적 합이 있으면 그것, 없으면 연면적(지붕의 위 한계)
-    exact = result.get("plan_roof_m2") is not None
-    limit = float(result["plan_roof_m2"] if exact else result.get("added_floor_area_m2") or 0)
-    return dict(mix, kind="RECOMMENDED", steps=[s for s in steps if s["kwh"]], roof_m2=roof_m2,
-                offset_kwh=round(remaining_kwh, 1) if remaining_kwh > 0 and not kwh_per_kw else None,
-                plan_roof_m2=round(limit, 1), plan_roof_basis="footprint" if exact else "floor_area",
-                roof_over_plan=bool(roof_m2 and roof_m2 > limit))
+        steps.append({"key": "pv", "title": "태양광", "detail": f"{pv_kw:,.0f} kW (옥상 약 {onsite['roof_m2']:,.0f} m²)", "kwh": mix["pv_kwh"], "kgco2eq": round((mix["pv_kwh"] or 0) * factor, 1)})
+    keep = {k: v for k, v in onsite.items() if k not in ("pv_kw", "pv_kwh", "roof_m2")}
+    if not pv_kw:
+        mix = dict(mix, pv_kw=None, pv_kwh=None)   # no PV on the plan's roof: empty, not 0 (U4 review)
+    return dict(mix, **keep, kind="RECOMMENDED", steps=[s for s in steps if s["kwh"]], roof_m2=onsite["roof_m2"],
+                plan_roof_basis="footprint" if onsite["roof_limit_basis"] in ("footprint", "floor_area_per_floors") else "floor_area",
+                roof_over_plan=bool(onsite["capped"]))
 
 
 def measure_mix(result: dict[str, Any], measures: dict[str, Any]) -> dict[str, Any]:
@@ -869,7 +960,13 @@ def _effort_result(history: dict[str, Any], plan: dict[str, Any], target_pct: fl
     added = float(added or 0)
     # 계획 건물 지붕 면적: 동 수 × 동당 건축면적이 있으면 그 합(정확), 없으면 연면적(1층으로 지어도 지붕은 연면적을 넘지 않음 → 위 한계)
     footprint_sum = (float(plan["building_count"]) * float(plan["footprint_per_building"])
-                     if plan.get("added_floor_area_m2") is None and plan.get("building_count") and plan.get("footprint_per_building") else None)
+                     if plan.get("building_count") and plan.get("footprint_per_building") else None)
+    footprint_basis = "footprint" if footprint_sum is not None else None
+    if footprint_sum is None and plan.get("added_floor_area_m2") and plan.get("floors") and float(plan["floors"]) >= 1:
+        # 연면적 + 층수: 모든 층 면적이 같다고 보고 건축면적 합 = 연면적 ÷ 층수 (U4, 2026-11-23)
+        footprint_sum, footprint_basis = float(plan["added_floor_area_m2"]) / float(plan["floors"]), "floor_area_per_floors"
+    if footprint_sum is not None and added > 0:
+        footprint_sum = min(footprint_sum, added)   # a roof is never larger than the floor area (U4 review)
     removed = float(plan.get("removed_floor_area_m2") or 0)
     if added < 0 or removed < 0:
         raise ValueError("면적은 0 이상이어야 합니다")
@@ -906,9 +1003,9 @@ def _effort_result(history: dict[str, Any], plan: dict[str, Any], target_pct: fl
         "baseline_mode": baseline_mode, "data_class": "SCENARIO", "basis": basis, "basis_label": EFFORT_BASIS[basis],
         "intensity_kwh_per_m2": intensity, "intensity_area_m2": basis_area,
         "added_floor_area_m2": round(added, 1), "removed_floor_area_m2": round(removed, 1),
-        "plan_roof_m2": round(footprint_sum, 1) if footprint_sum is not None else None,
+        "plan_roof_m2": round(footprint_sum, 1) if footprint_sum is not None else None, "plan_roof_basis": footprint_basis,
         "baseline_kwh": round(base_kwh, 1), "baseline_kgco2eq": round(base_c, 1),
-        "new_load_kwh": round(new_kwh, 1), "bau_kwh": round(bau_kwh, 1), "bau_kgco2eq": round(bau_c, 1),
+        "new_load_kwh": round(new_kwh, 1), "removed_load_kwh": round(removed_kwh, 1), "bau_kwh": round(bau_kwh, 1), "bau_kgco2eq": round(bau_c, 1),
         "target_kgco2eq": round(target_c, 1), "required_reduction_kgco2eq": round(need_c, 1),
         "already_met": need_c <= 0, "feasible_with_new_only": feasible_new_only or need_c <= 0,
         "options": options, "curve": curve, "factor_kgco2eq_per_kwh": factor,
@@ -1370,6 +1467,10 @@ def area_facts(history: dict[str, Any], comparison: dict[str, Any] | None = None
                     + ("(추정값)." if pv["basis"] == "ESTIMATED" else "."),
                     pv["kwh_per_kw"], o["pv_capacity_kw"], *([pv["year"], pv["irradiation_kwh_m2"], pv["performance_ratio"]] if pv["basis"] == "ESTIMATED" else []))
         rec = effort_result.get("recommended")
+        if rec and not rec.get("steps") and rec.get("onsite_status") == "NO_ROOF" and rec.get("remaining_kgco2eq") is not None:
+            add("effort_rec", f"구체적 감축 방안: 계획에 새 건물(지붕)이 없어 구역 안에서 태양광을 놓을 수 없습니다. 필요 감축량 {rec['remaining_kgco2eq']:,.0f} kgCO2eq는 "
+                f"모두 남는 양(전력 {rec['remaining_kwh']:,.0f} kWh, 구역 밖 태양광 약 {rec['remaining_offsite_pv_kw']:,.0f} kW 상당)으로, 구역 안 기존 건물의 절감 · "
+                "기존 건물 지붕 · 구역 밖 발전으로 채워야 합니다.", rec["remaining_kgco2eq"], rec["remaining_kwh"], rec["remaining_offsite_pv_kw"])
         if rec and not rec.get("steps") and rec.get("offset_kwh"):
             add("effort_rec", f"구체적 감축 방안: 발전량 근거가 없어 태양광 용량으로 바꾸지 못하고, 필요 감축량 {rec['required_kgco2eq']:,.0f} kgCO2eq를 "
                 f"채울 전력 {rec['offset_kwh']:,.0f} kWh를 재생에너지 상쇄량으로만 적습니다.", rec["required_kgco2eq"], rec["offset_kwh"])
@@ -1385,12 +1486,58 @@ def area_facts(history: dict[str, Any], comparison: dict[str, Any] | None = None
                 nums.append(rec["offset_kwh"])
             if not rec["met"]:
                 nums.append(rec["share_pct"])
-            if rec.get("roof_over_plan"):
-                what = "계획 건물 지붕(건축면적 합)" if rec.get("plan_roof_basis") == "footprint" else "계획 연면적(1층으로 지어도 지붕은 이보다 작음)"
-                text += (f" 필요한 옥상 약 {rec['roof_m2']:,.0f} m²가 {what} {rec['plan_roof_m2']:,.0f} m²보다 커서, "
-                         "모자라는 몫은 구역 안 기존 건물 지붕이나 구역 밖 발전으로 채워야 합니다.")
-                nums += [rec["plan_roof_m2"]]
+            from .reduction_plan import ROOF_USABLE_RATIO
+            usable = f"{ROOF_USABLE_RATIO * 100:g}%"
+            if rec.get("onsite_status") == "UPPER_BOUND_ONLY":
+                text += " 지붕을 연면적(위 한계)으로 본 값이라, 층수나 동별 건축면적을 넣어야 확정됩니다."
+            if rec.get("capped") and rec.get("roof_limit_m2") is not None:
+                text += (f" 태양광은 계획 지붕 한도({rec['roof_limit_basis_label']} {rec['plan_roof_m2']:,.0f} m²의 {usable} = {rec['roof_limit_m2']:,.0f} m², "
+                         f"{rec['roof_limit_kw']:,.1f} kW)까지만 셉니다(필요 용량 {rec['pv_needed_kw']:,.0f} kW).")
+                nums += [rec["plan_roof_m2"], rec["roof_limit_m2"], rec["roof_limit_kw"], rec["pv_needed_kw"]]
+            if rec.get("remaining_kgco2eq") is not None:
+                text += (f" 남는 양은 연간 {'적어도 ' if rec.get('remaining_is_minimum') else ''}{rec['remaining_kgco2eq']:,.0f} kgCO2eq"
+                         f"(전력 {rec['remaining_kwh']:,.0f} kWh, 구역 밖 태양광 약 {rec['remaining_offsite_pv_kw']:,.0f} kW 상당)로, "
+                         "구역 안 기존 건물의 절감 · 기존 건물 지붕 · 구역 밖 발전으로 채워야 합니다.")
+                nums += [rec["remaining_kgco2eq"], rec["remaining_kwh"], rec["remaining_offsite_pv_kw"]]
             add("effort_rec", text, *nums)
+        for t in effort_result.get("targets") or []:
+            if t["key"] != "plan_added":
+                continue
+            fyear, fac = effort_result["baseline_year"], effort_result["factor_kgco2eq_per_kwh"]
+            if t["net_added_kgco2eq"] == 0:
+                if effort_result.get("added_floor_area_m2") or effort_result.get("removed_floor_area_m2"):
+                    add("effort_added_none", "신축과 철거 연면적이 같아 이 계획으로 전력 운영탄소가 늘지 않습니다.")
+                continue
+            if t["net_added_kgco2eq"] < 0:
+                add("effort_added_none", f"철거분이 신축분보다 커서 이 계획으로 전력 운영탄소가 늘지 않습니다(연간 {abs(t['net_added_kgco2eq']):,.0f} kgCO2eq 감소).",
+                    abs(t["net_added_kgco2eq"]))
+                continue
+            add("effort_added", f"이 계획으로 전력 운영탄소가 연간 {t['net_added_kgco2eq']:,.0f} kgCO2eq 늘어납니다(신축 {effort_result['new_load_kwh']:,.0f} kWh − "
+                f"철거 {effort_result['removed_load_kwh']:,.0f} kWh, {fyear}년 원단위 · 계수 {fac:.4f}). 이만큼을 줄이거나 메우면 개발 전 수준입니다.",
+                t["net_added_kgco2eq"], effort_result["new_load_kwh"], effort_result["removed_load_kwh"], fyear, fac)
+            area_t = next((x for x in effort_result["targets"] if x["key"] == "area_total"), None)
+            if area_t and area_t["required_reduction_kgco2eq"] is not None:
+                add("effort_split", f"구역 전체 {effort_result['target_pct']:,.0f}% 목표의 필요 감축량 {area_t['required_reduction_kgco2eq']:,.0f} kgCO2eq는 "
+                    f"이 개발로 늘어나는 {t['net_added_kgco2eq']:,.0f} kgCO2eq와 기존 건물 몫 {area_t['existing_share_kgco2eq']:,.0f} kgCO2eq를 더한 값입니다.",
+                    effort_result["target_pct"], area_t["required_reduction_kgco2eq"], t["net_added_kgco2eq"], area_t["existing_share_kgco2eq"])
+            r = t["recommended"]
+            if r["onsite_status"] in ("MET", "PARTIAL"):
+                from .reduction_plan import ROOF_USABLE_RATIO
+                text = (f"개발 증가분 기준 감축 방안: 계획 지붕 한도 {r['roof_limit_m2']:,.0f} m²({r['roof_limit_basis_label']} {r['plan_roof_m2']:,.0f} m² × {ROOF_USABLE_RATIO * 100:g}%)에 "
+                        f"태양광 {r['pv_kw']:,.1f} kW를 놓으면 연간 {r['pv_kgco2eq']:,.0f} kgCO2eq(늘어나는 양의 {r['covered_pct']:,.1f}%)를 메웁니다.")
+                nums = [r["roof_limit_m2"], r["plan_roof_m2"], r["pv_kw"], r["pv_kgco2eq"], r["covered_pct"]]
+                if r["onsite_status"] == "PARTIAL":
+                    text += (f" 남는 양은 연간 {'적어도 ' if r['remaining_is_minimum'] else ''}{r['remaining_kgco2eq']:,.0f} kgCO2eq"
+                             f"(전력 {r['remaining_kwh']:,.0f} kWh, 구역 밖 태양광 약 {r['remaining_offsite_pv_kw']:,.0f} kW 상당)입니다.")
+                    nums += [r["remaining_kgco2eq"], r["remaining_kwh"], r["remaining_offsite_pv_kw"]]
+                else:
+                    text += f" 늘어나는 양을 모두 메우고 연간 {r['margin_kgco2eq']:,.0f} kgCO2eq가 남습니다."
+                    nums.append(r["margin_kgco2eq"])
+                add("effort_rec_added", text, *nums)
+            elif r["onsite_status"] == "UPPER_BOUND_ONLY":
+                add("effort_rec_added", f"개발 증가분 기준 감축 방안: 지붕을 연면적 {r['plan_roof_m2']:,.0f} m²(위 한계)로 보면 필요한 태양광 {r['pv_needed_kw']:,.0f} kW가 "
+                    f"한도 {r['roof_limit_kw']:,.1f} kW 안입니다. 실제 지붕은 이보다 작으므로 층수(또는 동별 건축면적)를 넣어야 확정됩니다.",
+                    r["plan_roof_m2"], r["pv_needed_kw"], r["roof_limit_kw"])
         mix = effort_result.get("mix")
         if mix and not effort_result["already_met"]:
             parts = [f"신축 전력 {mix['new_efficiency_pct']:,.1f}% 절감", f"기존 건물 {mix['existing_efficiency_pct']:,.1f}% 절감"]
@@ -1681,6 +1828,15 @@ def analyze(db: Any, spec: dict[str, Any], from_year: int, to_year: int, event_y
         history["region_guide"]["heating"] = heating_mix(inputs["complexes"].values())
         # 감축 방안의 태양광 용량에 쓰는 지역 발전량(solar.py 추정, 기준 문서 5.13). 없으면 None(0이 아님)
         history["region_guide"]["solar"] = history.get("solar")
+    if effort_result and effort_result.get("targets"):
+        # 추천 줄 ↔ 그 조건에서 쓸 수 있는 수단 · 근거표(U4, 5.15). 난방 구성은 지역 전체 단지 값(구역 단지 아님)
+        from .reduction_measures import applicable_measures
+        guide = history.get("region_guide") or {}
+        district = next((k.get("household_share_pct") for k in ((guide.get("heating") or {}).get("kinds") or []) if k["kind"] == "지역난방"), None)
+        effort_result["measure_links"] = applicable_measures(effort_result["targets"], float(effort_result.get("added_floor_area_m2") or 0),
+                                                             district, ((guide.get("cooling") or {}).get("reading")))
+        effort_result["measure_links_note"] = ("난방 구성은 지역 전체 공동주택 단지 기준입니다(구역 단지만 본 값이 아님)" if guide.get("heating")
+                                               else "지역 난방 구성을 알 수 없어 지역난방 조건은 보지 않았습니다")
     members = set(area["grid_ids"])
     grid_features = {"type": "FeatureCollection", "features": [
         {"type": "Feature", "id": g["id"], "geometry": g["geometry"], "properties": {"id": g["id"]}}

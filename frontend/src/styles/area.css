@@ -71,6 +71,13 @@
 .area-effort-form { display: grid; gap: var(--sp-3); }
 .area-effort-form .field-grid { margin-top: 0; }
 .area-effort-form .panel-title { margin-bottom: 0; }
+/* U3 S5: 계획 넣기(신축 줄 | 철거 줄) · 결과(세 범위 표 · 지역난방 열 한 줄) */
+.area-plan { display: grid; gap: var(--sp-3); }
+.area-plan-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--sp-4); align-items: start; }
+.area-plan .field-grid { margin-top: 0; }
+.area-plan-result { display: grid; gap: var(--sp-3); }
+.area-plan-result td small { display: inline; }
+.area-district-heat { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2); margin: 0; font-size: var(--fs-caption); line-height: 1.6; }
 .area-target { display: grid; gap: var(--sp-1); }
 .area-effort-basis { display: grid; gap: var(--sp-1); }
 .area-effort-basis > span { font-size: var(--fs-label); font-weight: 500; color: var(--ink-2); }

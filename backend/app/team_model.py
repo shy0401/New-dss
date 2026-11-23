@@ -9,9 +9,12 @@
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
+import threading
+import time
 import urllib.error
 import urllib.request
 from typing import Any, Literal
@@ -30,6 +33,8 @@ PREDICT_TIMEOUT_S = 230.0
 TIMEOUT = -1  # _call: the service is on but did not answer in time
 SLOW = ("팀 변화 모델이 {sec:.0f}초 안에 답하지 않았습니다(다른 예측을 계산하는 중이거나 칸이 많음). "
         "잠시 뒤 다시 시도하거나 칸 수를 줄여 주세요.")
+NO_TEAM_TABLE = "이 지역은 팀 데이터셋(칸 상태 표)이 없어 변화 모델 예측을 아직 내지 못합니다(준비 중). 원단위 기반 계산 값을 참고하세요"
+NOT_IN_TEAM_CELLS = "같은 시의 다른 구 표만 있고, 이 구역의 칸은 팀 데이터셋 밖이라 변화 모델 예측을 내지 못합니다. 원단위 기반 계산 값을 참고하세요"
 OFF = "팀 변화 모델 서비스가 꺼져 있습니다. 팀 인계 묶음이 있는 PC에서 `docker compose --profile team-model up -d team-model`로 켭니다."
 USES = ("residential", "commercial", "large_retail", "office", "officetel", "industrial", "knowledge_industry", "education", "medical_welfare", "other")
 # 팀 결과(2026-10-20, 00_합본_7차): 채택 기준과 학습에 없던 10개 지역 153사례 시험. 출처: 팀 인계 문서 5절, docs/results/model-results-ledger.md
@@ -244,6 +249,44 @@ def _model_region(db: Any, code: str, cells: list[dict[str, int]]) -> str | None
     return dataset_region(found.most_common(1)[0][0]) if found else None
 
 
+# U3 S4 (2026-11-23): the screen's area prediction and the report of the same plan ask the service twice (13~29 s each for
+# a 행정동). The service answers the same bytes for the same input (checked: two calls, identical), so the answer is kept a
+# short while, keyed by the model's training time (a retrained model never serves an old answer) and the exact request.
+PREDICT_CACHE_TTL_S = 1800.0
+PREDICT_CACHE_MAX = 32
+_PREDICT_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_PREDICT_CACHE_LOCK = threading.Lock()
+
+
+def _cache_key(ready_at: Any, payload: dict[str, Any]) -> str | None:
+    if not ready_at:
+        return None   # not ready (or an old service without ready_at): never cache
+    return json.dumps([ready_at, payload], sort_keys=True, ensure_ascii=False)
+
+
+def _cached(key: str | None) -> dict[str, Any] | None:
+    if key is None:
+        return None
+    with _PREDICT_CACHE_LOCK:
+        hit = _PREDICT_CACHE.get(key)
+        if hit and time.monotonic() - hit[0] < PREDICT_CACHE_TTL_S:
+            return copy.deepcopy(hit[1])
+        _PREDICT_CACHE.pop(key, None)
+    return None
+
+
+def _remember(key: str | None, answer: dict[str, Any]) -> None:
+    if key is None:
+        return
+    with _PREDICT_CACHE_LOCK:
+        now = time.monotonic()
+        for k in [k for k, (t, _) in _PREDICT_CACHE.items() if now - t >= PREDICT_CACHE_TTL_S]:
+            del _PREDICT_CACHE[k]
+        while len(_PREDICT_CACHE) >= PREDICT_CACHE_MAX:
+            del _PREDICT_CACHE[min(_PREDICT_CACHE, key=lambda k: _PREDICT_CACHE[k][0])]
+        _PREDICT_CACHE[key] = (now, copy.deepcopy(answer))
+
+
 @router.post("/predict-area")
 def predict_area(body: AreaPredictIn, request: Request) -> dict[str, Any]:
     """구역(여러 칸) 개발의 배출 변화 예측: 용도별 합계를 쓸 수 있는 칸에 같게 나눠 칸마다 예측하고 개발로 더한다."""
@@ -259,12 +302,25 @@ def predict_area(body: AreaPredictIn, request: Request) -> dict[str, Any]:
     with Session() as db:
         code = body.region or region_for_grid(db, grids[0])
         model = _model_region(db, code, cells) if code else None
+        # U2-0(2026-11-23): say why before asking the service ("팀 데이터셋에 지역 41130이(가) 없습니다" read as a failure)
+        if code and model is None:
+            try:
+                from .team_grid import region_datasets
+                names = region_datasets(db, code)
+            except Exception:  # noqa: BLE001 - no team grid tables (tests, CI): let the service answer as before
+                names = None
+            if names is not None:
+                raise HTTPException(404, NOT_IN_TEAM_CELLS if names else NO_TEAM_TABLE)
     if not code:
         raise HTTPException(422, "지역을 알 수 없습니다")
-    status_code, answer = _call("/predict-area", {
-        "region": model or code, "cells": cells, "years_after": body.years_after,
-        "new": [i.model_dump(exclude_none=True) for i in body.new],
-        "removed": [i.model_dump(exclude_none=True) for i in body.removed]}, timeout=PREDICT_TIMEOUT_S)
+    payload = {"region": model or code, "cells": cells, "years_after": body.years_after,
+               "new": [i.model_dump(exclude_none=True) for i in body.new],
+               "removed": [i.model_dump(exclude_none=True) for i in body.removed]}
+    key = _cache_key(service_status().get("ready_at"), payload)
+    hit = _cached(key)
+    if hit is not None:
+        return dict(hit, cached=True)
+    status_code, answer = _call("/predict-area", payload, timeout=PREDICT_TIMEOUT_S)
     if status_code == TIMEOUT:
         raise HTTPException(504, SLOW.format(sec=PREDICT_TIMEOUT_S))
     if status_code == 0:
@@ -282,4 +338,5 @@ def predict_area(body: AreaPredictIn, request: Request) -> dict[str, Any]:
     answer["note"] = ("팀 변화 모델의 추정입니다(탄소공간지도 건물 배출의 변화, tCO₂e/년). 관측과 섞지 않습니다. "
                       "용도별 합계를 구역의 쓸 수 있는 500m 칸에 같게 나눠 칸마다 예측하고 더했습니다. "
                       "구간은 개발 단위 교차검증 잔차의 q10~q90입니다.")
+    _remember(key, answer)
     return answer

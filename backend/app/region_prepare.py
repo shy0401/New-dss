@@ -813,7 +813,8 @@ def step_kapt_energy(db: Any, region: StudyRegion, log: Log) -> dict[str, Any]:
 
 
 def step_finalize(db: Any, region: StudyRegion, log: Log) -> dict[str, Any]:
-    """Energy ↔ grid links and the default 대상지 (the cell with the most K-apt households, else the centre cell)."""
+    """Energy ↔ grid links and the default 대상지 (``pick_default_grid``: the cell with the most K-apt households whose
+    baseline has electricity and gas, else the most households; no complex → the centre cell)."""
     from .kapt import ApartmentComplex, merge_energy_coordinates
     try:
         merge_energy_coordinates(db, analysis_year(), sigungu_codes=region.legal_codes or [region.code])
@@ -826,8 +827,7 @@ def step_finalize(db: Any, region: StudyRegion, log: Log) -> dict[str, Any]:
         if row.grid_id in ids and region.legal_codes and (row.bjd_code or "")[:5] in region.legal_codes:
             households[row.grid_id] = households.get(row.grid_id, 0) + (row.households or 0)
     if households:
-        region.default_grid_id = max(households, key=lambda g: (households[g], g))
-        reason = f"K-apt 세대수가 가장 많은 격자 ({households[region.default_grid_id]:,}세대)"
+        region.default_grid_id, reason = pick_default_grid(db, region, households)
     else:
         region.default_grid_id = centre_cell(region, ids)
         reason = "지역 중심 격자 (공동주택 자료 없음)"
@@ -835,6 +835,35 @@ def step_finalize(db: Any, region: StudyRegion, log: Log) -> dict[str, Any]:
     from .area import forget_inputs
     forget_inputs()
     return {"rows": len(ids), "message": f"기본 대상지 {region.default_grid_id}: {reason}"}
+
+
+DEFAULT_GRID_CANDIDATES = 10
+
+
+def pick_default_grid(db: Any, region: StudyRegion, households: dict[str, int], year: int | None = None,
+                      complexes: list[Any] | None = None) -> tuple[str, str]:
+    """The default 대상지: among the cells with the most K-apt households (top ``DEFAULT_GRID_CANDIDATES``), the first
+    whose dashboard baseline has electricity and gas in all 12 months, so the first screen shows a total; else the cell
+    with the most households (user readiness D5, 2026-11-23: 강남 · 대구 서구 · 하동 · 장수 opened on a baseline complex
+    with no gas observed and an empty total). Missing gas stays NULL; only the choice of the first cell changes."""
+    from .grid_metrics import validated_complex_areas
+    from .kapt import ApartmentComplex
+    from .service import baseline_has_total
+    from .models import EnergyMonthly
+    ranked = sorted(households, key=lambda g: (-households[g], g))
+    year = year or analysis_year()
+    complexes = complexes if complexes is not None else list(db.scalars(select(ApartmentComplex)))
+    area_by_code, _ = validated_complex_areas(complexes)
+    all_households = {c.kapt_code: c.households for c in complexes}
+    # the dashboard reads only this region's rows of a cell (a border cell can hold a neighbour's complex)
+    codes = list(getattr(region, "legal_codes", None) or [])
+    clause = EnergyMonthly.sigungu_code.in_(codes) if codes else None
+    for rank, grid in enumerate(ranked[:DEFAULT_GRID_CANDIDATES], 1):
+        if baseline_has_total(db, grid, year, clause, area_by_code, all_households):
+            note = "" if rank == 1 else f", 세대수 {rank}위 — 그보다 많은 격자는 기준 단지에 가스 관측이 없음"
+            return grid, f"전력 · 가스가 모두 관측된 격자 중 K-apt 세대수가 가장 많은 격자 ({households[grid]:,}세대{note})"
+    grid = ranked[0]
+    return grid, f"K-apt 세대수가 가장 많은 격자 ({households[grid]:,}세대, 상위 {DEFAULT_GRID_CANDIDATES}곳 모두 전력 · 가스 12개월 관측이 없음)"
 
 
 def centre_cell(region: StudyRegion, ids: frozenset[str] | set[str]) -> str | None:

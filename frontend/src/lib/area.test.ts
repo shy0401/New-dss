@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { at, buildSpec, cohortOf, cohortSeries, complexFeatures, complexState, draftFeature, effortHeadline, eventYears, partialYears, planBody, plannedArea, pvNote, type AreaHistory, type CarrierYear } from './area';
+import { at, buildSpec, cohortOf, cohortSeries, complexFeatures, complexState, draftFeature, effortHeadline, eventYears, partialYears, planBody, plannedArea, plannedRemoved, pvNote, usesBody, type AreaHistory, type CarrierYear, type PlanState } from './area';
 
 const empty: CarrierYear = { kwh: null, observed_parcels: 0, complete_parcels: 0, partial_parcels: 0, months_max: 0, by_cohort: {}, intensity_kwh_per_m2: null, intensity_area_m2: null, kwh_per_household: null, households: null };
 
@@ -43,11 +43,23 @@ describe('area helpers', () => {
     expect(buildSpec('grid', { grid: null })).toMatch(/격자/);
   });
 
-  it('계획 입력은 연면적 또는 층수×동수×건축면적 한쪽만 보낸다', () => {
-    const plan = { method: 'massing' as const, added_floor_area_m2: 1, floors: 20, building_count: 5, footprint_per_building: 800, removed_floor_area_m2: 0 };
-    expect(planBody(plan)).toEqual({ floors: 20, building_count: 5, footprint_per_building: 800 });
+  it('계획의 연면적은 용도 줄의 합 하나이고, 용도 줄 요청과 같은 줄을 더한다(U3 S5)', () => {
+    const plan: PlanState = { uses_new: [{ use: 'residential', floor_area_m2: 60000, dwellings: 500 }, { use: 'commercial', floor_area_m2: 20000, dwellings: 30 }, { use: 'office', floor_area_m2: 0 }],
+      uses_removed: [{ use: 'commercial', floor_area_m2: 2000 }], floors: 0, building_count: 0, footprint_per_building: 0, years_after: 7 };
     expect(plannedArea(plan)).toBe(80000);
-    expect(planBody({ ...plan, method: 'area', added_floor_area_m2: 50000, removed_floor_area_m2: 2000 })).toEqual({ added_floor_area_m2: 50000, removed_floor_area_m2: 2000 });
+    expect(plannedRemoved(plan)).toBe(2000);
+    expect(planBody(plan)).toEqual({ added_floor_area_m2: 80000, removed_floor_area_m2: 2000 });
+    // 빈 줄은 빼고, 세대수는 주거 줄에만
+    expect(usesBody(plan.uses_new)).toEqual([{ use: 'residential', floor_area_m2: 60000, dwellings: 500 }, { use: 'commercial', floor_area_m2: 20000 }]);
+    expect(usesBody(plan.uses_new).reduce((a, r) => a + r.floor_area_m2, 0)).toBe(planBody(plan).added_floor_area_m2);
+    expect(usesBody(plan.uses_removed)).toEqual([{ use: 'commercial', floor_area_m2: 2000 }]);
+    // 층수는 1 이상일 때, 동수 · 동당 건축면적은 둘 다 있을 때만
+    expect(planBody({ ...plan, floors: 20, building_count: 5, footprint_per_building: 0 })).toEqual({ added_floor_area_m2: 80000, removed_floor_area_m2: 2000, floors: 20 });
+    expect(planBody({ ...plan, floors: 20, building_count: 5, footprint_per_building: 800 })).toMatchObject({ added_floor_area_m2: 80000, floors: 20, building_count: 5, footprint_per_building: 800 });
+    // 용도 미정 줄(옛 링크)이 있으면 용도 줄은 보내지 않고 연면적은 plan으로만
+    const legacy: PlanState = { ...plan, uses_new: [{ use: null, floor_area_m2: 75000 }], uses_removed: [] };
+    expect(usesBody(legacy.uses_new)).toEqual([]);
+    expect(planBody(legacy)).toEqual({ added_floor_area_m2: 75000 });
   });
 
   it('단지를 개발 연도 기준 기존·당해·이후·미상으로 나누고 슬라이더 연도 뒤 단지는 미준공으로 둔다', () => {

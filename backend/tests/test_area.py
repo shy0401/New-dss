@@ -244,10 +244,12 @@ def test_recommended_fact_states_the_roof_shortfall_and_the_offset_when_there_is
     history = _hub_history()
     result = effort(history, {'added_floor_area_m2': 1000}, 20, pv_yield_kwh_per_kw=1200)
     rec = result['recommended']
-    # 225,000 kg ÷ 0.5 ÷ 1,200 = 375 kW → 380 kW · 옥상 3,800 m² > 계획 연면적 1,000 m²
-    assert rec['pv_kw'] == 380 and rec['roof_m2'] == 3800 and rec['plan_roof_basis'] == 'floor_area' and rec['plan_roof_m2'] == 1000 and rec['roof_over_plan']
+    # 225,000 kg ÷ 0.5 ÷ 1,200 = 375 kW → 380 kW 필요. 지붕 위 한계 = 연면적 1,000 m² × 0.60 ÷ 10 = 60 kW (U4, 2026-11-23)
+    assert rec['pv_needed_kw'] == 380 and rec['pv_kw'] == 60 and rec['roof_m2'] == 600 and rec['plan_roof_basis'] == 'floor_area'
+    assert rec['plan_roof_m2'] == 1000 and rec['roof_over_plan'] and rec['remaining_is_minimum']
     text = next(f for f in area_facts(history, None, result) if f['id'] == 'effort_rec')
-    assert '필요한 옥상 약 3,800 m²가 계획 연면적(1층으로 지어도 지붕은 이보다 작음) 1,000 m²보다 커서' in text['text'] and 1000 in text['numbers']
+    assert '계획 지붕 한도(' in text['text'] and '1,000 m²의 60% = 600 m²' in text['text'] and '필요 용량 380 kW' in text['text']
+    assert '남는 양은 연간 적어도' in text['text'] and 1000 in text['numbers'] and 380 in text['numbers']
     history.pop('solar', None)
     plain = effort(history, {'added_floor_area_m2': 1000}, 20)
     assert plain['pv_yield'] is None and plain['recommended']['steps'] == [] and plain['recommended']['offset_kwh'] == 450000

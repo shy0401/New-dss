@@ -173,6 +173,8 @@ from .validation import router as validation_router
 app.include_router(validation_router)
 from .team_model import router as team_model_router
 app.include_router(team_model_router)
+from .plan_bundle import router as plan_bundle_router
+app.include_router(plan_bundle_router)
 from .regions import RegionNotReady,DEFAULT_REGION,region_for_grid,record_region
 
 @app.exception_handler(RegionNotReady)

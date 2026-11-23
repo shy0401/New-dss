@@ -28,12 +28,13 @@ describe('사례 링크', () => {
 
   it('지역 시뮬레이션 구역·기간·계획·목표·기준 건물', () => {
     const base = { region: '52110', from: 2015, to: 2025, event: null, window: 3, target: 20, pv: '', basis: 'buildings' as const,
-      plan: { method: 'area' as const, added_floor_area_m2: 75000, floors: 20, building_count: 5, footprint_per_building: 800, removed_floor_area_m2: 0 } };
+      plan: { uses_new: [{ use: null, floor_area_m2: 75000 }], uses_removed: [], floors: 0, building_count: 0, footprint_per_building: 0, years_after: 7 } };
     const path = areaLink({ type: 'admin', code: '35011790' }, base)!;
     expect(path).toBe('/area?region=52110&area=admin:35011790&from=2015&to=2025&window=3&plan=75000&target=20&basis=buildings');
     const back = parseAreaLink(path.split('?')[1]);
+    // 용도 줄이 없는 링크: 합을 '용도 미정' 한 줄로(주거로 짐작하지 않음)
     expect(back).toMatchObject({ region: null, mode: 'admin', spec: { type: 'admin', code: '35011790' }, from: 2015, to: 2025, window: 3, target: 20, basis: 'buildings',
-      plan: { method: 'area', added_floor_area_m2: 75000 } });
+      plan: { uses_new: [{ use: null, floor_area_m2: 75000 }] } });
     const circle = parseAreaLink('area=circle:127.13219,35.880124,1000&pv=1200');
     expect(circle?.spec).toEqual({ type: 'circle', lon: 127.13219, lat: 35.880124, radius_m: 1000 });
     expect(circle?.pv).toBe('1200');
@@ -44,12 +45,24 @@ describe('사례 링크', () => {
 
   it('감축 수단 조합(mx)은 값이 있을 때만 링크에 넣고 다시 읽는다', () => {
     const base = { region: '52710', from: 2015, to: 2025, event: null, window: 3, target: 40, pv: '', basis: 'apartments' as const,
-      plan: { method: 'area' as const, added_floor_area_m2: 50000, floors: 20, building_count: 5, footprint_per_building: 800, removed_floor_area_m2: 0 } };
+      plan: { uses_new: [{ use: null, floor_area_m2: 50000 }], uses_removed: [], floors: 0, building_count: 0, footprint_per_building: 0, years_after: 7 } };
     expect(areaLink({ type: 'admin', code: '35510410' }, { ...base, measures: { new_efficiency_pct: 0, existing_efficiency_pct: 0, pv_kw: 0 } })).not.toContain('mx=');
     const path = areaLink({ type: 'admin', code: '35510410' }, { ...base, measures: { new_efficiency_pct: 30, existing_efficiency_pct: 5, pv_kw: 120.5 } })!;
     expect(path).toMatch(/&mx=30,5,120.5$/);
     expect(parseAreaLink(path.split('?')[1])?.measures).toEqual({ new_efficiency_pct: 30, existing_efficiency_pct: 5, pv_kw: 120.5 });
     expect(parseAreaLink('area=admin:35510410&mx=130,0,0')?.measures).toBeUndefined();   // over 100%: ignored
     expect(parseAreaLink('area=admin:35510410&mx=1,2')?.measures).toBeUndefined();
+  });
+
+  it('용도 줄 · 철거 줄 · 몇 년 뒤 · 건물 모양을 링크에 담고 다시 읽는다(U3 S5)', () => {
+    const plan = { uses_new: [{ use: 'residential' as const, floor_area_m2: 60000, dwellings: 500 }, { use: 'commercial' as const, floor_area_m2: 30000 }],
+      uses_removed: [{ use: 'commercial' as const, floor_area_m2: 2000 }], floors: 20, building_count: 0, footprint_per_building: 0, years_after: 5 };
+    const path = areaLink({ type: 'admin', code: '35012650' }, { region: '52110', from: 2015, to: 2025, event: null, window: 3, target: 40, pv: '', basis: 'apartments', plan })!;
+    expect(path).toContain('&plan=90000&removed=2000&');   // 합은 그대로(옛 링크와 같은 자리)
+    expect(path).toMatch(/&uses=residential:60000:500,commercial:30000&ruses=commercial:2000&years=5&floors=20$/);
+    expect(parseAreaLink(path.split('?')[1])?.plan).toEqual({ uses_new: plan.uses_new, uses_removed: plan.uses_removed, years_after: 5, floors: 20 });
+    // 읽을 수 없는 줄이 있으면 용도 줄은 버리고 합만(용도 미정)
+    expect(parseAreaLink('area=admin:1234567&plan=1000&uses=house:1000')?.plan?.uses_new).toEqual([{ use: null, floor_area_m2: 1000 }]);
+    expect(parseAreaLink('area=admin:1234567&years=11')?.plan).toBeUndefined();
   });
 });
