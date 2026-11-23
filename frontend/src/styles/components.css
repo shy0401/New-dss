@@ -14,6 +14,10 @@
 .button.ghost:hover { border-color: var(--line-strong); }
 .button.small { min-height: 30px; padding: 0 10px; font-size: var(--fs-label); }
 .button.full { width: 100%; }
+/* 지우기 확인(U5, 2026-11-23): 그 자리에서 한 번 더 누르게 함 */
+.button.danger { border-color: var(--danger); background: var(--danger-bg); color: var(--danger); }
+.delete-confirm { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+.delete-confirm .inline-error { margin: 0; }
 .button:disabled { opacity: .55; }
 
 /* 근거 배지 (2.3, 5): 높이 20px, 12px 500, 반경 2px. 추정 점선, 시나리오 점, 대체 점선 테두리. */

@@ -21,10 +21,24 @@ def init_tables():
             ensure_gas_factor(db)
         except Exception:db.rollback()
 
+def build_cell_state_command(args):
+    """build-cell-state: 칸 · 해 상태 표(팀 변화 모델 변형 H 입력)를 CSV로 쓴다. DB는 읽기만 한다."""
+    from .cell_state import build_cell_state,parse_years
+    if not args.region:raise SystemExit('--region <5자리 지역 코드>가 필요함')
+    years=parse_years(args.years or '2016-2024')
+    out=Path(args.out) if args.out else DATA_DIR/'derived'/'cell_state'/args.region/'cell_state.csv'
+    if not str(out.resolve()).startswith(str(Path(DATA_DIR).resolve())):raise SystemExit(f'--out은 data 폴더({DATA_DIR}) 아래여야 함(Git에 올리지 않음)')
+    with Session() as db:
+        table,summary=build_cell_state(db,args.region,years)
+    out.parent.mkdir(parents=True,exist_ok=True)
+    table.to_csv(out,index=False,encoding='utf-8')
+    out.with_suffix('.summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2,default=str),encoding='utf-8')
+    print(json.dumps({'out':str(out),'rows':len(table),**summary},ensure_ascii=False,default=str))
+
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('command',choices=['demo','online','status','enrich','collect','collect-history','collect-missing','validate-models','snapshot','llm-dataset','llm-eval','import-sgis-grid','import-sgis-grid500','import-regional-stats','import-team-grid','import-kcsm100',
         'national-admin','national-sgis','national-complexes','national-grid500','national-ordinances','national-all','prepare-region','regions',
-        'check-standard','apply-standard','backfill-solar','region-energy-history','region-kapt-history','region-sgis-history','verify-cases','place-parcels','estimate-gaps','fetch-kea-rating','prepare-national']);parser.add_argument('--year',type=int,default=DEFAULT_YEAR)
+        'check-standard','apply-standard','backfill-solar','region-energy-history','region-kapt-history','region-sgis-history','verify-cases','place-parcels','estimate-gaps','fetch-kea-rating','prepare-national','build-cell-state']);parser.add_argument('--year',type=int,default=DEFAULT_YEAR)
     parser.add_argument('--from',dest='from_year',type=int,default=2015);parser.add_argument('--to',dest='to_year',type=int,default=DEFAULT_YEAR)
     parser.add_argument('--datasets',default='',help='comma-separated: sgis,kma_asos,kapt_energy,energy,vworld_zoning,vworld_buildings,vworld_cadastral,building_register');parser.add_argument('--force',action='store_true')
     parser.add_argument('--source',choices=['energy','weather','kapt-energy','kma','sgis','vworld-zoning','vworld-cadastral'])
@@ -33,7 +47,7 @@ def main():
     parser.add_argument('--steps',default='',help='prepare-region: comma-separated steps (default: all)')
     parser.add_argument('--no-emd',action='store_true',help='national-sgis: 시군구만 (행정동 생략)')
     parser.add_argument('--model',default=None,help='llm-eval: Ollama model name (default OLLAMA_NARRATIVE_MODEL, then OLLAMA_MODEL)');parser.add_argument('--limit',type=int,default=None);parser.add_argument('--file',default=None)
-    parser.add_argument('--years',default=None,help='region-energy-history / region-kapt-history / region-sgis-history: comma-separated years (default 2020 / 2021 / 2015 .. analysis year-1)')
+    parser.add_argument('--years',default=None,help='region-energy-history / region-kapt-history / region-sgis-history: comma-separated years (default 2020 / 2021 / 2015 .. analysis year-1); build-cell-state: 2016-2024 or 2016,2018')
     parser.add_argument('--regions',default=None,help='llm-dataset: comma-separated study regions, first one sampled most (e.g. 52110,52710,11740)')
     parser.add_argument('--csv',action='append',default=[],help='check-standard: a CSV table to check before importing (repeatable)')
     parser.add_argument('--cases',default=None,help='verify-cases: cases file (default backend/cases/simulation_cases.json)')
@@ -45,7 +59,9 @@ def main():
     parser.add_argument('--start',type=int,default=1,help='prepare-national: first rank to queue (default 1)')
     parser.add_argument('--dry-run',action='store_true',help='prepare-national: list what would be queued')
     parser.add_argument('--cancel',action='store_true',help='prepare-national: stop — regions not started yet are not run (started ones finish)')
-    args=parser.parse_args();init_tables()
+    args=parser.parse_args()
+    if args.command=='build-cell-state':return build_cell_state_command(args)  # read-only: no table creation, no writes
+    init_tables()
     with Session() as db:
         seed_sources(db)
         if args.command in ('demo','snapshot'):

@@ -25,6 +25,8 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new ApiError(message, response.status);
   }
+  // 지우기(DELETE)는 본문 없이 204를 돌려줌(U0): JSON으로 읽지 않는다
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 
