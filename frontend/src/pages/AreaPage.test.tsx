@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { setAnalysisScope } from '../hooks/useAnalysisScope';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import { AreaPage } from './AreaPage';
@@ -28,6 +29,35 @@ const analysis = {
 
 describe('AreaPage', () => {
   afterEach(() => vi.restoreAllMocks());
+
+  it('지역을 바꾸면 앞 지역의 행정동 코드로 분석을 보내지 않고, 새 지역 선택지가 오면 그 행정동으로 첫 분석을 한다(2026-11-23 422)', async () => {
+    window.localStorage.clear();
+    window.history.pushState({}, '', '/area');
+    act(() => setAnalysisScope({ region: '41130' }));
+    const bodies: Array<{ region: string | null; area: { code?: string } }> = [];
+    const dong: Record<string, { code: string; name: string }> = { '41130': { code: '31021510', name: '분당구 구미1동' }, '41290': { code: '31110510', name: '중앙동' } };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const region = new URL(url, 'http://x').searchParams.get('region') ?? '';
+      if (url.includes('/api/areas/options')) {
+        await new Promise((resolve) => setTimeout(resolve, 30));   // the new region's options arrive a little later
+        return new Response(JSON.stringify({ admin: [dong[region]], admin_geojson: { type: 'FeatureCollection', features: [] }, admin_year: 2024, zones: [], energy_years: [2025], default_grid: 'cell_1' }));
+      }
+      if (url.endsWith('/api/areas/collection')) return new Response(JSON.stringify({ items: {}, runs: [], summary: {} }));
+      if (url.endsWith('/api/areas/analyze')) { bodies.push(JSON.parse(String(init?.body))); return new Response(JSON.stringify(analysis)); }
+      if (url.includes('/api/area-reports')) return new Response(JSON.stringify([]));
+      return new Response('{}', { status: 404 });
+    });
+    try {
+      render(<MemoryRouter><AreaPage /></MemoryRouter>);
+      await waitFor(() => expect(bodies.some((b) => b.region === '41130')).toBe(true));
+      act(() => setAnalysisScope({ region: '41290' }));
+      await waitFor(() => expect(bodies.some((b) => b.region === '41290')).toBe(true), { timeout: 3000 });
+      expect(bodies.filter((b) => b.region === '41290').map((b) => b.area.code)).toEqual(['31110510']);   // never the 분당 code
+    } finally {
+      act(() => setAnalysisScope({ region: null }));
+    }
+  });
 
   it('첫 행정동을 분석하고 관측이 없는 값은 0이 아니라 자료 없음으로, 감축 노력은 엔진 값 그대로 보여 준다', async () => {
     const bodies: unknown[] = [];
