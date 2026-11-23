@@ -1,3 +1,4 @@
+from collections import namedtuple
 from sqlalchemy import select,func
 from .models import *
 from .domain import nullable_sum,carbon_kg,month_range
@@ -137,16 +138,18 @@ def _pooled_rows(db,year,sc):
     _POOLED_ROWS[key]=(time.monotonic(),rows)
     return rows
 
+# 2026-11-24: kept as plain tuples, not ORM objects. A db.rollback() later in the filling request expires every ORM object of
+# its session, and once that session closed the remembered objects raised DetachedInstanceError on the next request.
+SlimComplex=namedtuple('SlimComplex','kapt_code heating_type households gross_floor_area_m2 management_area_m2 name')
+
 def _slim_complexes(db):
     """All K-apt complexes with the columns pooled_baseline uses (validated_complex_areas + heating), kept for POOLED_TTL."""
     import time
-    from sqlalchemy.orm import load_only
     from .kapt import ApartmentComplex
     hit=_SLIM_COMPLEXES.get('all')
     if hit and time.monotonic()-hit[0]<POOLED_TTL:return hit[1]
-    cols=load_only(ApartmentComplex.kapt_code,ApartmentComplex.heating_type,ApartmentComplex.households,
-                   ApartmentComplex.gross_floor_area_m2,ApartmentComplex.management_area_m2,ApartmentComplex.name)
-    complexes=list(db.scalars(select(ApartmentComplex).options(cols)))
+    query=select(*(getattr(ApartmentComplex,f) for f in SlimComplex._fields))
+    complexes=[SlimComplex(*row) for row in db.execute(query)]
     _SLIM_COMPLEXES['all']=(time.monotonic(),complexes)
     return complexes
 
