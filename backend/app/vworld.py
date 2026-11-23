@@ -12,6 +12,7 @@ import yaml
 from geoalchemy2 import Geometry
 from geoalchemy2.shape import from_shape, to_shape
 from pyproj import Transformer
+from shapely import set_precision
 from shapely.geometry import shape
 from shapely.validation import make_valid
 from sqlalchemy import DateTime, Float, JSON, String, delete, func, select, text
@@ -343,11 +344,23 @@ def rebuild_grid_zoning_stats(db: Any, grid_ids: list[str] | None = None) -> int
     db.commit();return len(rows)
 
 
+def zoning_key(dataset: str, feature: dict[str, Any]) -> str:
+    """Stable key of a zoning feature: the layer, the zone name and the shape (rounded to 1 cm), not the VWorld number."""
+    props = feature.get("properties") or {}
+    name = (props.get("uname") or "").strip()
+    shape_wkb = set_precision(feature["geometry"], 0.01).normalize().wkb
+    return f"{dataset}:sha:{hashlib.sha256(shape_wkb + name.encode('utf-8')).hexdigest()[:32]}"
+
+
 def _store_feature(db: Any, dataset: str, feature: dict[str, Any], layer: dict[str, Any], digest: str, grid_ids: set[str] | None) -> Any:
     """Upsert one parsed VWorld feature into its table (id ``<dataset>:<feature id>``)."""
     model = _model(dataset)
     props = feature["properties"]
     ident = f"{dataset}:{feature['id']}"
+    if dataset in ZONING_LAYERS:
+        # 2026-11-23: VWorld renumbers feature ids (LT_C_UQ111.<n>) when it updates a layer, so a later region's
+        # collection overwrote earlier zones that had the same number (전주 lost zones). Zones are keyed by content.
+        ident = zoning_key(dataset, feature)
     row = db.get(model, ident)
     if dataset in ZONING_LAYERS:
         row = row or VworldZoningArea(id=ident, source_feature_id=feature["id"], source_crs=layer["source_crs"], source="VWorld")
