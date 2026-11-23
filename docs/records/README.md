@@ -115,3 +115,4 @@
 | 2026-11-23 | [용도별 원단위: 계획 용도 줄마다 관측 전력 원단위](2026-11-23-use-intensity.md) | 계산 방법 · 기준 문서 판 1.56 |
 | 2026-11-23 | [감축 근거 스크립트를 저장소로 옮김 (scripts/reduction_evidence)](2026-11-23-reduction-evidence-scripts.md) | 재현 · 팀 공유 |
 | 2026-11-24 | [지역 기상: 대구는 ASOS 143, 홍성은 ASOS 177로 (대체 자료 → 같은 시 관측)](2026-11-24-region-asos-daegu-hongseong.md) | 자료 · 기준 문서 판 1.57 |
+| 2026-11-24 | [도일 다시 계산: 지역 기상의 ASOS 달은 ASOS 일자료로 (ERA5로 덮지 않음)](2026-11-24-degree-days-recompute-asos.md) | 계산 규칙 · 기준 문서 판 1.58 (DB 그대로) |
