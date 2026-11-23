@@ -129,3 +129,10 @@ def scenario_calculation(params,baseline,baseline_floor_area,factors):
     savings={key:(round((annual['reference'][key]-annual['scenario'][key])/annual['reference'][key]*100,1) if annual['reference'][key] not in (None,0) and annual['scenario'][key] is not None else None) for key in ['electricity_kwh','gas_kwh','carbon_kg']}
     intensity={f'{key}_per_m2':(round(annual['current'][key]/baseline_floor_area,2) if annual['current'][key] is not None and baseline_floor_area else None) for key in ['electricity_kwh','gas_kwh']}
     return dict(label='원단위 기반 1차 추정',method='INTENSITY_ESTIMATE',data_class='SCENARIO',total_footprint=footprint,gross_floor_area=gfa,far=gfa/params['site_area']*100,bcr=footprint/params['site_area']*100,households=params.get('households'),population=params.get('population'),green_area_m2=params['site_area']*params.get('green_ratio',0),monthly=monthly,annual=annual,observed_period_totals=period_totals,coverage_months=coverage,percent_change=percent_change,decomposition=decomposition,baseline_floor_area_m2=baseline_floor_area,carbon_per_person=annual['scenario']['carbon_kg']/params['population'] if annual['scenario']['carbon_kg'] is not None and params.get('population') else None,carbon_per_household=annual['scenario']['carbon_kg']/params['households'] if annual['scenario']['carbon_kg'] is not None and params.get('households') else None,savings_pct=savings,baseline_intensity=intensity,carbon_per_m2=annual['scenario']['carbon_kg']/gfa if annual['scenario']['carbon_kg'] is not None and gfa else None,assumptions=['FAR 산정 연면적은 입력 지상층 연면적으로 가정합니다. 지하층·법정 제외면적 미반영.','기준 월별 실측 원단위의 계절성을 그대로 적용합니다. 별도 기상 회귀·AI 학습 없음.','PV 비율은 전기 수요 상쇄율 가정이며 설비 발전량 예측이 아닙니다.','기준 면적과 에너지의 지번 매칭이 확보된 경우에만 추정합니다.','녹지비율은 공간 제약에 적용하며 검증되지 않은 냉방 저감 효과를 에너지에 곱하지 않습니다.'])
+
+
+def coverage_ratio_pct(area_m2, site_area_m2):
+    """건폐율 · 용적률(%) = 건축면적(또는 연면적) ÷ 대지면적 × 100 — 한 칸 계산(scenario_calculation)과 같은 식. 값이 없으면 None."""
+    if area_m2 is None or not site_area_m2:
+        return None
+    return float(area_m2) / float(site_area_m2) * 100
