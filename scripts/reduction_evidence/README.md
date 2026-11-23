@@ -20,12 +20,13 @@
 5. `pair/e7_areas.sql`을 내보내 `data/derived/reduction_evidence/pair/areas.csv`, 그다음 `python scripts/reduction_evidence/pair/pair_compare.py` → `pairs.csv` · `pair_result.json`(관문 G1, 규칙 `rules/pair-comparison-rerun-2026-11-20.md`). `posthoc_*.py`는 결과를 본 뒤의 보조 계산(관문에 쓰지 않음)
 - 확인(2026-11-23): 11-20에 내보낸 같은 CSV로 다시 돌린 `pairs.csv` · `pair_result.json`이 원본과 같음. **DB가 그 뒤 바뀌어(지역 추가 등) 지금 다시 내보내면 짝이 달라질 수 있음** — 다시 내보내 돌리면 기록에 전후를 적음
 
-## 2. 감축 근거표 (`backend/reference/reduction_evidence.csv`, 645행) — `evidence_table/`
+## 2. 감축 근거표 (`backend/reference/reduction_evidence.csv`, 653행) — `evidence_table/`
 1. 입력: 팀 데이터셋 감축전략 효과 조사표의 '근거 행' 시트를 CSV로 → `data/derived/reduction_evidence/evidence_table/work/근거_행.csv`(543행), 영국 NEED 2026 표 내보내기 → `.../evidence_table/need/`(받은 원본은 `data/raw`, CSV로 내보낸 방법 확인 필요)
 2. `python .../evidence_table/build_evidence_table.py` → `evidence_table.csv`(543행, 규칙 `rules/reduction-evidence-table-2026-11-20.md` 1~6절)
 3. `python .../evidence_table/build_added.py` → `evidence_added.csv` · `evidence_table_all.csv`(610행: NEED · 이 도구의 짝 비교(`pair/pair_result.json`) · 인증 단지 비교 · 문헌 보강)
 4. `python .../evidence_table/merge_cooling.py <evidence_table_all.csv> evidence_table/cooling_rows.csv <evidence_table_all_v2.csv>` → 645행
 5. 저장소 표 = 4의 결과 + 기록에 적은 칸 고침(도구 지표 행 22칸 [11-21 기록](../../docs/records/2026-11-21-evidence-table-tool-rows.md), 비고 15칸 [11-22 기록](../../docs/records/2026-11-22-evidence-audit.md))
+6. 2026-11-24 팀 감축 방안 조사 8행(T-001~T-008): `python scripts/reduction_evidence/evidence_table/append_team_2026_11_24.py` — `rows_team_2026-11-24.csv`(원문 대조한 값만)를 표 끝에 덧붙임(한 번만, 기존 행은 바이트 그대로). [기록](../../docs/records/2026-11-24-team-reduction-evidence.md)
 - 인증 단지 비교(`kea/`, 규칙 `rules/kea-grade-real-use-rule-2026-11-20.md`)의 숫자는 `build_added.py`에 값으로 들어 있음. `kea/`는 그 값을 만든 스크립트(이번에 다시 돌려 확인하지 않음)
 
 ## 3. 지자체 계획 건물 과제 (`backend/reference/local_plans_building.csv`) — `local_plans/`

@@ -118,3 +118,4 @@
 | 2026-11-24 | [도일 다시 계산: 지역 기상의 ASOS 달은 ASOS 일자료로 (ERA5로 덮지 않음)](2026-11-24-degree-days-recompute-asos.md) | 계산 규칙 · 기준 문서 판 1.58 (DB 그대로) |
 | 2026-11-24 | [지역 기상: 손정리 12곳 ASOS 달의 도일을 ASOS 값으로 되돌림 (11-20 덮어쓰기)](2026-11-24-restore-asos-degree-days.md) | 자료(이 PC DB) · 시연 숫자 같음 |
 | 2026-11-24 | [지역 평균 기준의 단지 기억을 ORM 객체 대신 일반 값으로 (DetachedInstanceError)](2026-11-24-pooled-memory-detached.md) | 오류 수정(값 · 속도 그대로) |
+| 2026-11-24 | [감축 근거표에 팀 감축 방안 조사 8행 더함 (입면 · 발코니 태양광, 지붕, 배치)](2026-11-24-team-reduction-evidence.md) | 근거 자료(계산 그대로) |

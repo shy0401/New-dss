@@ -27,6 +27,7 @@ GROUP_LABEL = {
     "materials_other": "철강·기타 자재·재활용", "construction_site": "시공 현장", "corporate_target": "기업 목표·조달", "greenery": "녹지·조경 흡수",
     "cool_roof": "쿨루프(고반사 지붕)", "building_greening": "옥상·벽면 녹화", "cooling_efficiency": "냉방기 효율", "district_cooling": "지역냉방",
     "heat_source_choice": "열원 선택 비교(개별·중앙·지역)",
+    "facade_pv": "입면·발코니 태양광",
 }
 # 표준지표(국토교통부 2024)는 중부 · 남부 값만 있다(출처 기사). 설계기준 지역 구분 → 표준지표 지역. 제주는 표준지표 지역이 없어 None(확인 필요)
 STANDARD_ZONE = {"중부1": "중부", "중부2": "중부", "남부": "남부"}
