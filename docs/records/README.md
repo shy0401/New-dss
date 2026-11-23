@@ -116,3 +116,4 @@
 | 2026-11-23 | [감축 근거 스크립트를 저장소로 옮김 (scripts/reduction_evidence)](2026-11-23-reduction-evidence-scripts.md) | 재현 · 팀 공유 |
 | 2026-11-24 | [지역 기상: 대구는 ASOS 143, 홍성은 ASOS 177로 (대체 자료 → 같은 시 관측)](2026-11-24-region-asos-daegu-hongseong.md) | 자료 · 기준 문서 판 1.57 |
 | 2026-11-24 | [도일 다시 계산: 지역 기상의 ASOS 달은 ASOS 일자료로 (ERA5로 덮지 않음)](2026-11-24-degree-days-recompute-asos.md) | 계산 규칙 · 기준 문서 판 1.58 (DB 그대로) |
+| 2026-11-24 | [지역 기상: 손정리 12곳 ASOS 달의 도일을 ASOS 값으로 되돌림 (11-20 덮어쓰기)](2026-11-24-restore-asos-degree-days.md) | 자료(이 PC DB) · 시연 숫자 같음 |
