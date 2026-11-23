@@ -20,6 +20,7 @@
 | `design_zone_uvalue_apartment.csv` | 11 | 공동주택 부위별 열관류율 기준(지역 구분별) | `regional_adjust/design_zone_uvalue_apartment.csv` | (나) |
 | `regional_conditions_sigungu.csv` | 23 | 지역 조건표: DB에 기상 · 단지가 있는 시군구의 지역 구분 · 평년 도일 · 단지 수 · 용도 몫 · 2025 통계 원단위 | `regional_adjust/regional_conditions_sigungu.csv` | (나) |
 | `apartment_energy_stats_2025.csv` | 249 | 시군구 아파트 에너지 통계(건물에너지사용량통계 2025, TOE) · 지역난방 열 비중 | `regional_guide/build_heat_stats.py` | (나) |
+| `use_intensity_2025.csv` | 285 | 용도별 전력 원단위(건축HUB 2025 · 대장, READY 지역별 + 전체) | `scripts/build_use_intensity.py`(저장소) | 계산 |
 | `region_priority.csv` | 207 | 전국 수집 지역 순위(2026-11-21 사용자 확정 기준): 1 수집 중 · 덜 끝남 → 2 더운 지역(냉방도일 전주 이상) · 제주 → 3 공동주택 지역난방 비중 30% 이상 → 4 나머지, 단계 안에서는 K-apt 단지가 많은 순. 그날 READY 22곳은 뺌 | `region_priority/build_region_priority.py`(입력: DB `national_complexes` 202610 · `study_regions` 상태, 이 폴더의 기후 가이드 · 아파트 통계) | (나) |
 | `regional_climate_guide.csv` | 269 | 지역 기후 가이드: 전국 시군구의 기상청 평년값(1991~2020) 기후 값 · 전주 대비 냉난방도일 비 · 기준 배출 방향 가이드(추정) · 지자체 과제 수 | `regional_guide/out/regional_climate_guide.csv` | (나) |
 
@@ -70,3 +71,9 @@
 - `district_heat_share_pct` = 지역난방 TOE ÷ 전체 TOE × 100(같은 통계 같은 단위, kWh 환산 가정 없음). 지역난방이 빈칸이면 비중도 빈칸(0 %가 아님). 83곳에 값이 있음
 - 지역 가이드(`reference_tables.heat_stats`)가 전국 지역 화면의 시군구 상세와 지역 시뮬레이션에서 "아파트 에너지 중 지역난방 열(통계)"로 보인다. 구가 있는 시 코드(수원 41110 등)는 그 시의 구를 더한다. 난방 방식을 가르지 않는 시군구 합계라 K-apt 단지 난방 방식과 다를 수 있다(예: 부산 강서는 통계에 지역난방이 없지만 K-apt 단지는 연면적 61%가 지역난방)
 - 이용약관은 확인 필요(기준 문서 2절). 만든 스크립트: PC `project/tools/experiments/regional_guide/build_heat_stats.py`
+
+
+## `use_intensity_2025.csv` (용도별 전력 원단위, 2026-11-23)
+- 지역 시뮬레이션의 계획 용도 줄(상업 · 업무 · 대형 판매 · 교육 · 의료·복지)에 쓰는 관측 원단위(기준 문서 5.9). READY 56개 지역별 줄과 `ALL`(전체) 줄
+- 만드는 법: 건축HUB 2025 전력 12개월 계측 지번 중 주건축물 주용도가 하나인 지번, Σ kWh ÷ Σ 대장 연면적(`official.register_areas`로 정제), 2~1,500 kWh/m²만. `parcels` < 30이면 화면은 `ALL` 줄을 씀
+- 다시 만들기: `python /scripts/build_use_intensity.py --year 2025 --out /app/reference/use_intensity_2025.csv`(api 컨테이너, DB 읽기만). 자료가 늘면 다시 만들고 기록에 전후를 적음

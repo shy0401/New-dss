@@ -52,6 +52,23 @@ def _by_code(name: str, code: str | None) -> dict[str, str] | None:
     return next((r for r in _rows(name) if r["sigungu_code"] == str(code)), None)
 
 
+USE_INTENSITY_FILE = "use_intensity_2025.csv"
+USE_INTENSITY_MIN_PARCELS = 30   # fewer parcels of that use in the region → the value of all READY regions
+
+
+def use_intensity(region_code: str | None, use_class: str) -> dict[str, Any] | None:
+    """Observed electricity intensity (kWh/m²·년) of a plan use (2026-11-23, 기준 문서 5.9): the region's own when it has at
+    least USE_INTENSITY_MIN_PARCELS parcels of that use, else all READY regions. None for uses without a row (residential,
+    officetel, knowledge industry, industrial, other keep the area's own intensity)."""
+    rows = [r for r in _rows(USE_INTENSITY_FILE) if r["use_class"] == use_class]
+    own = next((r for r in rows if region_code and r["region_code"] == str(region_code) and int(r["parcels"]) >= USE_INTENSITY_MIN_PARCELS), None)
+    row = own or next((r for r in rows if r["region_code"] == "ALL"), None)
+    if not row:
+        return None
+    return {"kwh_per_m2": float(row["kwh_per_m2"]), "scope": "REGION" if own else "READY_ALL", "parcels": int(row["parcels"]),
+            "year": int(row["year"]), "register_uses": row["register_uses"].replace("+", " · ")}
+
+
 # 기후 가이드 표의 지점 연결 중 같은 시 · 군(광역시는 시 안)인 것만. '같은 시도 · 같은 지역 구분 대표 지점'은 다른 도시라 쓰지 않음.
 ASOS_MAPPINGS = ("지점 있음", "광역시 지점")
 
