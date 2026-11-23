@@ -141,8 +141,8 @@ def official_inputs(table: Any, folder: Path, asos: Any, factor_high: set[str] |
     * weather: where the team table used another city's ASOS station (Seoul for Paju, Uijeongbu, Goyang, ...; Daejeon
       for Sejong), one station of the region's own city is used for all years (``station_annual.csv``: the KMA ASOS or
       AWS station with the most complete years; AWS from the 방재기상월보 via 기상청 API허브; team weather rules, a year
-      needs 12 months without a missing day; made by project/tools/experiments/aws_annual_for_team.py and
-      asos_annual_for_team.py). Years that station does not complete, and regions without a usable station, get NULL:
+      needs 12 months without a missing day; made by scripts/team_model_weather/ (aws_annual_for_team.py,
+      asos_annual_for_team.py, select_station_annual.py). Years that station does not complete, and regions without a usable station, get NULL:
       no substitute from another city.
     * building counts and population (2026-11-17 §8): the team reads a 100 m cell without a value as 0 and a withheld
       population cell as 3 persons. Here the columns keep their names (the scenario code updates them) but hold the
