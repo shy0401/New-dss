@@ -46,8 +46,8 @@ COMPLEX_STEP_M = 2.0
 COMPLEX_MIN_HOUSEHOLDS = 200
 # team rules.yaml register_buildings.residential_title_purposes (buildings without floor records)
 RESIDENTIAL_TITLE_PURPOSES = ("단독주택", "공동주택")
-# team quality.json approval_cutoff: the NGII building statistics month (2016-08); other years end in December
-CUTOFF_MONTHS = {2016: "2016-08"}
+# team quality.json approval_cutoff: the NGII building statistics month (2014-07, 2016-08); other years end in December
+CUTOFF_MONTHS = {2014: "2014-07", 2016: "2016-08"}
 MAIN_BUILDING = "주건축물"
 APARTMENTS = "공동주택"
 CELL_500_M = 500

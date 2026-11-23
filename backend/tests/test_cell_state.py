@@ -26,6 +26,7 @@ def test_register_date_blank_or_invalid_is_none():
 
 def test_cutoff_month_and_undated_buildings():
     assert cs.approval_cutoff(2016) == "2016-08"
+    assert cs.approval_cutoff(2014) == "2014-07"  # team 2014/quality.json (NGII month)
     assert cs.approval_cutoff(2024) == "2024-12"
     dates = ["2016-08-31", "2016-09-01", None, float("nan"), "2015-01-01"]
     assert cs.built_by(dates, "2016-08").tolist() == [True, False, True, True, True]

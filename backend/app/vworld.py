@@ -12,6 +12,7 @@ import yaml
 from geoalchemy2 import Geometry
 from geoalchemy2.shape import from_shape, to_shape
 from pyproj import Transformer
+from shapely import set_precision
 from shapely.geometry import shape
 from shapely.validation import make_valid
 from sqlalchemy import DateTime, Float, JSON, String, delete, func, select, text
@@ -343,11 +344,60 @@ def rebuild_grid_zoning_stats(db: Any, grid_ids: list[str] | None = None) -> int
     db.commit();return len(rows)
 
 
+def zoning_key(dataset: str, feature: dict[str, Any]) -> str:
+    """Stable key of a zoning feature: the layer, the zone name and the shape (rounded to 1 cm), not the VWorld number."""
+    props = feature.get("properties") or {}
+    name = (props.get("uname") or "").strip()
+    shape_wkb = set_precision(feature["geometry"], 0.01).normalize().wkb
+    return f"{dataset}:sha:{hashlib.sha256(shape_wkb + name.encode('utf-8')).hexdigest()[:32]}"
+
+
+def feature_key(dataset: str, feature: dict[str, Any]) -> str:
+    """Row key of a VWorld feature (2026-11-23). VWorld renumbers feature ids (``LT_C_UQ111.<n>``) when it updates a
+    layer, and keying rows by that number let a later region's collection overwrite earlier rows with the same number
+    (전주 zones; parcels and zones of the regions collected in late September). Parcels are keyed by pnu, everything
+    else by its content (zones: name + shape, special areas and buildings: shape)."""
+    if dataset in ZONING_LAYERS:
+        return zoning_key(dataset, feature)
+    if dataset == "cadastral":
+        pnu = str((feature.get("properties") or {}).get("pnu") or "").strip()
+        if pnu:
+            return f"cadastral:pnu:{pnu}"
+    shape_wkb = set_precision(feature["geometry"], 0.01).normalize().wkb
+    return f"{dataset}:sha:{hashlib.sha256(shape_wkb).hexdigest()[:32]}"
+
+
+OLD_KEY_SQL = {  # rows still keyed by the VWorld number that a content-keyed row of the same collection repeats
+    "cadastral": """delete from cadastral_parcels o where o.id like 'cadastral:%' and o.id not like 'cadastral:pnu:%'
+        and o.geom && ST_MakeEnvelope(:x0, :y0, :x1, :y1, 5179)
+        and exists (select 1 from cadastral_parcels n where n.id = 'cadastral:pnu:' || o.pnu)""",
+    "shape": """delete from {table} o where o.id like :pfx and o.id not like :new and o.geom && ST_MakeEnvelope(:x0, :y0, :x1, :y1, 5179)
+        and exists (select 1 from {table} n where n.id like :new and n.geom && o.geom {same_name}
+                    and ST_Equals(ST_SnapToGrid(n.geom, 0.01), ST_SnapToGrid(o.geom, 0.01)))""",
+}
+
+
+def drop_renumbered_duplicates(db: Any, dataset: str, bounds: tuple[float, float, float, float]) -> int:
+    """After a collection with content keys: remove the old number-keyed rows inside ``bounds`` that a new row repeats
+    exactly (same pnu, or same shape and zone name). Old rows that differ (elsewhere, or changed by VWorld) stay."""
+    x0, y0, x1, y1 = bounds
+    if dataset == "cadastral":
+        sql, params = OLD_KEY_SQL["cadastral"], {}
+    else:
+        table = _model(dataset).__tablename__
+        same_name = "and n.zone_name = o.zone_name" if dataset in ZONING_LAYERS else ("and n.kind = o.kind" if dataset in SPECIAL_LAYERS else "")
+        sql = OLD_KEY_SQL["shape"].format(table=table, same_name=same_name)
+        params = {"pfx": f"{dataset}:%", "new": f"{dataset}:sha:%"}
+    gone = db.execute(text(sql), {"x0": x0, "y0": y0, "x1": x1, "y1": y1, **params}).rowcount or 0
+    db.commit()
+    return gone
+
+
 def _store_feature(db: Any, dataset: str, feature: dict[str, Any], layer: dict[str, Any], digest: str, grid_ids: set[str] | None) -> Any:
-    """Upsert one parsed VWorld feature into its table (id ``<dataset>:<feature id>``)."""
+    """Upsert one parsed VWorld feature into its table (id ``feature_key``; the VWorld number stays in source_feature_id)."""
     model = _model(dataset)
     props = feature["properties"]
-    ident = f"{dataset}:{feature['id']}"
+    ident = feature_key(dataset, feature)
     row = db.get(model, ident)
     if dataset in ZONING_LAYERS:
         row = row or VworldZoningArea(id=ident, source_feature_id=feature["id"], source_crs=layer["source_crs"], source="VWorld")
@@ -539,6 +589,10 @@ def collect_vworld_cells(db: Any, dataset: str, grid_ids: list[str], *, tile_m: 
         db.commit()
         if progress:
             progress(index / max(1, len(tiles)), f"VWorld {dataset} {index}/{len(tiles)} 타일")
+    if member:
+        xs = [int(c.split("_")[1]) for c in member]
+        ys = [int(c.split("_")[2]) for c in member]
+        stats["old_key_duplicates_removed"] = drop_renumbered_duplicates(db, dataset, (min(xs), min(ys), max(xs) + GRID_SIZE_M, max(ys) + GRID_SIZE_M))
     if dataset in ZONING_LAYERS:
         stats["grid_intersections"] = rebuild_grid_zoning_stats(db, sorted(member))
     model = _model(dataset)
@@ -590,6 +644,9 @@ def collect_vworld(db: Any, dataset: str, scope: str = "smoke", *, client: Cache
             page+=1
         coverage=db.get(VworldGridCoverage,f"{dataset}:{grid['id']}") or VworldGridCoverage(id=f"{dataset}:{grid['id']}",dataset=dataset,grid_id=grid["id"])
         coverage.pages=page;coverage.feature_count=grid_features;coverage.status="EMPTY_VALID" if grid_features==0 else "SUCCESS";coverage.collected_at=datetime.now(timezone.utc);db.add(coverage);db.commit()
+    if grids:  # content keys (feature_key): drop the old number-keyed rows a new row repeats (2026-11-23)
+        b=[g["geometry"].bounds for g in grids]
+        drop_renumbered_duplicates(db,dataset,(min(v[0] for v in b),min(v[1] for v in b),max(v[2] for v in b),max(v[3] for v in b)))
     stored=db.scalar(select(func.count()).select_from(model)) or 0
     intersections=rebuild_grid_zoning_stats(db) if dataset in ZONING_LAYERS else 0
     quality=f"{layer['dataset_id']} feature {stored}개 / geometry 보정 {repaired}개"
