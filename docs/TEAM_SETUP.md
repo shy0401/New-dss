@@ -13,21 +13,20 @@ Git 저장소에는 **코드와 문서만** 있다. PostgreSQL/PostGIS DB, 원�
 | Git for Windows | 기본 설정(`core.autocrlf=true`) | `git --version` |
 | 디스크 | Docker 디스크 이미지를 C가 아닌 드라이브에 둘 수 있음(설정 → Resources → Advanced → Disk image location) | `scripts\dss.cmd Doctor`의 `docker_disk_dir` |
 
-### Docker 메모리 (32 GB PC 기준, 2026-11-24)
-Docker Desktop(WSL2)은 한도를 따로 두지 않으면 PC 메모리의 절반까지 쓰고, 다 쓴 메모리를 윈도우에 바로 돌려주지 않는다. 이 도구는 평소 4 GB 안팎이지만 처음 여는 지역에서 DB 파일 캐시가 크게 쌓인다(관측 21 GB). 사용자 폴더(`%UserProfile%`)에 `.wslconfig`를 두고 Docker를 다시 시작한다(`wsl --shutdown` 뒤 Docker Desktop 실행).
+### Docker 메모리 (2026-11-24)
+PC 크기에 맞춰 한도를 거는 대신, 각 컨테이너가 쓸데없이 쥐고 있는 메모리를 줄였다. 기본값 그대로 노트북에서도 같은 동작을 한다.
+- 컨테이너 안에서 줄인 것(설정 필요 없음): 무거운 요청 · 작업 · 팀 모델 학습이 끝나면 해제된 메모리를 바로 운영체제에 돌려줌(`backend/app/memtrim.py`), postgres는 DB 파일 캐시만 3 GB에서 멈춤(`compose.yaml`), 워커 프로세스는 작업 50개마다 새로 띄움
+- 관측(지역 3곳 계획 평가 + 대시보드 2곳): api는 끝난 뒤 1.27 → 0.80 GB, 계산 중 최대 1.8 GB. postgres 최대 2.5 GB. 팀 모델 · 워커는 [기록](records/2026-11-24-docker-memory-trim.md)
+
+Docker Desktop(WSL2)은 쓰고 난 메모리(특히 파일 캐시)를 윈도우에 바로 돌려주지 않는다. 사용자 폴더(`%UserProfile%`)의 `.wslconfig`에 아래를 두면 천천히 돌려준다(WSL 2.0 이상, `wsl --version`). 넣은 뒤 `wsl --shutdown` → Docker Desktop 실행.
 
 ```ini
-[wsl2]
-memory=8GB
-swap=8GB
-
 [experimental]
 autoMemoryReclaim=gradual
 ```
 
-- 8 GB 근거(컨테이너별 관측 최대, 2026-11-24): api 2.5 GB · 워커 1 GB · postgres 3 GB(`compose.yaml` 한도, 넘는 몫은 캐시라 버려짐) · 팀 모델 2.1 GB. 한꺼번에 최대가 되지는 않는다(한도 건 뒤 지역 3곳 계획 평가 + 대시보드 2곳 동안 합계 약 5.5 GB). 넘치면 `swap`이 받는다. 다른 일을 함께 하는 32 GB PC에 24 GB를 남김
-- `autoMemoryReclaim=gradual`: 쓰고 난 캐시를 천천히 윈도우에 돌려줌(WSL 2.0 이상, `wsl --version`)
-- 이 파일은 PC의 모든 WSL 배포판에 함께 적용된다. 다른 WSL 작업이 더 필요하면 `memory`를 늘린다
+- `[wsl2] memory=`(VM 한도)는 **두지 않는 것을 권한다.** 8 GB로 걸어 본 결과, 측정용 프로세스가 잠깐 늘자 놀던 팀 모델 1.1 GB가 스왑(디스크)으로 밀려났다(다음 예측이 느려짐). 기본값은 PC 메모리의 절반이라 16 GB 노트북이면 8 GB
+- 이 파일은 PC의 모든 WSL 배포판에 함께 적용된다
 - `wsl --shutdown` 뒤 컨테이너는 healthy인데 `http://127.0.0.1:8000`·`:5173`이 빈 응답이면 포트 연결만 끊긴 것: `docker compose -p carbon-urban-dss -f compose.yaml -f compose.demo.yaml restart api frontend`(워커는 다시 시작하지 않는다 — 예약 작업은 남지만 굳이 건드릴 이유가 없음)
 
 Node.js와 Playwright는 **필수가 아니다.** 프런트엔드 테스트와 브라우저 E2E는 실행기가 Docker 컨테이너 안에서 수행한다.

@@ -416,9 +416,23 @@ def run_region_watchdog():
         try: run_region_watchdog.apply_async(countdown=INTERVAL_S)
         except Exception: pass
 
-from celery.signals import worker_init,worker_ready
+from celery.signals import task_postrun,task_prerun,worker_init,worker_ready
 
 WORKER_STARTED_AT=[None]
+_TASK_STARTED={}
+
+@task_prerun.connect
+def _note_task_start(task_id=None,**kwargs):
+    import time
+    _TASK_STARTED[task_id]=time.monotonic()
+
+@task_postrun.connect
+def _release_after_heavy_task(task_id=None,**kwargs):
+    """Hand back the memory a long task freed (glibc keeps it; memtrim, 2026-11-24). The value of the task does not change."""
+    from .memtrim import release_if_heavy
+    started=_TASK_STARTED.pop(task_id,None)
+    if started is not None:
+        release_if_heavy(started)
 
 @worker_init.connect
 def _mark_worker_start(**kwargs):
