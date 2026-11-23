@@ -641,9 +641,9 @@ def _register_area(db: Any, sigungu_codes: Any = None) -> dict[str, float]:
 
 def _read_register_area(db: Any, sigungu_codes: Any = None) -> dict[str, float]:
     try:
-        from .official import BuildingRegister, register_areas
+        from .official import BuildingRegister, register_areas, register_attributes
         area: dict[str, float] = {}
-        query = select(BuildingRegister.parcel_code, BuildingRegister.attributes)
+        query = select(BuildingRegister.parcel_code, register_attributes(db))  # only the floor-area keys (2026-11-24)
         if sigungu_codes is not None:
             if not sigungu_codes:
                 return {}

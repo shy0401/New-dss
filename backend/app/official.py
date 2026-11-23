@@ -1,7 +1,7 @@
 """Prepared official-source adapters. Service approval is tested separately."""
 import json,re,os,calendar,time
 from urllib.parse import unquote
-from sqlalchemy import select,JSON,String,Integer
+from sqlalchemy import select,func,literal_column,JSON,String,Integer
 from sqlalchemy.orm import Mapped,mapped_column
 from .db import Base
 from .models import DataSource,Region,WeatherMonthly,now
@@ -69,6 +69,21 @@ def register_pnu(raw,region=None):
     bun=re.sub(r'\D','',str(raw.get('bun') or '')).zfill(4)[-4:]
     ji=re.sub(r'\D','',str(raw.get('ji') or '')).zfill(4)[-4:]
     return sigungu+bjdong+land+bun+ji
+
+REGISTER_AREA_KEYS=('gross_floor_area_m2','far_assessment_floor_area_m2','building_area_m2','floors','underground_floors')
+
+def register_attributes(db,*extra):
+    """Column for the register attributes ``register_areas`` reads, plus ``extra`` keys.
+
+    On PostgreSQL only those keys come back, built in SQL (2026-11-24): the whole JSON of 전주's 70,735 buildings became
+    770 MB of Python objects at the peak of the region's first analysis, while only the floor areas and the use were read.
+    A missing key reads as None either way, so the callers see the same values. Elsewhere (SQLite tests) the whole column."""
+    try:dialect=db.get_bind().dialect.name
+    except Exception:dialect=''
+    if dialect!='postgresql':return BuildingRegister.attributes
+    keys=REGISTER_AREA_KEYS+tuple(k for k in extra if k not in REGISTER_AREA_KEYS)
+    assert all(re.fullmatch(r'[a-z0-9_]+',k) for k in keys)  # constants only: written into the SQL text
+    return func.json_build_object(*[part for k in keys for part in (literal_column(f"'{k}'"),BuildingRegister.attributes[k])],type_=JSON)
 
 def register_areas(attrs):
     """(gross floor area, FAR floor area, issues) of one register building after consistency checks.
