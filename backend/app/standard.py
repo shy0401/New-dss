@@ -78,8 +78,7 @@ def recompute_degree_days(db: Any, data_dir: str | Path | None = None, *, log: L
     """Recompute every stored monthly HDD/CDD under the current rule. Returns counts per table."""
     from .domain import monthly_weather
     from .kma_asos import WeatherMonthlyObservation, refresh_effective_weather
-    from .regions import RegionWeatherMonthly
-    stats = {"kma_months": 0, "era5_months": 0, "era5_cleared": 0, "region_months": 0, "region_cleared": 0}
+    stats = {"kma_months": 0, "era5_months": 0, "era5_cleared": 0}
     kma = _kma_degree_days(db)
     era5_years: set[int] = set()
     for row in db.scalars(select(WeatherMonthlyObservation)):
@@ -117,25 +116,78 @@ def recompute_degree_days(db: Any, data_dir: str | Path | None = None, *, log: L
                 stats["era5_cleared"] += 1
     db.flush()
     refresh_effective_weather(db)
+    stats.update(_recompute_region_degree_days(db, raw, log))
+    db.commit()
+    log(f"냉난방도일 다시 계산 ({RULE}): {stats}")
+    return stats
+
+
+ASOS_PROVIDER_RE = re.compile(r"^KMA ASOS (\d+)\b")  # region_prepare._asos_overlay: f"KMA ASOS {stn} {place}"
+
+
+def _asos_station_months(raw: Path, station: str, log: Log) -> dict[str, dict[str, Any]]:
+    """use_ym → month aggregate from the ASOS daily pages ``_asos_overlay`` kept (raw/kma/asos-regions/<station>/)."""
+    from .cache import ExternalError
+    from .kma_asos import aggregate_asos_months, parse_asos_response
+    rows: list[dict[str, Any]] = []
+    for path in sorted((raw / "kma" / "asos-regions" / station).glob("*-p*.json")):
+        try:
+            parsed = parse_asos_response(path.read_bytes())
+        except ExternalError as exc:  # an error page kept on disk: no days in it, not zero weather
+            log(f"ASOS {station} 원본 {path.name}을 읽지 못함: {exc}")
+            continue
+        rows += [r for r in parsed["rows"] if r["station_id"] in ("", station)]
+    return {m["use_ym"]: m for m in aggregate_asos_months(rows)}
+
+
+def _recompute_region_degree_days(db: Any, raw: Path, log: Log) -> dict[str, int]:
+    """Region weather months under the current rule, each from its own source.
+
+    FALLBACK months come from the ERA5-Land daily file (raw/weather-regions/<code>.json); OFFICIAL months (the same
+    city's ASOS station, provider ``KMA ASOS <station> <place>``) from that station's daily pages. An OFFICIAL month
+    whose daily pages are gone (or not complete) is left as stored and counted — never overwritten with ERA5-Land
+    values under an ASOS label (DATA_STANDARD 5.10).
+    """
+    from .domain import monthly_weather
+    from .regions import RegionWeatherMonthly
+    stats = {"region_months": 0, "region_cleared": 0, "region_asos_months": 0, "region_asos_kept": 0}
+    stations: dict[str, dict[str, dict[str, Any]]] = {}
+    kept: dict[str, int] = defaultdict(int)
     regions = sorted(set(db.scalars(select(RegionWeatherMonthly.region_code).distinct())))
     for code in regions:
         path = raw / "weather-regions" / f"{code}.json"
-        months = {}
-        if path.exists():
-            try:
-                months = {m["use_ym"]: m for m in monthly_weather(json.loads(path.read_bytes()))}
-            except (ValueError, KeyError) as exc:
-                log(f"{code} 기상 원본을 읽지 못함: {type(exc).__name__}")
+        era5: dict[str, dict[str, Any]] | None = None
         for row in db.scalars(select(RegionWeatherMonthly).where(RegionWeatherMonthly.region_code == code)):
-            m = months.get(row.use_ym)
+            if row.source_type == "OFFICIAL":
+                match = ASOS_PROVIDER_RE.match(row.provider or "")
+                station = match.group(1) if match else None
+                if station and station not in stations:
+                    stations[station] = _asos_station_months(raw, station, log)
+                m = stations.get(station or "", {}).get(row.use_ym)
+                if m and m["official_asos_complete"]:
+                    row.hdd, row.cdd = m["hdd"], m["cdd"]
+                    stats["region_asos_months"] += 1
+                else:
+                    stats["region_asos_kept"] += 1
+                    kept[f"{code}:{station or row.provider}"] += 1
+                continue
+            if era5 is None:
+                era5 = {}
+                if path.exists():
+                    try:
+                        era5 = {m["use_ym"]: m for m in monthly_weather(json.loads(path.read_bytes()))}
+                    except (ValueError, KeyError) as exc:
+                        log(f"{code} 기상 원본을 읽지 못함: {type(exc).__name__}")
+            m = era5.get(row.use_ym)
             if m:
                 row.hdd, row.cdd = m["hdd"], m["cdd"]
                 stats["region_months"] += 1
             else:
                 row.cdd = None
                 stats["region_cleared"] += 1
-    db.commit()
-    log(f"냉난방도일 다시 계산 ({RULE}): {stats}")
+    if kept:
+        log(f"ASOS 달 {stats['region_asos_kept']:,}개는 일자료 원본이 없거나 모자라 저장된 값 그대로 둠: "
+            + ", ".join(f"{k} {v}" for k, v in sorted(kept.items())[:10]) + (" …" if len(kept) > 10 else ""))
     return stats
 
 
