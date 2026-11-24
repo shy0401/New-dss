@@ -480,3 +480,19 @@ def test_an_outage_that_outlasts_every_pause_stops_the_year(tmp_path, monkeypatc
     assert waits == [180]
     # 4 complexes before the pause, 4 more after it, then the run stops: A9 is never asked
     assert not [call for call in client.calls if call['kaptCode'] == 'A9']
+
+
+def test_an_explicit_code_list_picks_complexes_in_any_region_and_only_those(tmp_path):
+    """G1 표본 넓히기(2026-11-25): 조사 지역 밖 단지도 코드 목록으로 묻고, 목록 밖 단지는 묻지 않는다."""
+    db = make_db()
+    add_complex(db, 'A1')
+    add_complex(db, 'B1')
+    db.get(ApartmentComplex, 'B1').bjd_code = '4111310100'   # 조사 지역(전주) 밖
+    db.commit()
+    client = StubClient(response({'kaptCode': 'B1', 'reqDate': '202501', 'helect': '1000'}))
+    stats = collect_kapt_energy(db, 2025, 'smoke', client=client, service_key='valid-test-key', data_dir=tmp_path,
+                                codes=['B1', 'ZZ9'])
+    assert {call['kaptCode'] for call in client.calls} == {'B1'}
+    assert stats['codes_missing'] == 1
+    with pytest.raises(ValueError):
+        collect_kapt_energy(db, 2025, 'smoke', client=client, service_key='valid-test-key', data_dir=tmp_path, codes=[])

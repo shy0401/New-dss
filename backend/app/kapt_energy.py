@@ -410,11 +410,18 @@ def _source(db: Any) -> DataSource:
     return source
 
 
-def _targets(db: Any, scope: str, region: str | None = None) -> list[Any]:
+def _targets(db: Any, scope: str, region: str | None = None, codes: Any = None) -> list[Any]:
     """Complexes of one study region (the original region by default): its 법정 시·군·구 codes decide,
-    so preparing another region never adds that region's complexes to this region's back-fill."""
+    so preparing another region never adds that region's complexes to this region's back-fill.
+
+    ``codes``: an explicit K-apt code list (any region) instead of a region, e.g. a sample drawn for
+    an analysis (G1 형태 표본 넓히기, 2026-11-25). Codes not in the complex list are left out."""
     from .kapt import ApartmentComplex, PROTOTYPE_KAPT_CODE
     from .regions import DEFAULT_REGION, get_region
+    if codes is not None:
+        wanted = {str(c).strip() for c in codes if str(c).strip()}
+        rows = list(db.scalars(select(ApartmentComplex).where(ApartmentComplex.kapt_code.in_(sorted(wanted))).order_by(ApartmentComplex.kapt_code))) if wanted else []
+        return rows[:1] if scope == "smoke" else rows[:3] if scope == "limited" else rows
     code = region or DEFAULT_REGION
     study = get_region(db, code)
     legal = set(study.legal_codes or []) if study else ({"52111", "52113"} if code == DEFAULT_REGION else set())
@@ -523,7 +530,7 @@ def collect_kapt_energy(
     db: Any, year: int, scope: str = "smoke", *, client: CachedClient | None = None,
     service_key: str | None = None, data_dir: str | Path | None = None, history: bool = False,
     progress: Any = None, retry_rounds: int = 0, retry_wait_s: float = 0.0, outage_pause_s: float = 0.0,
-    max_outage_pauses: int = 20, sleep: Any = None, region: str | None = None,
+    max_outage_pauses: int = 20, sleep: Any = None, region: str | None = None, codes: Any = None,
 ) -> dict[str, int]:
     """Collect one year of K-apt monthly energy.
 
@@ -551,9 +558,9 @@ def collect_kapt_energy(
         ).limit(1))
         if not smoke:
             raise ValueError("K-apt 전체 수집 전에 같은 연도의 첫 검증(smoke) 수집이 성공해야 합니다")
-    targets = _targets(db, scope, region)
+    targets = _targets(db, scope, region, codes)
     if not targets:
-        raise ValueError("K-apt 단지 기본정보가 없습니다")
+        raise ValueError("K-apt 단지 기본정보가 없습니다" if codes is None else "코드 목록의 단지가 K-apt 단지 목록에 없습니다")
     # months stored by an older rule version are re-judged before this run reads them (only this run's complexes and year)
     reclassify_existing(db, [t.kapt_code for t in targets], year)
     months = [f"{year}01"] if scope == "smoke" else [f"{year}{month:02d}" for month in range(1, 13)]
@@ -564,6 +571,9 @@ def collect_kapt_energy(
     session = client or CachedClient(root / "cache" / "kapt-energy", min_interval=delay)
     base_url = os.getenv("KAPT_ENERGY_BASE_URL", KAPT_ENERGY_BASE_URL).rstrip("/")
     stats = {"requested": 0, "normalized": 0, "skipped": 0, "empty": 0, "not_reported": 0, "suspect": 0, "failed": 0, "before_approval": 0}
+    if codes is not None:
+        known = {row.kapt_code for row in _targets(db, "full", None, codes)}
+        stats["codes_missing"] = len({str(c).strip() for c in codes if str(c).strip()} - known)
     url = f"{base_url}/{KAPT_ENERGY_OPERATION}"
     outage = {"run": 0, "pauses": 0}
     shown = [0.0]

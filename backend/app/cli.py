@@ -38,7 +38,7 @@ def build_cell_state_command(args):
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('command',choices=['demo','online','status','enrich','collect','collect-history','collect-missing','validate-models','snapshot','llm-dataset','llm-eval','import-sgis-grid','import-sgis-grid500','import-regional-stats','import-team-grid','import-kcsm100',
         'national-admin','national-sgis','national-complexes','national-grid500','national-ordinances','national-all','prepare-region','regions',
-        'check-standard','apply-standard','backfill-solar','region-energy-history','region-kapt-history','region-sgis-history','verify-cases','place-parcels','repick-default-grid','estimate-gaps','fetch-kea-rating','prepare-national','build-cell-state']);parser.add_argument('--year',type=int,default=DEFAULT_YEAR)
+        'check-standard','apply-standard','backfill-solar','region-energy-history','region-kapt-history','region-sgis-history','verify-cases','place-parcels','repick-default-grid','estimate-gaps','fetch-kea-rating','prepare-national','build-cell-state','collect-kapt-codes']);parser.add_argument('--year',type=int,default=DEFAULT_YEAR)
     parser.add_argument('--from',dest='from_year',type=int,default=2015);parser.add_argument('--to',dest='to_year',type=int,default=DEFAULT_YEAR)
     parser.add_argument('--datasets',default='',help='comma-separated: sgis,kma_asos,kapt_energy,energy,vworld_zoning,vworld_buildings,vworld_cadastral,building_register');parser.add_argument('--force',action='store_true')
     parser.add_argument('--source',choices=['energy','weather','kapt-energy','kma','sgis','vworld-zoning','vworld-cadastral'])
@@ -194,6 +194,24 @@ def main():
                 result=collect_kapt_years(db,code,years,log=lambda m:print(m,flush=True))
                 print(json.dumps(result,ensure_ascii=False,default=str),flush=True)
                 if result.get('stopped') in ('WAITING','BLOCKED','OUTAGE'):
+                    break
+        elif args.command=='collect-kapt-codes':
+            # 분석 표본으로 고른 단지 코드 목록의 K-apt 월별 에너지(지역과 관계없이). --file /data/ops/<목록>.txt --years 2024,2023
+            # 받은 달은 건너뛰므로 일일 한도(22)에 걸리면 다음 날 같은 명령을 다시 실행하면 이어 받음
+            from .kapt_energy import ProviderOutageError, collect_kapt_energy
+            from .cache import ExternalError
+            codes=[line.strip() for line in Path(args.file).read_text(encoding='utf-8').splitlines() if line.strip() and not line.startswith('#')]
+            years=[int(y) for y in (args.years or '').split(',') if y.strip()]
+            if not codes or not years:
+                raise SystemExit('collect-kapt-codes: --file(코드 목록)과 --years가 필요합니다')
+            for year in years:
+                try:
+                    stats=collect_kapt_energy(db,year,'full',history=True,codes=codes,retry_rounds=1,retry_wait_s=120,outage_pause_s=300,max_outage_pauses=6,
+                                              progress=lambda f,m:print(f'{f:.0%} {m}',flush=True))
+                    print(json.dumps({'year':year,**stats},ensure_ascii=False,default=str),flush=True)
+                except (ProviderOutageError,ExternalError) as exc:
+                    db.rollback()
+                    print(json.dumps({'year':year,'stopped':str(exc)},ensure_ascii=False),flush=True)
                     break
         elif args.command=='region-sgis-history':
             # 준비한 지역의 SGIS 행정동 인구·가구·경계 과거 연도 (지역 준비의 sgis_admin 단계는 최신 공표 연도만). --region 41110,36110 --years 2015,2016
