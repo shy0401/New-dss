@@ -1888,8 +1888,10 @@ def analyze(db: Any, spec: dict[str, Any], from_year: int, to_year: int, event_y
         effort_result["measure_links_note"] = ("난방 구성은 지역 전체 공동주택 단지 기준입니다(구역 단지만 본 값이 아님)" if guide.get("heating")
                                                else "지역 난방 구성을 알 수 없어 지역난방 조건은 보지 않았습니다")
         # 2026-11-25(계획 v3 A): 수단을 지역에 맞춰 고를 지역 값을 한곳에(새 값 없음)
-        from .measure_catalog import region_context
+        from .measure_catalog import order_lines, region_context
         effort_result["region_context"] = region_context(guide)
+        # 2026-11-25(계획 v3 B): 지역 규칙으로 지표 줄의 순서 · 이유(값은 그대로, 기록 2026-11-25-measure-region-order.md)
+        effort_result["measure_links"] = order_lines(effort_result["measure_links"], effort_result["region_context"])
     members = set(area["grid_ids"])
     grid_features = {"type": "FeatureCollection", "features": [
         {"type": "Feature", "id": g["id"], "geometry": g["geometry"], "properties": {"id": g["id"]}}
