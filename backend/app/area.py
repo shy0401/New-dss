@@ -1880,12 +1880,20 @@ def analyze(db: Any, spec: dict[str, Any], from_year: int, to_year: int, event_y
         history["region_guide"]["solar"] = history.get("solar")
     if effort_result and effort_result.get("targets"):
         # 추천 줄 ↔ 그 조건에서 쓸 수 있는 수단 · 근거표(U4, 5.15). 난방 구성은 지역 전체 단지 값(구역 단지 아님)
-        from .reduction_measures import applicable_measures
+        from .reduction_measures import applicable_measures, pv_levels
         guide = history.get("region_guide") or {}
+        # 2026-11-25(계획 v3 E): 태양광 인증 · 사례 수준(세대당 kW, 추정). 지붕 한도는 지붕 최대 줄과 같은 규칙(roof_limit · roof_pv)
+        from .reduction_plan import roof_pv
+        kwh_per_kw = (effort_result.get("pv_yield") or {}).get("kwh_per_kw")
+        roof_m2, roof_basis = roof_limit(effort_result)
+        roof = roof_pv(roof_m2, kwh_per_kw)
+        roof_kw = float(roof["kw"]) if roof else None
+        levels = pv_levels((plan or {}).get("households"), kwh_per_kw,
+                           float(effort_result["factor_kgco2eq_per_kwh"]), roof_kw, (inputs.get("region") or {}).get("code"), roof_basis)
         district = next((k.get("household_share_pct") for k in ((guide.get("heating") or {}).get("kinds") or []) if k["kind"] == "지역난방"), None)
         effort_result["measure_links"] = applicable_measures(effort_result["targets"], float(effort_result.get("added_floor_area_m2") or 0),
                                                              district, ((guide.get("cooling") or {}).get("reading")),
-                                                             green_area_m2=(plan or {}).get("green_area_m2"))
+                                                             green_area_m2=(plan or {}).get("green_area_m2"), pv_levels=levels)
         effort_result["measure_links_note"] = ("난방 구성은 지역 전체 공동주택 단지 기준입니다(구역 단지만 본 값이 아님)" if guide.get("heating")
                                                else "지역 난방 구성을 알 수 없어 지역난방 조건은 보지 않았습니다")
         # 2026-11-25(계획 v3 A): 수단을 지역에 맞춰 고를 지역 값을 한곳에(새 값 없음)

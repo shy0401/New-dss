@@ -346,8 +346,55 @@ def greenery_offset(green_area_m2: float | None) -> dict[str, Any] | None:
                      "상쇄(줄이는 것이 아니라 메움). 목표 · 추천 방안 · 다른 수단 합계에 넣지 않음")}
 
 
+# 2026-11-25(계획 v3 E): 지붕 태양광의 인증 · 실제 사례 수준(세대당 kW). 기록 2026-11-25-pv-three-levels.md
+PV_KW_PER_HOUSEHOLD_CERTIFIED = (0.20, 0.61)   # 공식 자료: ZEB 인증사례집 2024(옥상 · 5등급 · 190세대 이상 0.20~0.59, 계산), LH 인천검단 0.383, LH 5등급 수준 약 0.61(계산)
+PV_KW_PER_HOUSEHOLD_CASES = (0.13, 0.64)       # 기사: 올림픽파크포레온 1,536 kW ÷ 12,032세대 = 0.128, 힐스테이트 검단 웰카운티 옥상 981 kW ÷ 1,535 = 0.639
+PV_LEVEL_BASIS = {
+    "certified": ("공식 자료", "신축 ZEB 인증 공동주택의 세대당 태양광 0.20~0.61 kW(한국부동산원 ZEB 인증사례집 2024 주거 사례 계산, LH 인천검단 AA10-2 0.383 kW)"),
+    "cases": ("기사", "실제 신축 단지 보도의 세대당 태양광 0.13~0.64 kW(올림픽파크포레온 0.128 — 옥상만인지 확인 필요, 힐스테이트 검단 웰카운티 옥상 0.639, 공식 자료로 교차 확인 안 됨)"),
+}
+PV_REGION_RULE = {
+    "11": "서울: 녹색건축물 설계기준(서울특별시고시 제2023-555호, 2024-01-01 시행) 민간 주거 신재생 의무 2024년 9.5~10.5%(세대 규모별), 해마다 +0.5%p(2026년 10.5~11.5%) — 지표 문장, 값에 쓰지 않음",
+    "50": "제주: 녹색건축물 설계기준(제주특별자치도 고시 제2025-160호, 2025-07-01 게재) 민간 공동주택 신재생 의무 8~12%(세대 규모 · 연도별, 2025~2027) — 지표 문장, 값에 쓰지 않음",
+}
+PV_UPPER_BOUND_NOTE = "지붕을 연면적(위 한계)으로만 알아 이 용량이 지붕에 들어가는지 모름 — 층수나 동별 건축면적을 넣으면 발전량 · 감축량을 계산"
+
+
+def pv_levels(households: float | None, kwh_per_kw: float | None, factor_kgco2eq_per_kwh: float,
+              roof_limit_kw: float | None, region_code: str | None, roof_basis: str | None = None) -> dict[str, Any]:
+    """지붕 태양광의 인증 · 실제 사례 수준(추정 범위): 세대 수 × 세대당 kW → 지역 발전량 → 전력 계수. 지붕 한도로 자름.
+
+    지붕 최대(지금 값)와 더하지 않고, 목표 · 추천 방안 계산에 쓰지 않는다. 세대 수가 없으면 값 없이 이유만.
+    지붕이 연면적 위 한계(``floor_area_upper_bound``)뿐이면 kW 범위만 내고 발전량 · 감축량은 비운다(지붕 최대 줄과 같은 판단)."""
+    upper = roof_basis == "floor_area_upper_bound"
+    out: dict[str, Any] = {"households": households if households and households > 0 else None, "kwh_per_kw": kwh_per_kw,
+                           "roof_limit_kw": roof_limit_kw, "roof_limit_basis": roof_basis}
+    for level, rng in (("certified", PV_KW_PER_HOUSEHOLD_CERTIFIED), ("cases", PV_KW_PER_HOUSEHOLD_CASES)):
+        source_type, basis = PV_LEVEL_BASIS[level]
+        row: dict[str, Any] = {"data_class": "ESTIMATED", "source_type": source_type, "basis": basis, "kw_per_household": list(rng),
+                               "kw_range": None, "kwh_range": None, "kgco2eq_range": None, "capped": False, "reason": None}
+        if not households or households <= 0:
+            row["reason"] = "세대 수가 없어 계산하지 않음(계획 평가의 주거 용도 줄에 세대 수를 넣으면 계산)"
+        elif roof_limit_kw is not None and roof_limit_kw <= 0:
+            row["reason"] = "계획 지붕 한도가 0이라 계산하지 않음"
+        else:
+            raw = [households * k for k in rng]
+            cap = None if upper else roof_limit_kw
+            fitted = [min(v, cap) if cap is not None else v for v in raw]
+            row.update(kw_range=[round(v, 1) for v in fitted], capped=cap is not None and raw[1] > cap)
+            if upper:
+                row["reason"] = PV_UPPER_BOUND_NOTE
+            elif kwh_per_kw:
+                kwh = [v * kwh_per_kw for v in fitted]
+                row.update(kwh_range=[round(v, 1) for v in kwh], kgco2eq_range=[round(v * factor_kgco2eq_per_kwh, 1) for v in kwh])
+        out[level] = row
+    out["region_rule"] = PV_REGION_RULE.get(str(region_code or "")[:2])
+    return out
+
+
 def applicable_measures(targets: list[dict[str, Any]], added_m2: float, district_share_pct: float | None,
-                        cooling_reading: str | None, green_area_m2: float | None = None) -> list[dict[str, Any]]:
+                        cooling_reading: str | None, green_area_m2: float | None = None,
+                        pv_levels: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Recommendation lines of the area screen ↔ the measures usable under the site's conditions (U4, 2026-11-23, 5.15).
 
     Only the rooftop PV line has a reduction value (this calculation's own PV); greenery carries a separate offset
@@ -394,6 +441,8 @@ def applicable_measures(targets: list[dict[str, Any]], added_m2: float, district
                         "group_kind": GROUP_KIND.get(top or "", "계획 수단"), "condition_text": condition,
                         # 2026-11-25(계획 v3 A): 이 줄의 수준(값 / 지표)과 근거 묶음(근거표 수단_ID). 계산 · 순서는 그대로
                         "level": measure_level(m["key"], quantified), "evidence_groups": _groups_of(m["key"])})
+            if m["key"] == "rooftop_pv" and pv_levels is not None:
+                out[-1]["pv_levels"] = {k: (dict(v) if isinstance(v, dict) else v) for k, v in pv_levels.items()}   # 2026-11-25(계획 v3 E): 인증 · 사례 수준(추정, 합계 밖), 줄마다 복사
             if m["key"] == "greenery" and green:
                 # 2026-11-25(계획 v3 D): 계획 녹지 면적이 있으면 상쇄 값. 감축(kgCO2eq) 칸이 아니라 따로 둔 흡수(kgCO2) 칸에만 —
                 # value_status "OFFSET"이라 감축 값 줄(QUANTIFIED)과 섞이지 않고, 어떤 합계에도 넣지 않음(독립 검토 반영)
