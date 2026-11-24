@@ -1895,7 +1895,7 @@ def analyze(db: Any, spec: dict[str, Any], from_year: int, to_year: int, event_y
         kwh_per_kw = (effort_result.get("pv_yield") or {}).get("kwh_per_kw")
         roof_m2, roof_basis = roof_limit(effort_result)
         roof = roof_pv(roof_m2, kwh_per_kw)
-        roof_kw = float(roof["kw"]) if roof else None
+        roof_kw = float(roof["kw"]) if roof else 0.0   # 새 지붕이 없으면 한도 0(인증 · 사례 수준도 내지 않음, I 검토 반영)
         levels = pv_levels((plan or {}).get("households"), kwh_per_kw,
                            float(effort_result["factor_kgco2eq_per_kwh"]), roof_kw, (inputs.get("region") or {}).get("code"), roof_basis)
         # 2026-11-25(계획 v3 F): 추정 범위 — 구역 건물(건축HUB)의 가장 최근 완전한 해 원단위, 계획 주거 연면적 · 세대 수 · 층수
@@ -1927,6 +1927,12 @@ def analyze(db: Any, spec: dict[str, Any], from_year: int, to_year: int, event_y
         effort_result["region_context"] = region_context(guide)
         # 2026-11-25(계획 v3 B): 지역 규칙으로 지표 줄의 순서 · 이유(값은 그대로, 기록 2026-11-25-measure-region-order.md)
         effort_result["measure_links"] = order_lines(effort_result["measure_links"], effort_result["region_context"])
+        # 2026-11-25(계획 v3 I): 조합 제안 셋(태양광 수준별, 값과 추정을 섞지 않음 — 기록 2026-11-25-measure-combinations.md)
+        from .reduction_measures import combinations
+        effort_result["combinations"] = combinations(effort_result["targets"], levels, estimates, effort_result["measure_links"])
+        if effort_result["combinations"] is None:
+            from .reduction_measures import COMBINATION_NONE_REASON
+            effort_result["combinations_reason"] = COMBINATION_NONE_REASON
     members = set(area["grid_ids"])
     grid_features = {"type": "FeatureCollection", "features": [
         {"type": "Feature", "id": g["id"], "geometry": g["geometry"], "properties": {"id": g["id"]}}

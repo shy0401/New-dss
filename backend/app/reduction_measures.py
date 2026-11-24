@@ -376,7 +376,7 @@ def pv_levels(households: float | None, kwh_per_kw: float | None, factor_kgco2eq
         if not households or households <= 0:
             row["reason"] = "세대 수가 없어 계산하지 않음(계획 평가의 주거 용도 줄에 세대 수를 넣으면 계산)"
         elif roof_limit_kw is not None and roof_limit_kw <= 0:
-            row["reason"] = "계획 지붕 한도가 0이라 계산하지 않음"
+            row["reason"] = "계획에 새 지붕이 없어(지붕 한도 0) 계산하지 않음"
         else:
             raw = [households * k for k in rng]
             cap = None if upper else roof_limit_kw
@@ -470,6 +470,106 @@ def estimated_ranges(residential_m2: float | None, households: float | None, flo
         out["building_greening"] = row("building_greening", total, chain, "냉방(전력 원단위 · 냉방 몫) · 난방(가스 원단위) 둘 다 곱할 양이 없음",
                                        "신축은 지붕 단열이 더 강해 효과가 더 작을 수 있음(보정 근거 없음), 5층 이상 주거는 효과가 작다는 연구 있음"
                                        + (f". 곱할 양이 없어 뺀 쪽: {', '.join(missing)}" if have and missing else ""), parts=parts, scope="electricity+gas")
+    return out
+
+
+def _minus(a: list[float], b: list[float]) -> list[float]:
+    """범위 빼기 [a0, a1] − [b0, b1] = [a0 − b1, a1 − b0](가장 넓게)."""
+    return [a[0] - b[1], a[1] - b[0]]
+
+
+def _after(rng: list[float], data_class: str) -> dict[str, Any]:
+    """남는 양 범위. 반올림한 뒤 0 이하인 끝은 숫자를 비우고 '메움'으로 적음(0이나 음수를 만들지 않음, 검토 반영).
+
+    ``covered`` = "all"(두 끝 모두 메움) · "possible"(낮은 끝만 메움) · "no". 여유 범위는 메움인 끝의 양(kgCO2eq)."""
+    r = [round(v, 1) for v in rng]
+    vals = [v if v > 0 else None for v in r]
+    covered = "all" if all(v is None for v in vals) else ("possible" if any(v is None for v in vals) else "no")
+    margin = [round(-v, 1) if v <= 0 else None for v in r]
+    return {"data_class": data_class, "kgco2eq_range": vals, "covered": covered, "covered_possible": covered != "no",
+            "margin_kgco2eq_range": margin if covered != "no" else None}
+
+
+def _carry(src: dict[str, Any] | None) -> dict[str, Any]:
+    """조합 항목에 원래 추정 줄의 근거 · 조건 · 종류를 함께(화면이 조합 칸만 그려도 조건이 빠지지 않게, 검토 반영)."""
+    src = src or {}
+    return {k: src.get(k) for k in ("data_class", "basis", "condition", "scope") if k in src}
+
+
+COMBINATION_NONE_REASON = "개발 증가분이 없어(늘지 않거나 철거가 더 큼) 조합을 만들지 않음"
+
+
+def combinations(targets: list[dict[str, Any]], pv_levels: dict[str, Any] | None, estimates: dict[str, Any] | None,
+                 lines: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+    """개발 증가분 기준의 조합 제안 셋(A 지붕 최대 · B 인증 수준 · C 실제 사례 수준). 값과 추정을 한 칸에 더하지 않는다.
+
+    기록 2026-11-25-measure-combinations.md. 전력 목표에서는 태양광과 옥상녹화 냉방(추정)만 빼고, 가스 쪽 추정은 나란히,
+    승강기(CO2)는 단위가 달라 따로 둔다. 지표 줄은 지역 순서 위 3개를 이유와 함께. A는 추천 방안(onsite_plan)의 판정 ·
+    남는 양 · 여유를 그대로 쓴다(반올림 · 위 한계 판정이 어긋나지 않게)."""
+    t = next((x for x in targets if x.get("key") == "plan_added"), None)
+    if not t or t.get("required_reduction_kgco2eq") is None:
+        return None
+    need = float(t["required_reduction_kgco2eq"])
+    rec = t.get("recommended") or {}
+    est = estimates or {}
+    green = est.get("building_greening") or {}
+    parts = green.get("parts") or {}
+    elec = ([dict(_carry(green), key="building_greening_cooling", title="옥상녹화(최상층 냉방)", kgco2eq_range=list(parts["cooling"]))]
+            if parts.get("cooling") else [])
+    ev = est.get("elevator_regeneration") or {}
+    co2 = [dict(_carry(ev), key="elevator_regeneration", title="승강기 회생제동", kgco2_range=list(ev["kgco2_range"]))] if ev.get("kgco2_range") else []
+    gas = []
+    if (est.get("envelope") or {}).get("kgco2eq_range"):
+        gas.append(dict(_carry(est["envelope"]), key="envelope", title="단열·창호 기준 강화(가스)", kgco2eq_range=list(est["envelope"]["kgco2eq_range"])))
+    if parts.get("heating"):
+        gas.append(dict(_carry(green), key="building_greening_heating", title="옥상녹화(최상층 난방, 가스)", kgco2eq_range=list(parts["heating"])))
+    indicators = [{"key": x["key"], "title": x["title"], "why": list(x.get("why") or [])} for x in lines
+                  if x.get("target") == "plan_added" and x.get("level") == "INDICATOR"][:3]
+    elec_sum = [sum(x["kgco2eq_range"][0] for x in elec), sum(x["kgco2eq_range"][1] for x in elec)] if elec else None
+    status = rec.get("onsite_status")
+    out = []
+    for key, level in (("A", "roof_max"), ("B", "certified"), ("C", "cases")):
+        combo: dict[str, Any] = {"key": key, "pv_level": level, "need_kgco2eq": round(need, 1),
+                                 "electricity_estimates": [dict(x, kgco2eq_range=list(x["kgco2eq_range"])) for x in elec],
+                                 "co2_estimates": [dict(x, kgco2_range=list(x["kgco2_range"])) for x in co2],
+                                 "gas_estimates": [dict(x, kgco2eq_range=list(x["kgco2eq_range"])) for x in gas],
+                                 "indicators": [dict(x, why=list(x["why"])) for x in indicators]}
+        base: list[float] | None = None
+        if level == "roof_max":
+            if status in ("MET", "PARTIAL"):
+                combo["pv"] = {"data_class": "SCENARIO", "kgco2eq": rec.get("pv_kgco2eq"), "pv_kw": rec.get("pv_kw")}
+                if status == "MET":
+                    combo["after_pv"] = {"data_class": "SCENARIO", "kgco2eq": None, "covered": True,
+                                         "margin_kgco2eq": rec.get("margin_kgco2eq"),
+                                         "margin_note": "필요 용량을 10 kW 단위로 올린 몫(지붕의 남은 여력이 아님)"}
+                else:
+                    rest = float(rec.get("remaining_kgco2eq") or 0)
+                    combo["after_pv"] = {"data_class": "SCENARIO", "kgco2eq": rec.get("remaining_kgco2eq"), "covered": False,
+                                         "at_least": bool(rec.get("remaining_is_minimum"))}
+                    base = [rest, rest]
+            else:
+                combo["pv"] = {"data_class": "SCENARIO", "kgco2eq": None, "status": status, "reason": _no_value_reason("rooftop_pv", status)}
+                if status == "NO_ROOF" and rec.get("remaining_kgco2eq") is not None:
+                    rest = float(rec["remaining_kgco2eq"])   # 구역 안 지붕이 없어 필요량 전부가 남음
+                    combo["after_pv"] = {"data_class": "SCENARIO", "kgco2eq": rec["remaining_kgco2eq"], "covered": False, "at_least": False}
+                    base = [rest, rest]
+                else:
+                    combo["after_pv"] = None
+        else:
+            row = (pv_levels or {}).get(level) or {}
+            r = row.get("kgco2eq_range")
+            if r:
+                combo["pv"] = {"data_class": "ESTIMATED", "kgco2eq_range": list(r), "kw_range": list(row.get("kw_range") or []),
+                               "source_type": row.get("source_type"), "basis": row.get("basis"), "capped": row.get("capped")}
+                base = [need - r[1], need - r[0]]
+                combo["after_pv"] = _after(base, "ESTIMATED")
+            else:
+                reason = row.get("reason") or ("발전량 근거가 없어 kgCO2eq로 바꾸지 못함(kW 범위만)" if row.get("kw_range") else "태양광 수준을 계산하지 않음")
+                combo["pv"] = {"data_class": "ESTIMATED", "kgco2eq_range": None, "kw_range": row.get("kw_range"),
+                               "source_type": row.get("source_type"), "reason": reason}
+                combo["after_pv"] = None
+        combo["after_estimates"] = _after(_minus(base, elec_sum), "ESTIMATED") if base is not None and elec_sum else None
+        out.append(combo)
     return out
 
 
