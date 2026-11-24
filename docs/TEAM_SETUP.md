@@ -30,6 +30,7 @@ autoMemoryReclaim=dropcache
 - `[wsl2] memory=`(VM 한도)는 **두지 않는 것을 권한다.** 8 GB로 걸어 본 결과, 측정용 프로세스가 잠깐 늘자 놀던 팀 모델 1.1 GB가 스왑(디스크)으로 밀려났다(다음 예측이 느려짐). 기본값은 PC 메모리의 절반이라 16 GB 노트북이면 8 GB
 - 이 파일은 PC의 모든 WSL 배포판에 함께 적용된다
 - `wsl --shutdown` 뒤 컨테이너는 healthy인데 `http://127.0.0.1:8000`·`:5173`이 빈 응답이면 포트 연결만 끊긴 것: `docker compose -p carbon-urban-dss -f compose.yaml -f compose.demo.yaml restart api frontend`(워커는 다시 시작하지 않는다 — 예약 작업은 남지만 굳이 건드릴 이유가 없음)
+- PC 재부팅 뒤(2026-11-24 확인): Docker Desktop이 작업 관리자의 시작 앱에서 '사용 안 함'이면 직접 켠다. 컨테이너가 `Exited`로 남아 있으면 `docker compose -p carbon-urban-dss -f compose.yaml -f compose.demo.yaml up -d --no-build`, 팀 모델은 profile이라 따로 `... --profile team-model up -d --no-build team-model`(저장한 모델을 불러와 10초 안팎). 예약 작업은 redis에 남아 워커가 시작할 때 되살린다
 
 Node.js와 Playwright는 **필수가 아니다.** 프런트엔드 테스트와 브라우저 E2E는 실행기가 Docker 컨테이너 안에서 수행한다.
 
