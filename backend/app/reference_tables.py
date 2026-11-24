@@ -131,7 +131,10 @@ def _summary(rows: list[dict[str, str]]) -> dict[str, Any]:
     return {"rows": len(rows), "sources": len({r["출처_주소"].strip() for r in rows if r["출처_주소"].strip()}),
             "grades": [{"grade": g, "label": GRADE_LABEL[g], "rows": grades[g]} for g in GRADE_LABEL if grades.get(g)],
             "exclusion": [{"value": k, "rows": n} for k, n in exc.most_common()],
-            "reasons": [{"reason": k, "rows": n} for k, n in reasons.most_common()]}
+            "reasons": [{"reason": k, "rows": n} for k, n in reasons.most_common()],
+            # 2026-11-25(계획 v3 A): 원문과 대조한 행 · 같은 조건 비교 행 — 근거의 깊이를 행 수와 따로 보이려고
+            "checked_rows": sum(1 for r in rows if (r.get("원문_대조") or "").strip() not in ("", "안 함")),
+            "same_condition_rows": sum(1 for r in rows if r.get("같은_조건_비교") == "예")}
 
 
 @lru_cache(maxsize=1)

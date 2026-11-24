@@ -1887,6 +1887,9 @@ def analyze(db: Any, spec: dict[str, Any], from_year: int, to_year: int, event_y
                                                              district, ((guide.get("cooling") or {}).get("reading")))
         effort_result["measure_links_note"] = ("난방 구성은 지역 전체 공동주택 단지 기준입니다(구역 단지만 본 값이 아님)" if guide.get("heating")
                                                else "지역 난방 구성을 알 수 없어 지역난방 조건은 보지 않았습니다")
+        # 2026-11-25(계획 v3 A): 수단을 지역에 맞춰 고를 지역 값을 한곳에(새 값 없음)
+        from .measure_catalog import region_context
+        effort_result["region_context"] = region_context(guide)
     members = set(area["grid_ids"])
     grid_features = {"type": "FeatureCollection", "features": [
         {"type": "Feature", "id": g["id"], "geometry": g["geometry"], "properties": {"id": g["id"]}}
