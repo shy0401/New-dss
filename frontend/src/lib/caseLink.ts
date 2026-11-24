@@ -135,9 +135,9 @@ export function parseAreaLink(search: string): AreaLink | null {
   if (usesRemoved) plan.uses_removed = usesRemoved;
   const years = num(params.get('years'));
   if (years !== undefined && Number.isInteger(years) && years >= 1 && years <= 10) plan.years_after = years;
-  for (const [key, field] of [['floors', 'floors'], ['buildings', 'building_count'], ['footprint', 'footprint_per_building']] as const) {
+  for (const [key, field] of [['floors', 'floors'], ['buildings', 'building_count'], ['footprint', 'footprint_per_building'], ['green', 'green_area_m2']] as const) {
     const v = num(params.get(key));
-    if (v !== undefined && v > 0) plan[field] = v;
+    if (v !== undefined && v > 0) plan[field] = field === 'green_area_m2' ? Math.min(v, 10_000_000) : v;
   }
   if (Object.keys(plan).length) link.plan = plan;
   const target = num(params.get('target'));
@@ -178,5 +178,6 @@ export function areaLink(spec: AreaSpec | null, a: { region: string | null; from
   if (a.plan.floors > 0) params.set('floors', String(a.plan.floors));
   if (a.plan.building_count > 0) params.set('buildings', String(a.plan.building_count));
   if (a.plan.footprint_per_building > 0) params.set('footprint', String(a.plan.footprint_per_building));
+  if ((a.plan.green_area_m2 ?? 0) > 0) params.set('green', String(a.plan.green_area_m2));   // 2026-11-25 계획 v3 H: 녹지 면적도 링크로
   return `/area?${readable(params)}`;
 }

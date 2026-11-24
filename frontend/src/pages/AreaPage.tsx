@@ -32,7 +32,7 @@ function yearChoices(energyYears: number[] | undefined, baselineYear: number | u
   return Array.from({ length: last - first + 1 }, (_, i) => first + i);
 }
 /** 예시값(실제 계획이 아님): 화면을 처음 열었을 때 계산이 돌아가도록 채워 둔다. 주거 50,000 m² 한 줄, 건물 모양은 비움. */
-const DEFAULT_PLAN: PlanState = { uses_new: [{ use: 'residential', floor_area_m2: 50000 }], uses_removed: [], floors: 0, building_count: 0, footprint_per_building: 0, years_after: 7 };
+const DEFAULT_PLAN: PlanState = { uses_new: [{ use: 'residential', floor_area_m2: 50000 }], uses_removed: [], floors: 0, building_count: 0, footprint_per_building: 0, green_area_m2: 0, years_after: 7 };
 /** 빠른 답과 함께 받은 것: 블록 · 세 범위 줄, 그리고 그 요청의 용도 줄(변화 모델은 이 값으로 묻는다). */
 interface BundleView { blocks: PlanEvaluation['blocks']; scopes: PlanEvaluation['scopes']; plan: PlanEvaluation['plan']; sent: { region: string | null; new: TeamAreaItem[]; removed: TeamAreaItem[]; years_after: number } }
 const DEFAULT_TARGET = 40;
@@ -539,8 +539,8 @@ function UseRowInput({ row, index, kind, onChange, onRemove }: { row: PlanUse; i
 function PlanPanel({ plan, setPlan, target, setTarget, pvYield, setPvYield, basis, setBasis, kcsmAvailable = false, effort, received, error }: { plan: PlanState; setPlan: (p: PlanState) => void; target: number; setTarget: (t: number) => void; pvYield: string; setPvYield: (v: string) => void; basis: EffortBasis; setBasis: (b: EffortBasis) => void; kcsmAvailable?: boolean; effort: EffortResult | null; received: PlanEvaluation['plan'] | null; error: string | null }) {
   const setRow = (side: 'uses_new' | 'uses_removed', i: number, patch: Partial<PlanUse>) => setPlan({ ...plan, [side]: plan[side].map((r, j) => (j === i ? { ...r, ...patch } : r)) });
   const dropRow = (side: 'uses_new' | 'uses_removed', i: number) => setPlan({ ...plan, [side]: plan[side].filter((_, j) => j !== i) });
-  const shape = (key: 'floors' | 'building_count' | 'footprint_per_building', label: string, unit: string, step: number) => <label className="field" key={key}><span>{label}</span><div><input type="number" min={0} step={step} aria-label={label} value={plan[key] || ''} placeholder="선택"
-    onChange={(e) => setPlan({ ...plan, [key]: Math.max(0, Number(e.target.value) || 0) })} /><em>{unit}</em></div></label>;
+  const shape = (key: 'floors' | 'building_count' | 'footprint_per_building' | 'green_area_m2', label: string, unit: string, step: number) => <label className="field" key={key}><span>{label}</span><div><input type="number" min={0} step={step} aria-label={label} value={plan[key] || ''} placeholder="선택"
+    onChange={(e) => setPlan({ ...plan, [key]: Math.min(key === 'green_area_m2' ? 10_000_000 : Infinity, Math.max(0, Number(e.target.value) || 0)) })} /><em>{unit}</em></div></label>;
   const undecided = [...plan.uses_new, ...plan.uses_removed].some((r) => r.use === null && r.floor_area_m2 > 0);
   const nonResidential = plan.uses_new.some((r) => r.use !== null && r.use !== 'residential' && r.floor_area_m2 > 0);
   return <section className="panel area-plan" aria-label="계획 넣기" data-testid="area-plan">
@@ -558,10 +558,10 @@ function PlanPanel({ plan, setPlan, target, setTarget, pvYield, setPvYield, basi
       </div>
     </div>
     <div className="field-grid">
-      {shape('floors', '층수 (선택)', '층', 1)}{shape('building_count', '동수 (선택)', '동', 1)}{shape('footprint_per_building', '동당 건축면적 (선택)', 'm²', 50)}
+      {shape('floors', '층수 (선택)', '층', 1)}{shape('building_count', '동수 (선택)', '동', 1)}{shape('footprint_per_building', '동당 건축면적 (선택)', 'm²', 50)}{shape('green_area_m2', '녹지(식재) 면적 (선택)', 'm²', 500)}
       <label className="field"><span>몇 년 뒤 (변화 모델)</span><div><select aria-label="몇 년 뒤" value={plan.years_after} onChange={(e) => setPlan({ ...plan, years_after: Number(e.target.value) })}>{[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((y) => <option key={y} value={y}>{y}년 뒤</option>)}</select></div><span className="field-hint">평가한 개발 기간 중앙값 7년</span></label>
     </div>
-    <p className="muted">층수만 넣으면 지붕 태양광 한도를 연면적 ÷ 층수로, 동수 · 동당 건축면적을 넣으면 건축면적 합으로 확정합니다. 셋을 다 넣으면 그 곱이 신축 합과 같아야 합니다(다르면 계산하지 않고 알립니다). 건물 모양은 변화 모델에는 쓰이지 않습니다.</p>
+    <p className="muted">녹지(식재) 면적을 넣으면 감축 제안의 녹지 줄에 흡수(상쇄, tCO2) 값이 나옵니다 — 감축 값 · 목표와 더하지 않습니다. 층수만 넣으면 지붕 태양광 한도를 연면적 ÷ 층수로, 동수 · 동당 건축면적을 넣으면 건축면적 합으로 확정합니다. 셋을 다 넣으면 그 곱이 신축 합과 같아야 합니다(다르면 계산하지 않고 알립니다). 건물 모양은 변화 모델에는 쓰이지 않습니다.</p>
     <p className="muted" data-testid="area-plan-received">{received ? <>계산에 쓴 계획: 신축 {formatMetric(received.added_floor_area_m2, 'm²')} · 철거 {received.removed_floor_area_m2 ? formatMetric(received.removed_floor_area_m2, 'm²') : '없음'} · 구역 500m 칸 {formatMetric(received.grid_count)}개 (감축 계산 · 변화 모델 · 보고서가 같은 값)</> : '계산하면 서버가 받은 계획을 여기에 적습니다.'}</p>
     {undecided && <p className="area-fallback" role="note" data-testid="area-plan-undecided">용도 미정 줄이 있어 변화 모델은 돌리지 않습니다(용도를 짐작해 채우지 않음). 줄마다 용도를 고르면 예측합니다.</p>}
     {nonResidential && basis === 'apartments' && <p className="area-fallback" role="note" data-testid="area-plan-basis-hint">비주거 줄이 있습니다. 원단위는 기준 건물 하나의 값을 모든 용도에 곱하므로 상가 · 업무가 섞이면 '건물 전체(건축HUB)' 기준이 맞습니다. 기준은 자동으로 바꾸지 않습니다(아래 계산 설정에서 고름).</p>}
