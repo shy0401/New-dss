@@ -65,4 +65,16 @@ describe('사례 링크', () => {
     expect(parseAreaLink('area=admin:1234567&plan=1000&uses=house:1000')?.plan?.uses_new).toEqual([{ use: null, floor_area_m2: 1000 }]);
     expect(parseAreaLink('area=admin:1234567&years=11')?.plan).toBeUndefined();
   });
+
+  it('녹지 면적(green)은 0보다 클 때만 링크에 넣고, 다시 읽을 때 1천만 m²에서 자른다(계획 v3 H)', () => {
+    const base = { region: '52110', from: 2015, to: 2025, event: null, window: 3, target: 40, pv: '', basis: 'apartments' as const };
+    const plan = { uses_new: [{ use: 'residential' as const, floor_area_m2: 60000, dwellings: 500 }], uses_removed: [], floors: 20, building_count: 0, footprint_per_building: 0, years_after: 5 };
+    expect(areaLink({ type: 'admin', code: '35012650' }, { ...base, plan: { ...plan, green_area_m2: 0 } })).not.toContain('green=');
+    const path = areaLink({ type: 'admin', code: '35012650' }, { ...base, plan: { ...plan, green_area_m2: 10000 } })!;
+    expect(path).toMatch(/&green=10000$/);
+    expect(parseAreaLink(path.split('?')[1])?.plan?.green_area_m2).toBe(10000);
+    expect(parseAreaLink('area=admin:35012650&green=20000000')?.plan?.green_area_m2).toBe(10_000_000);
+    expect(parseAreaLink('area=admin:35012650&green=-5')?.plan).toBeUndefined();
+    expect(parseAreaLink('area=admin:35012650&green=abc')?.plan).toBeUndefined();
+  });
 });
