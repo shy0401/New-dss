@@ -334,5 +334,7 @@ def evaluate(body: BundleIn, request: Request) -> dict[str, Any]:
                      "floors": plan.get("floors"), "building_count": plan.get("building_count"), "footprint_per_building": plan.get("footprint_per_building"),
                      "footprint_sum_m2": footprint, "footprint_basis": (effort or {}).get("plan_roof_basis"), "grid_ids": grid_ids, "grid_count": len(grid_ids),
                      "site": body.site.model_dump() if body.site else None,
+                     # 2026-11-25(계획 v3 D): 녹지 면적은 넣은 때만 되돌려 적음(안 넣으면 응답이 전과 같음)
+                     **({"green_area_m2": plan["green_area_m2"]} if plan.get("green_area_m2") else {}),
                      "not_used_by": {"change_model": ["floors", "building_count", "footprint_per_building"], "intensity": ["use", "dwellings"]}},
             "analysis": analysis, "blocks": blocks, "scopes": SCOPES, "facts": facts, "timing_s": timing}

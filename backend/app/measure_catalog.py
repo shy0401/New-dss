@@ -23,11 +23,12 @@ LEVEL_LABEL = {
 LEVEL_ORDER = tuple(LEVEL_LABEL)
 
 # 묶음 → (지금 수준, 목표 수준, 계획 단계, 메모). 지금 수준은 코드에서 확인한 것만(2026-11-25):
-# 지붕 태양광 = 지역 감축 제안 · 3D 사다리의 값, 녹지 · 단열·창호 = 3D 사다리의 값(지역 감축 제안은 지표),
+# 지붕 태양광 = 지역 감축 제안 · 3D 사다리의 값, 단열·창호 = 3D 사다리의 값(지역 감축 제안은 지표),
+# 녹지 = 3D 사다리 · 지역 감축 제안(녹지 면적을 넣을 때, 상쇄 kgCO2 칸 따로)의 값(2026-11-25 D),
 # 도구 수단 목록(reduction_measures.MEASURES)의 지표 = INDICATOR, 근거표 화면의 '도구 수단에 없는 묶음' = TABLE_ONLY.
 GROUP_LEVELS: dict[str, tuple[str, str, str, str]] = {
     "rooftop_pv": ("VALUE", "VALUE", "E", "지붕 최대 · 인증 수준 · 실제 사례 수준 세 줄"),
-    "greenery": ("VALUE_3D", "VALUE", "D", "상수 판정(단지 110곳 실측, 단위 확인) 뒤 지역 시뮬레이션에도 녹지 입력"),
+    "greenery": ("VALUE", "VALUE", "D", "2026-11-25 D: 상수 1.0 유지(식재 · 수관 면적당 실측 범위 안), 지역 계획에 녹지 면적을 넣으면 상쇄 값(합계 밖)"),
     "envelope": ("VALUE_3D", "VALUE", "F", "지역 시뮬레이션에서는 가스 범위(구역 가스 원단위 × 연면적)"),
     "new_build_package": ("INDICATOR", "INDICATOR", "B", "추가성(2025-06-30 이후 법정 기준) 문장과 함께"),
     "passive_package": ("INDICATOR", "INDICATOR", "B", "근거 대부분 국외 실측"),

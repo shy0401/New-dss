@@ -330,17 +330,35 @@ def _groups_of(key: str) -> list[str]:
     return [g["group"] for g in group_status() if key in g["tool_measures"]]
 
 
+def greenery_offset(green_area_m2: float | None) -> dict[str, Any] | None:
+    """계획 녹지 면적의 연 흡수(상쇄) — 3D 계획안 검토와 같은 상수 · 범위(``reduction_plan``). 면적이 없거나 0이면 None.
+
+    줄이는 것이 아니라 메우는 값이라 목표 · 추천 방안 · 다른 수단의 합계에 넣지 않는다(기록 2026-11-25-greenery-area-input.md)."""
+    if not green_area_m2 or not green_area_m2 > 0:   # None · 0 · NaN
+        return None
+    from .reduction_plan import GREEN_UPTAKE_KG_PER_M2, GREEN_UPTAKE_RANGE_T_PER_HA
+    kg = round(green_area_m2 * GREEN_UPTAKE_KG_PER_M2, 1)
+    if kg <= 0:   # 반올림해 0이 되는 아주 작은 면적은 값이 아님(0을 지어내지 않음)
+        return None
+    return {"area_m2": round(green_area_m2, 1), "kgco2": kg,
+            "range_kgco2": [round(green_area_m2 * t / 10, 1) for t in GREEN_UPTAKE_RANGE_T_PER_HA],
+            "text": (f"녹지 {green_area_m2:,.0f} m² × 연 {GREEN_UPTAKE_KG_PER_M2:.1f} kgCO2/m² = {kg / 1000:,.1f} tCO2 흡수 — "
+                     "상쇄(줄이는 것이 아니라 메움). 목표 · 추천 방안 · 다른 수단 합계에 넣지 않음")}
+
+
 def applicable_measures(targets: list[dict[str, Any]], added_m2: float, district_share_pct: float | None,
-                        cooling_reading: str | None) -> list[dict[str, Any]]:
+                        cooling_reading: str | None, green_area_m2: float | None = None) -> list[dict[str, Any]]:
     """Recommendation lines of the area screen ↔ the measures usable under the site's conditions (U4, 2026-11-23, 5.15).
 
-    Only the rooftop PV line has a value (this calculation's own PV); every other measure is an indicator with its
+    Only the rooftop PV line has a reduction value (this calculation's own PV); greenery carries a separate offset
+    (kgCO2, value_status OFFSET) only when the plan gives a green area (2026-11-25); every other measure is an indicator with its
     evidence (measures list + evidence table summary), never multiplied into the plan. Existing-building measures go
     to the whole-area target only; district heating control only where the region has district-heated households;
     operation (after move-in behaviour) is folded as outside the planning stage."""
     from .measure_catalog import measure_level
     from .reference_tables import evidence_summary
     ev = evidence_summary()["by_measure"]
+    green = greenery_offset(green_area_m2)
     out: list[dict[str, Any]] = []
     for t in targets:
         rec = t.get("recommended") or {}
@@ -376,4 +394,9 @@ def applicable_measures(targets: list[dict[str, Any]], added_m2: float, district
                         "group_kind": GROUP_KIND.get(top or "", "계획 수단"), "condition_text": condition,
                         # 2026-11-25(계획 v3 A): 이 줄의 수준(값 / 지표)과 근거 묶음(근거표 수단_ID). 계산 · 순서는 그대로
                         "level": measure_level(m["key"], quantified), "evidence_groups": _groups_of(m["key"])})
+            if m["key"] == "greenery" and green:
+                # 2026-11-25(계획 v3 D): 계획 녹지 면적이 있으면 상쇄 값. 감축(kgCO2eq) 칸이 아니라 따로 둔 흡수(kgCO2) 칸에만 —
+                # value_status "OFFSET"이라 감축 값 줄(QUANTIFIED)과 섞이지 않고, 어떤 합계에도 넣지 않음(독립 검토 반영)
+                out[-1].update({"value_status": "OFFSET", "offset_kgco2": green["kgco2"], "offset_range_kgco2": green["range_kgco2"],
+                                "offset_text": green["text"], "no_value_reason": green["text"], "level": measure_level(m["key"], True)})
     return out
