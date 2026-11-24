@@ -91,6 +91,18 @@ def group_status() -> tuple[dict[str, Any], ...]:
     return tuple(out)
 
 
+def cooling_share(code: str | None) -> float | None:
+    """세대 전기 중 냉방 몫(월 분해 중앙값, ``regional_conditions_sigungu.csv`` 23개 시군구). 시 코드는 그 시 구 값의 중앙값, 없으면 None."""
+    from statistics import median
+    from .reference_tables import _rows
+    code = str(code or "")
+    rows = [r for r in _rows("regional_conditions_sigungu.csv") if r["sigungu_code"] == code]
+    if not rows and code.endswith("0"):
+        rows = [r for r in _rows("regional_conditions_sigungu.csv") if r["sigungu_code"][:4] == code[:4] and r["sigungu_code"] != code]
+    vals = [float(r["elec_share_cool_median"]) for r in rows if r.get("elec_share_cool_median")]
+    return round(median(vals), 4) if vals else None
+
+
 def region_context(guide: dict[str, Any] | None) -> dict[str, Any] | None:
     """감축 수단을 지역에 맞춰 고를 때 쓰는 지역 값(지역 가이드에서 그대로 읽음, 새 값 없음). 단계 B의 순서 규칙이 이 값을 쓴다."""
     if not guide:
@@ -106,11 +118,72 @@ def region_context(guide: dict[str, Any] | None) -> dict[str, Any] | None:
             plan_groups[g["group"]] += g["tasks"]
     return {"code": guide.get("code"), "name": guide.get("name"), "design_zone": guide.get("design_zone"),
             "hdd_ratio_vs_jeonju": climate.get("hdd_ratio"), "cdd_ratio_vs_jeonju": climate.get("cdd_ratio"),
+            "elec_cooling_share": cooling_share(guide.get("code")),
             "district_heating_household_pct": district,
             "district_heat_stats_pct": (guide.get("heat_stats") or {}).get("district_heat_share_pct"),
             "pv_kwh_per_kw": (pv or {}).get("kwh_per_kw"),
             "local_plan_tasks_by_group": dict(plan_groups.most_common()),
             "note": "지역 가이드 값(평년 기후 비 · 난방 구성 · 일사 · 지자체 과제)을 그대로 모은 것. 감축률은 지역마다 바꾸지 않음"}
+
+
+# 단계 B 순서 규칙(기록 docs/records/2026-11-25-measure-region-order.md, 결과 보기 전에 정함). 감축률은 그대로, 순서 · 이유만
+COOLING_KEYS = frozenset({"shading"})
+HEATING_KEYS = frozenset({"envelope", "passive_package", "window_retrofit", "heat_recovery_ventilation", "condensing_boiler",
+                          "district_heating_control"})
+FIXED_KEYS = frozenset({"rooftop_pv", "greenery"})   # 값 · 상쇄 줄: 순서 매김에서 빼고 지금 자리 그대로
+CDD_RATIO_OVER = 1.0          # R1: 전주보다 냉방도일이 많음
+COOLING_SHARE_MIN = 0.07      # R1: 세대 전기의 냉방 몫(23개 시군구 중앙 5.4%)
+HDD_RATIO_MIN = 1.1           # R2: 전주보다 난방도일 10% 이상
+DISTRICT_HEATING_MIN = 20.0   # R3: 지역난방 세대 비율(%)
+
+
+def _line_score(line: dict[str, Any], ctx: dict[str, Any] | None, domestic: dict[str, int]) -> tuple[int, list[str]]:
+    if not ctx:
+        return 0, ["지역 값을 알 수 없어 기본 순서"]
+    key, score, why = line["key"], 0, []
+    cdd, share, hdd = ctx.get("cdd_ratio_vs_jeonju"), ctx.get("elec_cooling_share"), ctx.get("hdd_ratio_vs_jeonju")
+    dh = ctx.get("district_heating_household_pct")
+    if key in COOLING_KEYS:
+        if cdd is not None and cdd > CDD_RATIO_OVER:
+            score += 10; why.append(f"냉방도일이 전주의 {cdd:.2f}배")
+        elif share is not None and share >= COOLING_SHARE_MIN:
+            score += 10; why.append(f"세대 전기의 {share * 100:.1f}%가 냉방(23개 시군구 분해, 중앙 5.4%)")
+    if key in HEATING_KEYS and hdd is not None and hdd >= HDD_RATIO_MIN:
+        score += 10; why.append(f"난방도일이 전주의 {hdd:.2f}배")
+    if key == "district_heating_control" and dh is not None and dh >= DISTRICT_HEATING_MIN:
+        score += 10; why.append(f"이 지역 공동주택 세대의 {dh:.1f}%가 지역난방")
+    if key == "condensing_boiler" and dh is not None and dh < DISTRICT_HEATING_MIN:
+        score += 5; why.append(f"개별난방 위주(지역난방 {dh:.1f}%)")
+    tasks = sum((ctx.get("local_plan_tasks_by_group") or {}).get(g, 0) for g in line.get("evidence_groups") or [])
+    if tasks:
+        score += 3; why.append(f"이 지역 지자체 계획 과제 {tasks}개")
+    groups = line.get("evidence_groups") or []
+    if groups and sum(domestic.get(g, 0) for g in groups) == 0:
+        score -= 5; why.append("국내 실측 근거 없음(국외 · 계산 위주)")
+    return score, why
+
+
+def order_lines(lines: list[dict[str, Any]], ctx: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """목표 기준마다 지표 줄을 지역 규칙 점수로 다시 놓고(같은 점수는 지금 순서), 줄에 ``priority`` · ``why``를 붙인다.
+
+    값 · 상쇄 줄(지붕 태양광 · 녹지)은 순서 매김에서 빼고 지금 자리 그대로. 줄의 숫자는 건드리지 않는다."""
+    domestic = {g["group"]: g["evidence"]["domestic_measured"] for g in group_status()}
+    out: list[dict[str, Any]] = []
+    targets = list(dict.fromkeys(x["target"] for x in lines))
+    for t in targets:
+        block = [x for x in lines if x["target"] == t]
+        movable = [(i, x) for i, x in enumerate(block) if x["key"] not in FIXED_KEYS]
+        scored = []
+        for i, x in movable:
+            s, why = _line_score(x, ctx, domestic)
+            condition = x.get("condition_text")
+            if s and why:   # 화면이 이미 그리는 조건 문장 칸에 이유를 붙임(화면 수정 없이)
+                condition = (f"{condition} / " if condition else "") + "이 지역: " + ", ".join(why)
+            scored.append((-s, i, {**x, "priority": s, "why": why, "condition_text": condition}))
+        ranked = [x for _, _, x in sorted(scored, key=lambda z: (z[0], z[1]))]
+        slots = iter(ranked)
+        out += [next(slots) if x["key"] not in FIXED_KEYS else {**x, "priority": None, "why": []} for x in block]
+    return out
 
 
 def measure_level(key: str, quantified: bool) -> str:
