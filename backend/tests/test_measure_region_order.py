@@ -68,7 +68,7 @@ def test_local_plan_and_evidence_rules():
     lines = _lines()
     out = order_lines(lines, _ctx(local_plan_tasks_by_group={"operation": 4}))
     op = next(x for x in out if x["key"] == "operation" and x["target"] == "plan_added")
-    assert "이 지역 지자체 계획 과제 4개" in op["why"]
+    assert "지자체 계획 과제 4개" in op["why"]
     hrv = next(x for x in out if x["key"] == "heat_recovery_ventilation" and x["target"] == "plan_added")
     assert "국내 실측 근거 없음(국외 · 계산 위주)" in hrv["why"] and hrv["priority"] < 0
 

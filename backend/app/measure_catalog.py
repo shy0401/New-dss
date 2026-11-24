@@ -151,12 +151,12 @@ def _line_score(line: dict[str, Any], ctx: dict[str, Any] | None, domestic: dict
     if key in HEATING_KEYS and hdd is not None and hdd >= HDD_RATIO_MIN:
         score += 10; why.append(f"난방도일이 전주의 {hdd:.2f}배")
     if key == "district_heating_control" and dh is not None and dh >= DISTRICT_HEATING_MIN:
-        score += 10; why.append(f"이 지역 공동주택 세대의 {dh:.1f}%가 지역난방")
+        score += 10; why.append(f"공동주택 세대의 {dh:.1f}%가 지역난방")
     if key == "condensing_boiler" and dh is not None and dh < DISTRICT_HEATING_MIN:
         score += 5; why.append(f"개별난방 위주(지역난방 {dh:.1f}%)")
     tasks = sum((ctx.get("local_plan_tasks_by_group") or {}).get(g, 0) for g in line.get("evidence_groups") or [])
     if tasks:
-        score += 3; why.append(f"이 지역 지자체 계획 과제 {tasks}개")
+        score += 3; why.append(f"지자체 계획 과제 {tasks}개")
     groups = line.get("evidence_groups") or []
     if groups and sum(domestic.get(g, 0) for g in groups) == 0:
         score -= 5; why.append("국내 실측 근거 없음(국외 · 계산 위주)")
