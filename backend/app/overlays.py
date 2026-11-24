@@ -220,8 +220,15 @@ def complex_features(db: Any, sc: Any = None) -> dict[str, Any]:
     from .grid_metrics import floor_area_status
     from .kapt import ApartmentComplex
 
+    from sqlalchemy.orm import load_only
+
     features = []
-    for row in db.scalars(select(ApartmentComplex).where(ApartmentComplex.longitude.is_not(None), ApartmentComplex.latitude.is_not(None)).order_by(ApartmentComplex.kapt_code)):
+    # 2026-11-24: only the columns below (the 22k complexes' summary/detail JSON made this ~3.6 s per map)
+    columns = load_only(ApartmentComplex.kapt_code, ApartmentComplex.name, ApartmentComplex.households, ApartmentComplex.gross_floor_area_m2,
+                        ApartmentComplex.management_area_m2, ApartmentComplex.building_count, ApartmentComplex.approval_date,
+                        ApartmentComplex.heating_type, ApartmentComplex.grid_id, ApartmentComplex.longitude, ApartmentComplex.latitude,
+                        ApartmentComplex.bjd_code)
+    for row in db.scalars(select(ApartmentComplex).options(columns).where(ApartmentComplex.longitude.is_not(None), ApartmentComplex.latitude.is_not(None)).order_by(ApartmentComplex.kapt_code)):
         if sc is not None and not sc.owns_complex(row.bjd_code, row.grid_id):
             continue
         status, reason = floor_area_status(row.gross_floor_area_m2, row.households, row.management_area_m2)

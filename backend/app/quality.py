@@ -76,7 +76,9 @@ def _ratio(numerator: int, denominator: int, evidence: str) -> dict[str, Any] | 
 # The dashboard asks for every source's quality on each open and year change (28 sources, 1.6 s of
 # counting on 2026-10-14). Quality only moves when a collection finishes (which updates the source row,
 # part of the key), so the answer is kept up to 2 minutes.
-QUALITY_TTL_S = 120
+# 2026-11-24: the energy sources now take seconds (24M rows), and 2 minutes made any screen opened after a pause wait
+# 12-17 s for the title block's source list. The key already changes when a collection finishes, so 30 minutes.
+QUALITY_TTL_S = 1800
 _QUALITY: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
 
 
@@ -127,22 +129,16 @@ def _dataset_quality(db: Any, source_id: str, year: int = 2025) -> dict[str, Any
         base = EnergyMonthly.use_ym.startswith(year_prefix)
         if source_id != "energy":
             base = (EnergyMonthly.source == source_id) & base
-        total = int(db.scalar(select(func.count()).select_from(EnergyMonthly).where(base)) or 0)
-        energy_type_months = len(
-            db.execute(
-                select(EnergyMonthly.use_ym, EnergyMonthly.energy_type)
-                .where(base)
-                .distinct()
-            ).all()
-        )
-        matched = int(
-            db.scalar(
-                select(func.count())
-                .select_from(EnergyMonthly)
-                .where(base, EnergyMonthly.grid_id.is_not(None))
-            )
-            or 0
-        )
+        # 2026-11-24: one pass instead of three over the 24M-row table (energy 8.3 s, kapt_energy 6.7 s): rows per
+        # (month, energy type) group, COUNT(grid_id) = rows with a grid. The number of groups is the former DISTINCT.
+        groups = db.execute(
+            select(EnergyMonthly.use_ym, EnergyMonthly.energy_type, func.count(), func.count(EnergyMonthly.grid_id))
+            .where(base)
+            .group_by(EnergyMonthly.use_ym, EnergyMonthly.energy_type)
+        ).all()
+        total = sum(int(row[2]) for row in groups)
+        matched = sum(int(row[3]) for row in groups)
+        energy_type_months = len(groups)
         temporal = _ratio(
             energy_type_months,
             24,

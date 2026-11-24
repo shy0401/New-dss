@@ -9,7 +9,7 @@ Git 저장소에는 **코드와 문서만** 있다. PostgreSQL/PostGIS DB, 원�
 | 항목 | 요구 | 확인 방법 |
 |---|---|---|
 | Windows 10/11 | WSL2 사용 가능 | `wsl --status` |
-| Docker Desktop | Linux 엔진(WSL2). 디스크 여유 25GB 이상 권장 | 트레이 고래 아이콘이 Running |
+| Docker Desktop | Linux 엔진(WSL2). 디스크 여유: 묶음 없이 시작 25 GB 이상, 2026-11-24 묶음(30.3 GB)을 받으면 받는 동안 최대 약 300 GB · 끝난 뒤 약 180 GB(묶음 30 + 원본 86.5 + DB 59 GB, 크기로 어림) | 트레이 고래 아이콘이 Running |
 | Git for Windows | 기본 설정(`core.autocrlf=true`) | `git --version` |
 | 디스크 | Docker 디스크 이미지를 C가 아닌 드라이브에 둘 수 있음(설정 → Resources → Advanced → Disk image location) | `scripts\dss.cmd Doctor`의 `docker_disk_dir` |
 

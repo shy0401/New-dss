@@ -12,6 +12,9 @@ services:
     # 한도를 걸면 캐시만 줄어든다(꺼지지 않음). 작업 중 VM 파일 캐시의 대부분(3.4 GB 중 2.9 GB)이 이 컨테이너 몫.
     # 2 GB는 3 GB와 첫 조회 시간 차이가 측정 오차 안, 1.5 GB부터 큰 지도가 3~5초 느려짐(docs/records/2026-11-24-wsl-dropcache.md)
     mem_limit: 2g
+    # 2026-11-24: SSD 기준 비용(기본 4는 회전 디스크 기준). 4면 인덱스로 될 지역 조회도 표 전체(약 9 GB)를 읽음
+    # (지역 화면 선택지 2.8 → 0.2초). 결과 값은 같고 계획만 바뀜(docs/records/2026-11-24-screen-speed.md)
+    command: ["postgres", "-c", "random_page_cost=1.1"]
     healthcheck:
       test: [CMD-SHELL, pg_isready -U carbon -d carbon]
       interval: 5s

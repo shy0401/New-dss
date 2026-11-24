@@ -105,6 +105,22 @@ def test_scope_keeps_legacy_rows_for_the_original_region_only():
     assert jeonju.owns_sgis("3501151000") and not jeonju.owns_sgis("3101151000")
 
 
+def test_default_region_energy_clause_uses_its_own_codes():
+    """2026-11-24: NOT IN (all other regions) read the whole energy table; the default region now selects its own codes
+    (on the PC both picked the same rows: energy_monthly has no unclaimed legacy code). Without own codes the legacy
+    NOT IN rule stays."""
+    from sqlalchemy import column
+    jeonju = Scope("52110", "전북특별자치도 전주시", "전주시", frozenset({"cell_1_1"}), ("52111", "52113"), ("35011",), None, None, None, "READY", True,
+                   foreign_legal=("41111", "41113"))
+    legacy = Scope("52110", "전북특별자치도 전주시", "전주시", frozenset(), (), (), None, None, None, "READY", True, foreign_legal=("41111",))
+    alone = Scope("52110", "전북특별자치도 전주시", "전주시", frozenset(), (), (), None, None, None, "READY", True)
+    col = column("sigungu_code")
+    sql = lambda clause: str(clause.compile(compile_kwargs={"literal_binds": True}))
+    assert sql(jeonju.legal_clause(col)) == "sigungu_code IN ('52111', '52113')"
+    assert sql(legacy.legal_clause(col)) == "(sigungu_code NOT IN ('41111'))"
+    assert alone.legal_clause(col) is None
+
+
 def test_short_name():
     assert short_name("전북특별자치도 전주시") == "전주시"
     assert short_name("경기도 수원시") == "수원시"

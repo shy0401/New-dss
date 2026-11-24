@@ -417,7 +417,10 @@ def grid_energy_properties(db,year,factors,sc=None):
         key='electricity' if r.energy_type=='ELECTRICITY' else 'gas'
         p[key+'_kwh']=(p[key+'_kwh'] or 0)+r.usage_kwh;p[key+'_months'].add(r.use_ym);p['parcels'].add((r.sigungu_code,r.bjdong_code,r.bun,r.ji))
     from .grid_metrics import validated_complex_areas
-    complexes=list(db.scalars(select(ApartmentComplex)))
+    # 2026-11-24: only the five columns used (22k complexes with their summary/detail JSON took ~1-2 s per map), as in dashboard
+    from sqlalchemy.orm import load_only
+    complexes=list(db.scalars(select(ApartmentComplex).options(load_only(ApartmentComplex.kapt_code,ApartmentComplex.gross_floor_area_m2,
+        ApartmentComplex.households,ApartmentComplex.management_area_m2,ApartmentComplex.name))))
     households={row.kapt_code:row.households for row in complexes}
     areas,_=validated_complex_areas(complexes)
     intensity=grid_energy_intensity([{'grid_id':r.grid_id,'energy_type':r.energy_type,'use_ym':r.use_ym,'usage_kwh':r.usage_kwh,'kapt_code':(r.raw_record or {}).get('kapt_code'),'matched_gross_floor_area_m2':(r.raw_record or {}).get('matched_gross_floor_area_m2')} for r in rows],households,areas)

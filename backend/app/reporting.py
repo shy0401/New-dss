@@ -525,8 +525,21 @@ def reduction_measures():
     from .reduction_measures import catalog
     return catalog()
 
+_ENGINE_STATUS:dict={}
+ENGINE_STATUS_TTL_S=60
+
 @router.get('/engine')
 def engine_status():
+    """The local model's status, kept a minute: with the Ollama container off, the name lookup alone waited ~4 s on every
+    screen that shows it (2026-11-24). A model started or stopped shows within a minute."""
+    import time
+    hit=_ENGINE_STATUS.get('value')
+    if hit and time.monotonic()-hit[0]<ENGINE_STATUS_TTL_S:return hit[1]
+    value=_engine_status()
+    _ENGINE_STATUS['value']=(time.monotonic(),value)
+    return value
+
+def _engine_status():
     common={'provider':'Ollama local container','privacy':'로컬 Docker 네트워크 내부 처리','allowed_tasks':['검증된 근거 ID 선택','한국어 보고서 요약'],'prohibited_tasks':'수치 계산·새로운 사실 생성·법적 판정','setup':'scripts/setup-local-llm.ps1'}
     try:
         base,model=local_config()
