@@ -20,7 +20,7 @@ def test_evidence_table_rows_grades_and_exclusions():
     assert grades["실측_국내"] == 139 and grades["문헌_계산"] == 155 and grades["가정"] == 162
     # 단계 C에서 대조한 59행에는 날짜가 붙은 대조 결과가 있고, 원문에서 찾지 못한 숫자는 빈칸(0 아님)
     checked = [x for x in r if "확인(2026-11-25, " in x["원문_대조"]]
-    assert len(checked) == 59
+    assert len(checked) == 61   # 59(단계 C) + 승강기 회생제동 02-033 · 13-009(단계 F)
     for no in ("06-016", "18-027"):
         x = next(y for y in r if y["번호"] == no)
         assert (x["효과_낮은값_pct"], x["효과_높은값_pct"], x["대표값_pct"]) == ("", "", "")
