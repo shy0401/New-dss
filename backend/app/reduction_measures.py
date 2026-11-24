@@ -208,6 +208,7 @@ def _public(m: dict[str, Any]) -> dict[str, Any]:
 
 def catalog() -> dict[str, Any]:
     """수단 목록 전체(운영 단계 + 시공 단계)와 내재탄소 기준값, 감축 근거표 요약(수단별 행 · 출처 · 등급, 도구 수단에 없는 묶음)."""
+    from .measure_catalog import LEVEL_LABEL, group_status
     from .reference_tables import evidence_summary
     ev = evidence_summary()
 
@@ -217,7 +218,9 @@ def catalog() -> dict[str, Any]:
             "evidence_table": {"rows": ev["rows"], "unlinked_groups": ev["unlinked_groups"], "note": ev["note"]},
             "embodied_basis": {"kg_per_m2": EMBODIED_KG_PER_M2, "range_kg_per_m2": list(EMBODIED_RANGE_KG_PER_M2), "readymix_share_pct": round(EMBODIED_READYMIX_SHARE * 100, 1),
                                "source": {"label": S_EMBODIED[0], "url": S_EMBODIED[1]}},
-            "evidence_labels": EVIDENCE_LABEL, "use_labels": USE_LABEL}
+            "evidence_labels": EVIDENCE_LABEL, "use_labels": USE_LABEL,
+            # 2026-11-25(계획 v3 A): 근거표 묶음 32개의 지금 수준 · 목표 수준 · 근거 상태(measure_catalog)
+            "groups": list(group_status()), "level_labels": LEVEL_LABEL}
 
 
 def measure_table(electricity_kwh: float, gas_kwh: float | None, fe: float, fg: float | None,
@@ -321,6 +324,12 @@ def _no_value_reason(key: str, status: str | None) -> str:
     return NO_VALUE_REASON.get(key, "지표만 있는 수단입니다. 근거표 행의 값을 계획안에 곱하지 않습니다")
 
 
+def _groups_of(key: str) -> list[str]:
+    """도구 수단 하나에 근거로 연결된 근거표 묶음(수단_ID)."""
+    from .measure_catalog import group_status
+    return [g["group"] for g in group_status() if key in g["tool_measures"]]
+
+
 def applicable_measures(targets: list[dict[str, Any]], added_m2: float, district_share_pct: float | None,
                         cooling_reading: str | None) -> list[dict[str, Any]]:
     """Recommendation lines of the area screen ↔ the measures usable under the site's conditions (U4, 2026-11-23, 5.15).
@@ -329,6 +338,7 @@ def applicable_measures(targets: list[dict[str, Any]], added_m2: float, district
     evidence (measures list + evidence table summary), never multiplied into the plan. Existing-building measures go
     to the whole-area target only; district heating control only where the region has district-heated households;
     operation (after move-in behaviour) is folded as outside the planning stage."""
+    from .measure_catalog import measure_level
     from .reference_tables import evidence_summary
     ev = evidence_summary()["by_measure"]
     out: list[dict[str, Any]] = []
@@ -363,5 +373,7 @@ def applicable_measures(targets: list[dict[str, Any]], added_m2: float, district
                         "no_value_reason": None if quantified else _no_value_reason(m["key"], rec.get("onsite_status")),
                         "indicator_text": indicator_text(m), "evidence": m["evidence"], "evidence_label": EVIDENCE_LABEL[m["evidence"]],
                         "n": m.get("n"), "apply": apply, "evidence_table": table,
-                        "group_kind": GROUP_KIND.get(top or "", "계획 수단"), "condition_text": condition})
+                        "group_kind": GROUP_KIND.get(top or "", "계획 수단"), "condition_text": condition,
+                        # 2026-11-25(계획 v3 A): 이 줄의 수준(값 / 지표)과 근거 묶음(근거표 수단_ID). 계산 · 순서는 그대로
+                        "level": measure_level(m["key"], quantified), "evidence_groups": _groups_of(m["key"])})
     return out
