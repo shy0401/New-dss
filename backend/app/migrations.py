@@ -27,6 +27,14 @@ MIGRATIONS: list[tuple[str, list[str]]] = [
     ("2026102701_energy_sigungu_month_index", [
         "CREATE INDEX IF NOT EXISTS ix_energy_monthly_sgg_ym ON energy_monthly (sigungu_code, use_ym)",
     ]),
+    # 2026-11-24: the dashboard's region monthly sums (SUM(usage_kwh) by month and energy type) still read the table
+    # for usage_kwh/energy_type (Suwon 3.8 s, the whole table each time). With them in the index the sums and the
+    # row counts are answered from the index alone (Suwon 0.3 s). About 1.5 GB at 24M rows; built in ~30 s on the PC
+    # (CONCURRENTLY beforehand); a PC without it builds it once at start-up.
+    ("2026112401_energy_sigungu_month_type_index", [
+        "CREATE INDEX IF NOT EXISTS ix_energy_monthly_sgg_ym_type ON energy_monthly (sigungu_code, use_ym, energy_type) "
+        "INCLUDE (usage_kwh, grid_id)",
+    ]),
 ]
 
 

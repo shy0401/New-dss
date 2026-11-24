@@ -478,7 +478,10 @@ class Scope:
 
     def legal_clause(self, column: Any) -> Any:
         """SQL condition on a 5-digit 법정 시·군·구 column (energy_monthly.sigungu_code): None = no filter."""
-        if not self.is_default:
+        if not self.is_default or self.legal_codes:
+            # 2026-11-24: the default region also selects by its own codes when it has them. NOT IN (265 other
+            # regions) cannot use an index and read the whole energy_monthly table (24M rows, ~9 GB) on every
+            # dashboard; checked on the full table that both pick the same 1,721,392 rows (none in one only).
             return column.in_(list(self.legal_codes))
         if self.foreign_legal:
             return column.notin_(list(self.foreign_legal))

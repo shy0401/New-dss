@@ -259,7 +259,8 @@ def dashboard(db,grid_id=None,year=2025,region=None):
     coverage={typ:sum(row[key] is not None for row in monthly) for typ,key in [('electricity_months','electricity_kwh'),('gas_months','gas_kwh')]}
     within=EnergyMonthly.use_ym.between(f'{year}01',f'{year}12')
     if clause is not None:within=within & clause
-    count=db.scalar(select(func.count()).select_from(EnergyMonthly).where(within));matched=db.scalar(select(func.count()).select_from(EnergyMonthly).where(within,EnergyMonthly.grid_id.is_not(None)))
+    # One pass for both: COUNT(grid_id) counts the rows with a grid (same as the former second COUNT ... grid_id IS NOT NULL).
+    count,matched=db.execute(select(func.count(),func.count(EnergyMonthly.grid_id)).select_from(EnergyMonthly).where(within)).one()
     meta=(sector.metadata_json or {}) if sector and selected_grid==sector.grid_id else {}
     area=meta.get('baseline_floor_area_m2') if meta.get('baseline_year')==year else None
     from .grid_metrics import consistent_baseline,grid_energy_intensity

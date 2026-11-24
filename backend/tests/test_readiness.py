@@ -51,6 +51,7 @@ def test_local_engine_status_exposes_safe_operating_role(monkeypatch):
             raise RuntimeError("offline")
 
     monkeypatch.setattr("app.reporting.httpx.Client", FailedClient)
+    monkeypatch.setattr("app.reporting._ENGINE_STATUS", {})  # the status is kept a minute; start without it
     body = TestClient(app).get("/api/reports/engine").json()
     assert body["provider"] == "Ollama local container"
     assert body["privacy"] == "로컬 Docker 네트워크 내부 처리"
