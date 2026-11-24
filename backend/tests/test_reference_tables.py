@@ -16,7 +16,14 @@ def test_evidence_table_rows_grades_and_exclusions():
     assert len(r) == 653   # 2026-11-20 냉방 쪽 보강 35행, 2026-11-24 팀 감축 방안 조사 8행(T-)
     grades = Counter(x["근거_등급"] for x in r)
     assert set(grades) == {"실측_국내", "실측_국외_조건맞음", "문헌_계산", "실측_국외_참고", "가정", "해당_없음"}
-    assert grades["실측_국내"] == 140 and grades["문헌_계산"] == 153   # 2026-11-24 T- 행: 실측_국내 1 · 문헌_계산 7
+    # 2026-11-24 T- 행: 실측_국내 1 · 문헌_계산 7. 2026-11-25 원문 대조(단계 C): 실측_국내 → 문헌_계산 1, 가정 → 문헌_계산 3, 문헌_계산 → 가정 2
+    assert grades["실측_국내"] == 139 and grades["문헌_계산"] == 155 and grades["가정"] == 162
+    # 단계 C에서 대조한 59행에는 날짜가 붙은 대조 결과가 있고, 원문에서 찾지 못한 숫자는 빈칸(0 아님)
+    checked = [x for x in r if "확인(2026-11-25, " in x["원문_대조"]]
+    assert len(checked) == 59
+    for no in ("06-016", "18-027"):
+        x = next(y for y in r if y["번호"] == no)
+        assert (x["효과_낮은값_pct"], x["효과_높은값_pct"], x["대표값_pct"]) == ("", "", "")
     a10 = [x for x in r if x["번호"].startswith("A10-")]
     assert len(a10) == 35 and all(x["쓰임"].startswith("범위 참고") for x in a10)
     assert {x["추천_제외"] for x in r} == {"예", "아니오", "따로 추천 안 함", "해당 없음"}
