@@ -1884,7 +1884,8 @@ def analyze(db: Any, spec: dict[str, Any], from_year: int, to_year: int, event_y
         guide = history.get("region_guide") or {}
         district = next((k.get("household_share_pct") for k in ((guide.get("heating") or {}).get("kinds") or []) if k["kind"] == "지역난방"), None)
         effort_result["measure_links"] = applicable_measures(effort_result["targets"], float(effort_result.get("added_floor_area_m2") or 0),
-                                                             district, ((guide.get("cooling") or {}).get("reading")))
+                                                             district, ((guide.get("cooling") or {}).get("reading")),
+                                                             green_area_m2=(plan or {}).get("green_area_m2"))
         effort_result["measure_links_note"] = ("난방 구성은 지역 전체 공동주택 단지 기준입니다(구역 단지만 본 값이 아님)" if guide.get("heating")
                                                else "지역 난방 구성을 알 수 없어 지역난방 조건은 보지 않았습니다")
         # 2026-11-25(계획 v3 A): 수단을 지역에 맞춰 고를 지역 값을 한곳에(새 값 없음)
@@ -1923,6 +1924,9 @@ class PlanInput(BaseModel):
     floors: float | None = Field(default=None, ge=0)
     building_count: float | None = Field(default=None, ge=0)
     footprint_per_building: float | None = Field(default=None, ge=0)
+    # 2026-11-25(계획 v3 D): 계획 녹지(식재) 면적. 있으면 감축 제안의 녹지 줄이 상쇄 값(합계에는 안 넣음)
+    # 위 한계 10 km²(1,000 ha): 구역 한 곳의 녹지로 넉넉한 값. inf · NaN은 받지 않음(독립 검토 반영)
+    green_area_m2: float | None = Field(default=None, ge=0, le=10_000_000, allow_inf_nan=False)
 
 
 class MeasuresInput(BaseModel):
