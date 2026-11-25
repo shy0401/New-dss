@@ -172,7 +172,7 @@ def test_green_roof_range_is_the_sum_of_the_parts():
 def test_green_roof_outside_central_2_is_empty_with_a_reason(zone):
     e = _est(design_zone=zone)["building_greening"]
     assert e["kgco2eq_range"] is None
-    assert isinstance(e["reason"], str) and "중부2" in e["reason"]   # 근거가 서울 기상 계산뿐
+    assert isinstance(e["reason"], str) and "중부2" in e["reason"]   # 근거가 중부2(인천 기상) 계산뿐
     _check_shape(e)
 
 
