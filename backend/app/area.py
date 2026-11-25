@@ -654,6 +654,14 @@ def onsite_plan(result: dict[str, Any], need_c: float | None, met_status: str = 
                 remaining_offsite_pv_kw=round(rest_kwh / kwh_per_kw, 1), remaining_is_minimum=upper)
 
 
+def latest_hub_year(history: dict[str, Any]) -> dict[str, Any] | None:
+    """구역 건물(건축HUB)의 가장 최근 완전한 해 중 가스 원단위가 있는 해(``building_energy.years``는 해 → 값 사전). 없으면 None."""
+    years = (history.get("building_energy") or {}).get("years") or {}
+    rows = years.values() if isinstance(years, dict) else years
+    return next((y for y in sorted(rows, key=lambda r: r.get("year") or 0, reverse=True)
+                 if y.get("complete") and y.get("gas_kwh_per_m2")), None)
+
+
 def target_bases(result: dict[str, Any]) -> list[dict[str, Any]]:
     """The two target bases side by side (U4, DATA_STANDARD 5.9): the whole area's target and the plan's own increase.
 
@@ -1890,10 +1898,28 @@ def analyze(db: Any, spec: dict[str, Any], from_year: int, to_year: int, event_y
         roof_kw = float(roof["kw"]) if roof else None
         levels = pv_levels((plan or {}).get("households"), kwh_per_kw,
                            float(effort_result["factor_kgco2eq_per_kwh"]), roof_kw, (inputs.get("region") or {}).get("code"), roof_basis)
+        # 2026-11-25(계획 v3 F): 추정 범위 — 구역 건물(건축HUB)의 가장 최근 완전한 해 원단위, 계획 주거 연면적 · 세대 수 · 층수
+        from .emissions import GAS_FACTOR
+        from .measure_catalog import cooling_share
+        from .reference_tables import design_zone
+        from .reduction_measures import estimated_ranges
+        region_code = (inputs.get("region") or {}).get("code")
+        hub = latest_hub_year(history)
+        residential = sum(float(u.get("floor_area_m2") or 0) for u in ((plan or {}).get("uses_new") or []) if u.get("use") == "residential") or None
+        # 옥상녹화 냉방 쪽의 전력 원단위는 감축 노력 기준 원단위(공동주택이면 K-apt) — 냉방 몫이 세대 전기 기준이라(독립 검토 반영)
+        basis_label = {"apartments": "공동주택 K-apt 전력", "buildings": "구역 건물 전체 건축HUB 전력", "kcsm": "구역 건물 전체 탄소공간지도 전력"}
+        estimates = estimated_ranges(residential, (plan or {}).get("households"), (plan or {}).get("floors"),
+                                     (hub or {}).get("gas_kwh_per_m2"), effort_result.get("intensity_kwh_per_m2"), cooling_share(region_code),
+                                     design_zone(region_code), float(effort_result["factor_kgco2eq_per_kwh"]), GAS_FACTOR,
+                                     elec_basis=basis_label.get(effort_result.get("basis") or "", "감축 노력 기준 전력"))
+        if hub:
+            for key in ("envelope", "building_greening"):   # 건축HUB 가스를 쓰는 추정에만
+                estimates[key]["hub_year"] = hub["year"]
+        effort_result["measure_estimates"] = estimates
         district = next((k.get("household_share_pct") for k in ((guide.get("heating") or {}).get("kinds") or []) if k["kind"] == "지역난방"), None)
         effort_result["measure_links"] = applicable_measures(effort_result["targets"], float(effort_result.get("added_floor_area_m2") or 0),
                                                              district, ((guide.get("cooling") or {}).get("reading")),
-                                                             green_area_m2=(plan or {}).get("green_area_m2"), pv_levels=levels)
+                                                             green_area_m2=(plan or {}).get("green_area_m2"), pv_levels=levels, estimates=estimates)
         effort_result["measure_links_note"] = ("난방 구성은 지역 전체 공동주택 단지 기준입니다(구역 단지만 본 값이 아님)" if guide.get("heating")
                                                else "지역 난방 구성을 알 수 없어 지역난방 조건은 보지 않았습니다")
         # 2026-11-25(계획 v3 A): 수단을 지역에 맞춰 고를 지역 값을 한곳에(새 값 없음)
