@@ -226,3 +226,17 @@
 .area-recommended li::before { content: counter(rec); flex: none; align-self: center; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--primary); color: var(--on-primary); font-size: var(--fs-caption); font-weight: 600; }
 .area-recommended li b { font-weight: 600; }
 .area-recommended li .num { margin-left: auto; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* 2026-11-25 계획 v3 H: 감축 제안의 수준 표시 · 태양광 세 수준 · 추정 범위 · 조합 셋 */
+.area-measure-links .status-tag { font-size: 0.75rem; margin-right: 2px; }
+.area-pv-levels, .area-combinations table { border-collapse: collapse; margin: 6px 0; font-size: 0.85rem; width: 100%; }
+.area-pv-levels td, .area-combinations td, .area-combinations th { border-top: 1px solid var(--line, #e5e5ea); padding: 3px 8px; text-align: left; vertical-align: top; }
+.area-pv-levels caption { caption-side: bottom; text-align: left; font-size: 0.8rem; }
+.area-estimate details { display: inline-block; margin-left: 6px; }
+.area-estimate details ul { margin: 4px 0; padding-left: 18px; }
+.area-combinations { margin-top: 12px; }
+.area-combinations h4 { margin: 4px 0; }
+@media (max-width: 640px) { .area-pv-levels, .area-combinations table { font-size: 0.8rem; } }
+.area-measure-links .status-tag.neutral { background: var(--surface-muted, transparent); border: 1px solid var(--line); }
+.area-pv-levels th, .area-combinations th { font-weight: 600; text-align: left; padding: 3px 8px; border-top: 1px solid var(--line); }
+.area-estimate { display: block; }

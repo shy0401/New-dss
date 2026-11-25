@@ -9,7 +9,7 @@
  */
 import { ListChecks, Sun } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { BASELINE_MODE_LABEL, benchmarkPosition, EFFORT_BASIS_LABEL, NO_MEASURES, toTonnes, type AreaAnalysis, type Benchmark, type EffortResult, type EffortTarget, type MeasureLink, type MeasuresState, type OnsitePlan } from '../../lib/area';
+import { BASELINE_MODE_LABEL, benchmarkPosition, EFFORT_BASIS_LABEL, NO_MEASURES, toTonnes, type AreaAnalysis, type Benchmark, type EffortResult, type AfterRange, type Combination, type EffortTarget, type MeasureEstimate, type MeasureLink, type MeasuresState, type OnsitePlan, type PvLevels } from '../../lib/area';
 import { formatMetric } from '../../lib/format';
 import { Note } from '../Fold';
 
@@ -83,6 +83,51 @@ export function onsiteText(r: OnsitePlan | undefined, need: number | null): stri
   }
 }
 
+/** 줄의 수준 표시(계획 v3): 값 · 추정 범위 · 지표 · 상쇄. 색만이 아니라 글자로. */
+const LEVEL_TAG: Record<string, [string, string]> = { VALUE: ['값', 'good'], RANGE: ['추정 범위', 'warn'], INDICATOR: ['지표', 'neutral'], OFFSET: ['상쇄', 'neutral'] };
+const tRange = (r: [number | null, number | null] | null | undefined, unit = 't') => {
+  if (!r) return '—';
+  const [a, b] = r.map((v) => (v === null ? '메움' : formatMetric(toTonnes(v), '', 1, true)));
+  return a === b ? `${a} ${unit}` : `${a}~${b} ${unit}`;   // 반올림해 같으면 한 번만
+};
+
+/** 추정 범위 한 줄: 결과 범위(추정) + 펼치면 근거 · 계산 · 조건. */
+export function EstimateLine({ e }: { e: MeasureEstimate }) {
+  const r = e.kgco2eq_range ?? e.kgco2_range ?? null;
+  if (!r) return <small className="muted"> — 추정 없음: {e.reason}</small>;
+  return <div className="area-estimate"><span className="num">{tRange(r, e.kgco2eq_range ? 'tCO2eq' : 'tCO2')}/년 (추정)</span>
+    <details><summary>근거와 계산</summary><ul>{e.chain.map((c, i) => <li key={i}>{c}</li>)}</ul><small>근거: {e.basis}</small>{e.condition && <><br /><small className="muted">조건: {e.condition}</small></>}</details></div>;
+}
+
+/** 지붕 태양광 세 수준(계획 v3 E): 지붕 최대(값) · 인증 · 실제 사례(추정). 셋은 더하지 않는다. */
+export function PvLevelsTable({ value, lv }: { value: number | null; lv: PvLevels }) {
+  const kw = (r: [number, number] | null) => !r ? '—' : r[0] === r[1] ? formatMetric(r[0], 'kW') : `${formatMetric(r[0], 'kW')}~${formatMetric(r[1], 'kW')}`;
+  const row = (name: string, l: PvLevels['certified']) => <tr key={name}><th scope="row">{name}</th>
+    <td className="num">{kw(l.kw_range)}</td>
+    <td className="num">{l.kgco2eq_range ? `${tRange(l.kgco2eq_range, 'tCO2eq')}/년 (추정)` : '—'}</td>
+    <td className="muted">추정 · {l.source_type}{l.capped ? ' · 지붕에서 자름' : ''}{l.reason ? ` · ${l.reason}` : ''}</td></tr>;
+  return <table className="area-pv-levels" data-testid="area-pv-levels"><caption className="muted">세 수준은 더하지 않아요. 목표 · 추천 방안은 지붕 최대(값)로 계산하고, 인증 · 사례 수준은 추정이에요.{lv.region_rule ? ` ${lv.region_rule}` : ''}</caption>
+    <thead><tr><th scope="col">수준</th><th scope="col">용량</th><th scope="col">연 감축</th><th scope="col">종류 · 출처</th></tr></thead><tbody>
+    <tr><th scope="row">지붕 최대(지금 값)</th><td className="num">—</td><td className="num">{value !== null ? `${t1(value)}/년` : '—'}</td><td className="muted">값 · 계획 지붕 한도까지</td></tr>
+    {row('인증 수준', lv.certified)}{row('실제 사례 수준', lv.cases)}
+  </tbody></table>;
+}
+
+function LinkItem({ l }: { l: MeasureLink }) {
+  const lvl = l.value_status === 'OFFSET' ? 'OFFSET' : (l.level ?? (l.value_status === 'QUANTIFIED' ? 'VALUE' : 'INDICATOR'));
+  const [label, tone] = LEVEL_TAG[lvl] ?? LEVEL_TAG.INDICATOR;
+  const why = (l.why ?? []).filter((w) => w !== '지역 값을 알 수 없어 기본 순서');
+  const hasEstimate = !!(l.estimate && (l.estimate.kgco2eq_range || l.estimate.kgco2_range));
+  return <li><span className={`status-tag ${tone}`}>{label}</span> <b>{l.title}</b> · {l.evidence_label}{l.n ? ` (${l.n})` : ''} · {l.group_kind}
+    {l.value_status === 'QUANTIFIED' && !l.pv_levels ? <span className="num"> {t1(l.value_kgco2eq)}/년</span> : null}
+    {l.pv_levels ? <PvLevelsTable value={l.value_kgco2eq} lv={l.pv_levels} /> : null}
+    {l.value_status === 'OFFSET' ? <><span className="num"> {formatMetric(toTonnes(l.offset_kgco2 ?? null), 'tCO2', 1, true)}/년 흡수{l.offset_range_kgco2 ? ` (범위 ${tRange(l.offset_range_kgco2, 'tCO2')})` : ''}</span><small className="muted"><br />{l.offset_text}</small></> : null}
+    {hasEstimate && l.estimate ? <> <EstimateLine e={l.estimate} /></> : null}
+    {l.value_status === 'INDICATOR_ONLY' && !hasEstimate ? <small className="muted"> — 지표: {l.indicator_text}. {l.no_value_reason}</small> : null}
+    {l.condition_text && <small className="muted"><br />{l.condition_text}</small>}
+    {why.length > 0 && !(l.condition_text ?? '').includes('이 지역:') ? <small className="muted area-why"><br />이 지역: {why.join(' · ')}</small> : null}</li>;
+}
+
 function TargetRow({ t, links }: { t: EffortTarget; links: MeasureLink[] }) {
   const r = t.recommended;
   const mine = links.filter((l) => l.target === t.key);
@@ -92,10 +137,8 @@ function TargetRow({ t, links }: { t: EffortTarget; links: MeasureLink[] }) {
     <p className="muted">{t.key === 'plan_added' ? '이 계획으로 늘어나는 전력 운영탄소(연간)' : `필요 감축량(연간) = 늘어나는 양 + 기존 건물 몫 ${t1(t.existing_share_kgco2eq)}`}</p>
     {r && <p className={`area-headline ${r.onsite_status === 'MET' ? 'good' : 'warn'}`} data-testid={`area-target-${t.key}-onsite`}>{onsiteText(r, t.required_reduction_kgco2eq)}</p>}
     {r?.capped && r.roof_limit_m2 !== null && <p className="muted">태양광은 계획 지붕 한도({r.roof_limit_basis_label} {formatMetric(r.plan_roof_m2, 'm²')}의 60% = {formatMetric(r.roof_limit_m2, 'm²')}, {formatMetric(r.roof_limit_kw, 'kW', 1)})까지만 셉니다. 필요 용량은 {formatMetric(r.pv_needed_kw, 'kW')}입니다.</p>}
-    {mine.length > 0 && <details className="area-measure-links"><summary>이 기준에서 쓸 수 있는 수단 {mine.length}개 (값은 태양광 줄만)</summary>
-      <ul>{mine.map((l) => <li key={`${l.key}-${l.attach_to.join()}`}><b>{l.title}</b> · {l.evidence_label}{l.n ? ` (${l.n})` : ''} · {l.group_kind}
-        {l.value_status === 'QUANTIFIED' ? <span className="num">{t1(l.value_kgco2eq)}/년</span> : <small className="muted"> — 지표만: {l.indicator_text}. {l.no_value_reason}</small>}
-        {l.condition_text && <small className="muted"><br />{l.condition_text}</small>}</li>)}</ul>
+    {mine.length > 0 && <details className="area-measure-links"><summary>이 기준에서 쓸 수 있는 수단 {mine.length}개 (값 · 추정 범위 · 지표 · 상쇄를 따로, 서로 더하지 않음)</summary>
+      <ul>{mine.map((l) => <LinkItem key={`${l.key}-${l.attach_to.join()}`} l={l} />)}</ul>
     </details>}
   </div>;
 }
@@ -109,7 +152,42 @@ export function TargetBases({ effort }: { effort: EffortResult | null }) {
   return <div className="area-target-bases" data-testid="area-target-bases">
     <h4>목표 기준 둘 (나란히 · 서로 더하지 않음)</h4>
     {sorted.map((t) => <TargetRow key={t.key} t={t} links={effort.measure_links ?? []} />)}
+    <Combinations effort={effort} />
     <small className="muted">두 기준 모두 같은 기준 건물 · 기준 연도({effort.baseline_year}년) · 전력 계수의 시나리오 값입니다. 전력 운영탄소만(가스 · 열 제외).{effort.measure_links_note ? ` ${effort.measure_links_note}.` : ''}</small>
+  </div>;
+}
+
+const afterText = (a: Combination['after_pv'] | AfterRange | null, atLeast = false) => {
+  if (!a) return '—';
+  const pre = atLeast ? '적어도 ' : '';
+  if ('kgco2eq_range' in a) {
+    const margin = a.margin_kgco2eq_range ? `, 여유 ${tRange(a.margin_kgco2eq_range.map((v) => v ?? null) as [number | null, number | null])}`.replace(/메움/g, '0') : '';
+    return a.covered === 'all' ? `모두 메움(추정${margin})` : `${pre}${tRange(a.kgco2eq_range)}${a.covered === 'possible' ? ` (낮은 쪽은 메움${margin})` : ''} (추정)`;
+  }
+  if (a.covered) return a.margin_kgco2eq != null ? `메움(여유 ${t1(a.margin_kgco2eq)} — ${a.margin_note ?? '필요 용량을 10 kW 단위로 올린 몫'})` : '메움';
+  return `${a.at_least ? '적어도 ' : ''}${t1(a.kgco2eq)}`;
+};
+
+/** 조합 셋 A · B · C(계획 v3 I): 태양광 수준별로 남는 양. 값과 추정을 한 칸에 더하지 않고, 가스 · CO2 추정은 나란히. */
+export function Combinations({ effort }: { effort: EffortResult | null }) {
+  const cs = effort?.combinations;
+  if (!cs || cs.length === 0) return effort?.combinations_reason ? <p className="muted">{effort.combinations_reason}</p> : null;
+  const name: Record<string, string> = { roof_max: 'A 지붕 최대', certified: 'B 인증 수준', cases: 'C 실제 사례 수준' };
+  const pvText = (c: Combination) => c.pv.kgco2eq != null ? t1(c.pv.kgco2eq) : c.pv.kgco2eq_range ? `${tRange(c.pv.kgco2eq_range)} (추정)` : (c.pv.reason ?? '—');
+  const first = cs[0];
+  const green = effort?.measure_estimates?.building_greening;
+  const atLeast = (c: Combination) => !!(c.after_pv && 'at_least' in c.after_pv && c.after_pv.at_least);
+  const side = [...first.gas_estimates.map((g) => ({ ...g, text: tRange(g.kgco2eq_range ?? null, 'tCO2eq') })),
+    ...first.co2_estimates.map((g) => ({ ...g, text: tRange(g.kgco2_range ?? null, 'tCO2') }))];
+  return <div className="area-combinations" data-testid="area-combinations">
+    <h4>조합 셋 — 개발 증가분 {t1(first.need_kgco2eq)}/년을 무엇으로 얼마나 (전력 운영탄소, tCO2eq)</h4>
+    <table><thead><tr><th scope="col">조합</th><th scope="col">태양광</th><th scope="col">태양광 뒤 남는 양</th><th scope="col">옥상녹화 냉방까지(추정)</th></tr></thead>
+      <tbody>{cs.map((c) => <tr key={c.key}><th scope="row">{name[c.pv_level]}</th><td className="num">{pvText(c)}</td><td className="num">{afterText(c.after_pv)}</td>
+        <td className="num">{c.after_estimates ? afterText(c.after_estimates, atLeast(c)) : '—'}</td></tr>)}</tbody></table>
+    {green && <div className="muted" data-testid="area-combinations-green">옥상녹화(최상층): {green.kgco2eq_range ? <EstimateLine e={green} /> : `계산하지 않음 — ${green.reason ?? ''}`}</div>}
+    {side.length > 0 && <div className="muted">전력 목표 밖에서 더 줄일 수 있는 양(추정, 빼지 않고 나란히):
+      <ul>{side.map((g) => <li key={g.key}>{g.title} {g.text}{g.condition ? <small> — 조건: {g.condition}</small> : null}</li>)}</ul></div>}
+    {first.indicators.length > 0 && <p className="muted">이 지역에서 먼저 볼 지표: {first.indicators.map((i) => `${i.title}${i.why.length ? `(${i.why.join(', ')})` : ''}`).join(' · ')}</p>}
   </div>;
 }
 

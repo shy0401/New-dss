@@ -366,6 +366,56 @@ export interface EffortResult {
   /** 추천 줄 ↔ 그 조건에서 쓸 수 있는 수단 · 근거(U4). 값은 태양광 줄만. */
   measure_links?: MeasureLink[];
   measure_links_note?: string;
+  /** 추정 범위 세 가지(계획 v3 F, ESTIMATED). 값 · 목표에 더하지 않음. */
+  measure_estimates?: Record<string, MeasureEstimate>;
+  /** 조합 셋 A · B · C(계획 v3 I). 값(SCENARIO)과 추정(ESTIMATED)을 다른 칸에. */
+  combinations?: Combination[] | null;
+  combinations_reason?: string;
+}
+
+/** 추정 범위 한 줄(계획 v3 F). 범위가 없으면 reason. 승강기는 CO2라 kgco2_range. */
+export interface MeasureEstimate {
+  data_class: 'ESTIMATED';
+  kgco2eq_range: [number, number] | null;
+  kgco2_range?: [number, number] | null;
+  chain: string[];
+  basis: string;
+  condition: string | null;
+  reason: string | null;
+  scope?: string;
+  parts?: { cooling: [number, number] | null; heating: [number, number] | null };
+}
+
+/** 지붕 태양광 수준 하나(계획 v3 E). 추정 범위, 지붕 한도로 자름. */
+export interface PvLevel {
+  data_class: 'ESTIMATED';
+  source_type: string;
+  basis: string;
+  kw_range: [number, number] | null;
+  kgco2eq_range: [number, number] | null;
+  capped: boolean;
+  reason: string | null;
+}
+
+export interface PvLevels { certified: PvLevel; cases: PvLevel; region_rule: string | null; households: number | null }
+
+/** 남는 양 범위: 끝이 0 이하면 null과 '메움'(covered). */
+export interface AfterRange { data_class: 'ESTIMATED'; kgco2eq_range: [number | null, number | null]; covered: 'all' | 'possible' | 'no'; margin_kgco2eq_range: [number | null, number | null] | null }
+
+export interface CombinationItem { key: string; title: string; kgco2eq_range?: [number, number]; kgco2_range?: [number, number]; condition?: string | null; basis?: string; data_class?: string; scope?: string }
+
+/** 조합 하나(계획 v3 I). A는 추천 방안 판정 그대로, B · C는 추정. */
+export interface Combination {
+  key: 'A' | 'B' | 'C';
+  pv_level: 'roof_max' | 'certified' | 'cases';
+  need_kgco2eq: number;
+  pv: { data_class: string; kgco2eq?: number | null; kgco2eq_range?: [number, number] | null; reason?: string; source_type?: string };
+  after_pv: ({ data_class: 'SCENARIO'; kgco2eq: number | null; covered: boolean; margin_kgco2eq?: number | null; margin_note?: string; at_least?: boolean }) | AfterRange | null;
+  after_estimates: AfterRange | null;
+  electricity_estimates: CombinationItem[];
+  gas_estimates: CombinationItem[];
+  co2_estimates: CombinationItem[];
+  indicators: { key: string; title: string; why: string[] }[];
 }
 
 export type OnsiteStatus = 'MET' | 'PARTIAL' | 'UPPER_BOUND_ONLY' | 'NO_YIELD' | 'NO_INCREASE' | 'NO_ROOF' | 'ALREADY_MET';
@@ -396,7 +446,7 @@ export interface MeasureLink {
   key: string;
   title: string;
   attach_to: string[];
-  value_status: 'QUANTIFIED' | 'INDICATOR_ONLY';
+  value_status: 'QUANTIFIED' | 'INDICATOR_ONLY' | 'OFFSET';
   value_kgco2eq: number | null;
   no_value_reason: string | null;
   indicator_text: string;
@@ -404,6 +454,16 @@ export interface MeasureLink {
   n: string | null;
   group_kind: string;
   condition_text: string | null;
+  /** 줄의 수준(계획 v3): VALUE 값 · RANGE 추정 범위 · INDICATOR 지표. */
+  level?: 'VALUE' | 'RANGE' | 'INDICATOR';
+  /** 지역 순서의 이유(계획 v3 B). */
+  why?: string[];
+  pv_levels?: PvLevels;
+  estimate?: MeasureEstimate;
+  /** 녹지 상쇄(계획 v3 D, kgCO2 — 감축 kgCO2eq와 따로). */
+  offset_kgco2?: number;
+  offset_range_kgco2?: [number, number];
+  offset_text?: string;
 }
 
 /** 목표 기준 하나(U4). 숫자가 없으면 null(0이 아님). */
@@ -509,6 +569,8 @@ export interface PlanState {
   floors: number;
   building_count: number;
   footprint_per_building: number;
+  /** 계획 녹지(식재) 면적 m²(계획 v3 D, 선택). 0이면 보내지 않음. */
+  green_area_m2?: number;
   /** 변화 모델의 '몇 년 뒤'(1~10). */
   years_after: number;
 }
@@ -583,6 +645,7 @@ export function planBody(plan: PlanState): Record<string, number> {
   if (removed > 0) body.removed_floor_area_m2 = removed;
   if (plan.floors >= 1) body.floors = plan.floors;
   if (plan.building_count > 0 && plan.footprint_per_building > 0) { body.building_count = plan.building_count; body.footprint_per_building = plan.footprint_per_building; }
+  if ((plan.green_area_m2 ?? 0) > 0) body.green_area_m2 = plan.green_area_m2 as number;
   return body;
 }
 
