@@ -41,7 +41,7 @@ GROUP_LEVELS: dict[str, tuple[str, str, str, str]] = {
     "bems_metering": ("INDICATOR", "INDICATOR", "B", "세대 표시장치(도구 수단 home_energy_display)"),
     "boiler_heating_control": ("INDICATOR", "INDICATOR", "F", "2026-11-25 F: 신축은 콘덴싱 보일러가 이미 의무(대기관리권역)라 추가 감축 범위로 내지 않음, 기존 교체는 보일러 연식 자료 없음"),
     "operation": ("INDICATOR", "INDICATOR", "B", "입주 뒤 행동이라 계획 단계 밖(2026-11-20)"),
-    "layout_form": ("TABLE_ONLY", "RANGE", "G", "원문 대조(C) · 우리 자료 판정(관문 G4) 뒤 3D 구조 범위"),
+    "layout_form": ("TABLE_ONLY", "INDICATOR", "G", "2026-11-25 G: 우리 자료(K-apt 1,314단지)로 형태 · 향 · 녹지율 차이를 같은 조건 안에서 확인 못 함(관문 G4 통과 없음) → 지표"),
     "cool_roof": ("TABLE_ONLY", "INDICATOR", "F", "2026-11-25 F: 국내 공동주택 % 행 1개뿐(분모 · 비교 방식 확인 필요)이라 범위로 올리지 않음"),
     "building_greening": ("RANGE", "RANGE", "F", "2026-11-25 F: 옥상녹화 최상층 냉방 2.35~3.97% · 난방 6.81~9.42%(서울 기상 계산 1편) — 중부2만, 층수가 있을 때"),
     "facade_pv": ("TABLE_ONLY", "RANGE", "F", "3D 입면 면적 × 입면 1 m²당 연 발전량"),
