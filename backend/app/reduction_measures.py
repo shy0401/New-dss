@@ -330,17 +330,263 @@ def _groups_of(key: str) -> list[str]:
     return [g["group"] for g in group_status() if key in g["tool_measures"]]
 
 
+def greenery_offset(green_area_m2: float | None) -> dict[str, Any] | None:
+    """계획 녹지 면적의 연 흡수(상쇄) — 3D 계획안 검토와 같은 상수 · 범위(``reduction_plan``). 면적이 없거나 0이면 None.
+
+    줄이는 것이 아니라 메우는 값이라 목표 · 추천 방안 · 다른 수단의 합계에 넣지 않는다(기록 2026-11-25-greenery-area-input.md)."""
+    if not green_area_m2 or not green_area_m2 > 0:   # None · 0 · NaN
+        return None
+    from .reduction_plan import GREEN_UPTAKE_KG_PER_M2, GREEN_UPTAKE_RANGE_T_PER_HA
+    kg = round(green_area_m2 * GREEN_UPTAKE_KG_PER_M2, 1)
+    if kg <= 0:   # 반올림해 0이 되는 아주 작은 면적은 값이 아님(0을 지어내지 않음)
+        return None
+    return {"area_m2": round(green_area_m2, 1), "kgco2": kg,
+            "range_kgco2": [round(green_area_m2 * t / 10, 1) for t in GREEN_UPTAKE_RANGE_T_PER_HA],
+            "text": (f"녹지 {green_area_m2:,.0f} m² × 연 {GREEN_UPTAKE_KG_PER_M2:.1f} kgCO2/m² = {kg / 1000:,.1f} tCO2 흡수 — "
+                     "상쇄(줄이는 것이 아니라 메움). 목표 · 추천 방안 · 다른 수단 합계에 넣지 않음")}
+
+
+# 2026-11-25(계획 v3 E): 지붕 태양광의 인증 · 실제 사례 수준(세대당 kW). 기록 2026-11-25-pv-three-levels.md
+PV_KW_PER_HOUSEHOLD_CERTIFIED = (0.20, 0.61)   # 공식 자료: ZEB 인증사례집 2024(옥상 · 5등급 · 190세대 이상 0.20~0.59, 계산), LH 인천검단 0.383, LH 5등급 수준 약 0.61(계산)
+PV_KW_PER_HOUSEHOLD_CASES = (0.13, 0.64)       # 기사: 올림픽파크포레온 1,536 kW ÷ 12,032세대 = 0.128, 힐스테이트 검단 웰카운티 옥상 981 kW ÷ 1,535 = 0.639
+PV_LEVEL_BASIS = {
+    "certified": ("공식 자료", "신축 ZEB 인증 공동주택의 세대당 태양광 0.20~0.61 kW(한국부동산원 ZEB 인증사례집 2024 주거 사례 계산, LH 인천검단 AA10-2 0.383 kW)"),
+    "cases": ("기사", "실제 신축 단지 보도의 세대당 태양광 0.13~0.64 kW(올림픽파크포레온 0.128 — 옥상만인지 확인 필요, 힐스테이트 검단 웰카운티 옥상 0.639, 공식 자료로 교차 확인 안 됨)"),
+}
+PV_REGION_RULE = {
+    "11": "서울: 녹색건축물 설계기준(서울특별시고시 제2023-555호, 2024-01-01 시행) 민간 주거 신재생 의무 2024년 9.5~10.5%(세대 규모별), 해마다 +0.5%p(2026년 10.5~11.5%) — 지표 문장, 값에 쓰지 않음",
+    "50": "제주: 녹색건축물 설계기준(제주특별자치도 고시 제2025-160호, 2025-07-01 게재) 민간 공동주택 신재생 의무 8~12%(세대 규모 · 연도별, 2025~2027) — 지표 문장, 값에 쓰지 않음",
+}
+PV_UPPER_BOUND_NOTE = "지붕을 연면적(위 한계)으로만 알아 이 용량이 지붕에 들어가는지 모름 — 층수나 동별 건축면적을 넣으면 발전량 · 감축량을 계산"
+
+
+def pv_levels(households: float | None, kwh_per_kw: float | None, factor_kgco2eq_per_kwh: float,
+              roof_limit_kw: float | None, region_code: str | None, roof_basis: str | None = None) -> dict[str, Any]:
+    """지붕 태양광의 인증 · 실제 사례 수준(추정 범위): 세대 수 × 세대당 kW → 지역 발전량 → 전력 계수. 지붕 한도로 자름.
+
+    지붕 최대(지금 값)와 더하지 않고, 목표 · 추천 방안 계산에 쓰지 않는다. 세대 수가 없으면 값 없이 이유만.
+    지붕이 연면적 위 한계(``floor_area_upper_bound``)뿐이면 kW 범위만 내고 발전량 · 감축량은 비운다(지붕 최대 줄과 같은 판단)."""
+    upper = roof_basis == "floor_area_upper_bound"
+    out: dict[str, Any] = {"households": households if households and households > 0 else None, "kwh_per_kw": kwh_per_kw,
+                           "roof_limit_kw": roof_limit_kw, "roof_limit_basis": roof_basis}
+    for level, rng in (("certified", PV_KW_PER_HOUSEHOLD_CERTIFIED), ("cases", PV_KW_PER_HOUSEHOLD_CASES)):
+        source_type, basis = PV_LEVEL_BASIS[level]
+        row: dict[str, Any] = {"data_class": "ESTIMATED", "source_type": source_type, "basis": basis, "kw_per_household": list(rng),
+                               "kw_range": None, "kwh_range": None, "kgco2eq_range": None, "capped": False, "reason": None}
+        if not households or households <= 0:
+            row["reason"] = "세대 수가 없어 계산하지 않음(계획 평가의 주거 용도 줄에 세대 수를 넣으면 계산)"
+        elif roof_limit_kw is not None and roof_limit_kw <= 0:
+            row["reason"] = "계획에 새 지붕이 없어(지붕 한도 0) 계산하지 않음"
+        else:
+            raw = [households * k for k in rng]
+            cap = None if upper else roof_limit_kw
+            fitted = [min(v, cap) if cap is not None else v for v in raw]
+            row.update(kw_range=[round(v, 1) for v in fitted], capped=cap is not None and raw[1] > cap)
+            if upper:
+                row["reason"] = PV_UPPER_BOUND_NOTE
+            elif kwh_per_kw:
+                kwh = [v * kwh_per_kw for v in fitted]
+                row.update(kwh_range=[round(v, 1) for v in kwh], kgco2eq_range=[round(v * factor_kgco2eq_per_kwh, 1) for v in kwh])
+        out[level] = row
+    out["region_rule"] = PV_REGION_RULE.get(str(region_code or "")[:2])
+    return out
+
+
+# 2026-11-25(계획 v3 F): 추정 범위(L2). 값 · 목표 · 추천 방안에는 곱하지 않고, 원문 대조된 구간만 따로 낸다
+# (기록 2026-11-25-estimated-ranges.md). 추정 한 줄 = 근거 · 곱한 양과 출처 · 결과 범위 · '추정' · 성립 조건
+ELEVATOR_HOUSEHOLDS_PER_UNIT = (21.2, 57.0)   # K-apt 2015년 이후 준공 5,763단지의 승강기 1대당 세대 수 10~90% 구간(중앙 36.6, 이 도구 계산 2026-11-25)
+ELEVATOR_T_PER_UNIT = (0.39, 0.57)            # 승강기 회생제동 대당 연 tCO2: 서울시 전망 계수 0.39 · 배출권 승인 168 t ÷ 117대 ÷ 2.5년 = 0.57(계산)
+GREEN_ROOF_COOLING = (0.0235, 0.0397)         # 옥상녹화 최상층 냉방 −2.35~−3.97%(김지현 외 2016 표 7, 서울 강남 공공임대 최상층 DesignBuilder 계산, 원문 kWh로 다시 나눔)
+GREEN_ROOF_HEATING = (0.0681, 0.0942)         # 같은 원문 최상층 난방 −6.81~−9.42%
+ESTIMATE_BASIS = {
+    "envelope": "이 도구 실측: K-apt 개별난방 단지 117쌍 짝 비교(같은 시군구 · 세대수 구간, 준공 시기만 다름), 관리비 부과 면적당 가스 −13.7%(−9.8~−17.3%)",
+    "elevator_regeneration": "승강기 대수: K-apt 2015년 이후 준공 5,763단지의 승강기 1대당 21.2~57세대(10~90% 구간, 이 도구 계산) · 대당 연 0.39~0.57 tCO2(서울시 2022-07-05: 전망 표 '1대당 0.39톤/년', 배출권 인증 168 t ÷ 117대 ÷ 2.5년 = 0.57, 계산 · 원문 대조 2026-11-25)",
+    "building_greening": "김지현 외 2016(토지주택연구): 서울 강남 공공임대 최상층(2014 준공) DesignBuilder 계산, 옥상녹화로 냉방 −2.35~−3.97% · 난방 −6.81~−9.42%(원문 kWh로 다시 나눔). 연구 1편 · 시뮬레이션(인천 기상 자료)",
+}
+
+
+def _range(base: float, rng: tuple[float, float]) -> list[float]:
+    return [round(base * rng[0], 1), round(base * rng[1], 1)]
+
+
+def estimated_ranges(residential_m2: float | None, households: float | None, floors: float | None,
+                     gas_kwh_per_m2: float | None, elec_kwh_per_m2: float | None, cooling_share: float | None,
+                     design_zone: str | None, fe: float | None, fg: float | None, elec_basis: str = "공동주택 K-apt 전력") -> dict[str, Any]:
+    """감축 제안의 추정 범위(kgCO2eq/년) 세 가지: 단열·창호(가스) · 승강기 회생제동 · 옥상녹화(중부2만).
+
+    ``data_class`` ESTIMATED. 어떤 합계에도 넣지 않는다. 곱할 양이 없으면 값 없이 이유(0을 만들지 않음)."""
+    def row(key: str, rng: list[float] | None, chain: list[str], reason: str | None, condition: str | None = None, **extra: Any) -> dict[str, Any]:
+        has = bool(rng or extra.get("kgco2_range"))
+        return {"data_class": "ESTIMATED", "kgco2eq_range": rng, "chain": chain if has else [], "basis": ESTIMATE_BASIS[key],
+                "condition": condition, "reason": None if has else reason, **extra}
+
+    out: dict[str, Any] = {}
+    # 단열·창호(가스)
+    if residential_m2 and gas_kwh_per_m2 and fg:
+        g = residential_m2 * gas_kwh_per_m2 * fg
+        lo, hi = next(m for m in MEASURES if m["key"] == "envelope")["range"]
+        out["envelope"] = row("envelope", _range(g, (lo, hi)), [
+            f"신축 주거 연면적 {residential_m2:,.0f} m²", f"× 구역 가스 원단위 {gas_kwh_per_m2:,.1f} kWh/m²·년(건축HUB, 건물 전체)",
+            f"× 도시가스 계수 {fg} kgCO2eq/kWh = 가스 탄소 {g / 1000:,.1f} t", f"× {lo * 100:g}~{hi * 100:g}%"], None,
+            "근거는 개별난방(가스) 단지 비교 — 지역난방 단지에는 맞지 않음. 원단위는 구역 건물 전체(주거 외 포함)의 연면적당 값: "
+            "가스 계량이 없는 필지 면적도 들어가 낮게 잡히는 쪽, 새 단지는 연면적 대비 부과 면적이 작아(0.547 vs 0.698) 높게 잡히는 쪽이 함께 있음. "
+            "2025-06-30 이후 승인 신축은 법정 에너지 기준을 이미 지켜야 해 이 몫의 일부는 추가 감축이 아님", scope="gas")
+    else:
+        out["envelope"] = row("envelope", None, [], "신축 주거 연면적 · 구역 가스 원단위 · 가스 계수 중 없는 것이 있어 계산하지 않음", scope="gas")
+    # 승강기 회생제동
+    if households and households > 0:
+        units = (households / ELEVATOR_HOUSEHOLDS_PER_UNIT[1], households / ELEVATOR_HOUSEHOLDS_PER_UNIT[0])
+        co2 = [round(units[0] * ELEVATOR_T_PER_UNIT[0] * 1000, 1), round(units[1] * ELEVATOR_T_PER_UNIT[1] * 1000, 1)]
+        # 원 값이 tCO2(서울시 인증 실적 · 전망 계수, 쓴 전력 계수 확인 필요)라 CO2eq 칸(kgco2eq_range)에 넣지 않고 kgco2_range에 따로
+        out["elevator_regeneration"] = row("elevator_regeneration", None, [
+            f"세대 수 {households:,.0f} ÷ 승강기 1대당 {ELEVATOR_HOUSEHOLDS_PER_UNIT[1]:g}~{ELEVATOR_HOUSEHOLDS_PER_UNIT[0]:g}세대 = {units[0]:,.1f}~{units[1]:,.1f}대",
+            f"× 대당 연 {ELEVATOR_T_PER_UNIT[0]}~{ELEVATOR_T_PER_UNIT[1]} tCO2(양 끝끼리 곱해 두 구간보다 넓음)"], None,
+            "기존 승강기에 덧붙인 서울 공동주택 실적. 신축 승강기의 기본 사양인지 확인 필요(이미 달려 있으면 추가 감축 아님). 값은 CO2(CO2eq 아님)",
+            kgco2_range=co2, scope="electricity")
+    else:
+        out["elevator_regeneration"] = row("elevator_regeneration", None, [], "세대 수가 없어 승강기 대수를 알 수 없음(계획 평가의 주거 용도 줄에 세대 수)",
+                                           kgco2_range=None, scope="electricity")
+    # 옥상녹화(중부2만, 최상층 몫)
+    parts: dict[str, list[float] | None] = {"cooling": None, "heating": None}
+    if design_zone is None:
+        out["building_greening"] = row("building_greening", None, [], "설계 지역 구분을 몰라 계산하지 않음(근거가 중부2 기상 계산뿐)", parts=parts, scope="electricity+gas")
+    elif design_zone != "중부2":
+        out["building_greening"] = row("building_greening", None, [], f"근거가 중부2(인천 기상) 계산뿐이라 이 지역({design_zone})에는 쓰지 않음", parts=parts, scope="electricity+gas")
+    elif not floors or floors <= 0:
+        out["building_greening"] = row("building_greening", None, [], "층수가 없어 최상층 몫을 알 수 없음", parts=parts, scope="electricity+gas")
+    else:
+        chain: list[str] = [f"최상층 몫 = 1 ÷ {floors:g}층(아래층 효과 0, 작은 쪽)"]
+        if residential_m2 and elec_kwh_per_m2 and cooling_share and fe:
+            base = residential_m2 * elec_kwh_per_m2 * cooling_share / floors * fe
+            parts["cooling"] = _range(base, GREEN_ROOF_COOLING)
+            chain.append(f"냉방: 주거 {residential_m2:,.0f} m² × 전력 원단위 {elec_kwh_per_m2:,.1f} kWh/m²({elec_basis}) × 세대 전기 중 냉방 몫 {cooling_share:.3f} × 최상층 몫 × 2.35~3.97% × 전력 계수 {fe}")
+        if residential_m2 and gas_kwh_per_m2 and fg:
+            base = residential_m2 * gas_kwh_per_m2 / floors * fg
+            parts["heating"] = _range(base, GREEN_ROOF_HEATING)
+            chain.append(f"난방: 주거 {residential_m2:,.0f} m² × 가스 원단위 {gas_kwh_per_m2:,.1f} kWh/m²(건축HUB 건물 전체, 급탕 · 취사 포함이라 큰 쪽) × 최상층 몫 × 6.81~9.42% × 가스 계수 {fg}")
+        have = [p for p in parts.values() if p]
+        total = [round(sum(p[0] for p in have), 1), round(sum(p[1] for p in have), 1)] if have else None
+        missing = [n for n, v in (("냉방(전력 원단위 · 냉방 몫)", parts["cooling"]), ("난방(가스 원단위)", parts["heating"])) if v is None]
+        out["building_greening"] = row("building_greening", total, chain, "냉방(전력 원단위 · 냉방 몫) · 난방(가스 원단위) 둘 다 곱할 양이 없음",
+                                       "신축은 지붕 단열이 더 강해 효과가 더 작을 수 있음(보정 근거 없음), 5층 이상 주거는 효과가 작다는 연구 있음"
+                                       + (f". 곱할 양이 없어 뺀 쪽: {', '.join(missing)}" if have and missing else ""), parts=parts, scope="electricity+gas")
+    return out
+
+
+def _minus(a: list[float], b: list[float]) -> list[float]:
+    """범위 빼기 [a0, a1] − [b0, b1] = [a0 − b1, a1 − b0](가장 넓게)."""
+    return [a[0] - b[1], a[1] - b[0]]
+
+
+def _after(rng: list[float], data_class: str) -> dict[str, Any]:
+    """남는 양 범위. 반올림한 뒤 0 이하인 끝은 숫자를 비우고 '메움'으로 적음(0이나 음수를 만들지 않음, 검토 반영).
+
+    ``covered`` = "all"(두 끝 모두 메움) · "possible"(낮은 끝만 메움) · "no". 여유 범위는 메움인 끝의 양(kgCO2eq)."""
+    r = [round(v, 1) for v in rng]
+    vals = [v if v > 0 else None for v in r]
+    covered = "all" if all(v is None for v in vals) else ("possible" if any(v is None for v in vals) else "no")
+    margin = [round(-v, 1) if v <= 0 else None for v in r]
+    return {"data_class": data_class, "kgco2eq_range": vals, "covered": covered, "covered_possible": covered != "no",
+            "margin_kgco2eq_range": margin if covered != "no" else None}
+
+
+def _carry(src: dict[str, Any] | None) -> dict[str, Any]:
+    """조합 항목에 원래 추정 줄의 근거 · 조건 · 종류를 함께(화면이 조합 칸만 그려도 조건이 빠지지 않게, 검토 반영)."""
+    src = src or {}
+    return {k: src.get(k) for k in ("data_class", "basis", "condition", "scope") if k in src}
+
+
+COMBINATION_NONE_REASON = "개발 증가분이 없어(늘지 않거나 철거가 더 큼) 조합을 만들지 않음"
+
+
+def combinations(targets: list[dict[str, Any]], pv_levels: dict[str, Any] | None, estimates: dict[str, Any] | None,
+                 lines: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+    """개발 증가분 기준의 조합 제안 셋(A 지붕 최대 · B 인증 수준 · C 실제 사례 수준). 값과 추정을 한 칸에 더하지 않는다.
+
+    기록 2026-11-25-measure-combinations.md. 전력 목표에서는 태양광과 옥상녹화 냉방(추정)만 빼고, 가스 쪽 추정은 나란히,
+    승강기(CO2)는 단위가 달라 따로 둔다. 지표 줄은 지역 순서 위 3개를 이유와 함께. A는 추천 방안(onsite_plan)의 판정 ·
+    남는 양 · 여유를 그대로 쓴다(반올림 · 위 한계 판정이 어긋나지 않게)."""
+    t = next((x for x in targets if x.get("key") == "plan_added"), None)
+    if not t or t.get("required_reduction_kgco2eq") is None:
+        return None
+    need = float(t["required_reduction_kgco2eq"])
+    rec = t.get("recommended") or {}
+    est = estimates or {}
+    green = est.get("building_greening") or {}
+    parts = green.get("parts") or {}
+    elec = ([dict(_carry(green), key="building_greening_cooling", title="옥상녹화(최상층 냉방)", kgco2eq_range=list(parts["cooling"]))]
+            if parts.get("cooling") else [])
+    ev = est.get("elevator_regeneration") or {}
+    co2 = [dict(_carry(ev), key="elevator_regeneration", title="승강기 회생제동", kgco2_range=list(ev["kgco2_range"]))] if ev.get("kgco2_range") else []
+    gas = []
+    if (est.get("envelope") or {}).get("kgco2eq_range"):
+        gas.append(dict(_carry(est["envelope"]), key="envelope", title="단열·창호 기준 강화(가스)", kgco2eq_range=list(est["envelope"]["kgco2eq_range"])))
+    if parts.get("heating"):
+        gas.append(dict(_carry(green), key="building_greening_heating", title="옥상녹화(최상층 난방, 가스)", kgco2eq_range=list(parts["heating"])))
+    indicators = [{"key": x["key"], "title": x["title"], "why": list(x.get("why") or [])} for x in lines
+                  if x.get("target") == "plan_added" and x.get("level") == "INDICATOR"][:3]
+    elec_sum = [sum(x["kgco2eq_range"][0] for x in elec), sum(x["kgco2eq_range"][1] for x in elec)] if elec else None
+    status = rec.get("onsite_status")
+    out = []
+    for key, level in (("A", "roof_max"), ("B", "certified"), ("C", "cases")):
+        combo: dict[str, Any] = {"key": key, "pv_level": level, "need_kgco2eq": round(need, 1),
+                                 "electricity_estimates": [dict(x, kgco2eq_range=list(x["kgco2eq_range"])) for x in elec],
+                                 "co2_estimates": [dict(x, kgco2_range=list(x["kgco2_range"])) for x in co2],
+                                 "gas_estimates": [dict(x, kgco2eq_range=list(x["kgco2eq_range"])) for x in gas],
+                                 "indicators": [dict(x, why=list(x["why"])) for x in indicators]}
+        base: list[float] | None = None
+        if level == "roof_max":
+            if status in ("MET", "PARTIAL"):
+                combo["pv"] = {"data_class": "SCENARIO", "kgco2eq": rec.get("pv_kgco2eq"), "pv_kw": rec.get("pv_kw")}
+                if status == "MET":
+                    combo["after_pv"] = {"data_class": "SCENARIO", "kgco2eq": None, "covered": True,
+                                         "margin_kgco2eq": rec.get("margin_kgco2eq"),
+                                         "margin_note": "필요 용량을 10 kW 단위로 올린 몫(지붕의 남은 여력이 아님)"}
+                else:
+                    rest = float(rec.get("remaining_kgco2eq") or 0)
+                    combo["after_pv"] = {"data_class": "SCENARIO", "kgco2eq": rec.get("remaining_kgco2eq"), "covered": False,
+                                         "at_least": bool(rec.get("remaining_is_minimum"))}
+                    base = [rest, rest]
+            else:
+                combo["pv"] = {"data_class": "SCENARIO", "kgco2eq": None, "status": status, "reason": _no_value_reason("rooftop_pv", status)}
+                if status == "NO_ROOF" and rec.get("remaining_kgco2eq") is not None:
+                    rest = float(rec["remaining_kgco2eq"])   # 구역 안 지붕이 없어 필요량 전부가 남음
+                    combo["after_pv"] = {"data_class": "SCENARIO", "kgco2eq": rec["remaining_kgco2eq"], "covered": False, "at_least": False}
+                    base = [rest, rest]
+                else:
+                    combo["after_pv"] = None
+        else:
+            row = (pv_levels or {}).get(level) or {}
+            r = row.get("kgco2eq_range")
+            if r:
+                combo["pv"] = {"data_class": "ESTIMATED", "kgco2eq_range": list(r), "kw_range": list(row.get("kw_range") or []),
+                               "source_type": row.get("source_type"), "basis": row.get("basis"), "capped": row.get("capped")}
+                base = [need - r[1], need - r[0]]
+                combo["after_pv"] = _after(base, "ESTIMATED")
+            else:
+                reason = row.get("reason") or ("발전량 근거가 없어 kgCO2eq로 바꾸지 못함(kW 범위만)" if row.get("kw_range") else "태양광 수준을 계산하지 않음")
+                combo["pv"] = {"data_class": "ESTIMATED", "kgco2eq_range": None, "kw_range": row.get("kw_range"),
+                               "source_type": row.get("source_type"), "reason": reason}
+                combo["after_pv"] = None
+        combo["after_estimates"] = _after(_minus(base, elec_sum), "ESTIMATED") if base is not None and elec_sum else None
+        out.append(combo)
+    return out
+
+
 def applicable_measures(targets: list[dict[str, Any]], added_m2: float, district_share_pct: float | None,
-                        cooling_reading: str | None) -> list[dict[str, Any]]:
+                        cooling_reading: str | None, green_area_m2: float | None = None,
+                        pv_levels: dict[str, Any] | None = None, estimates: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Recommendation lines of the area screen ↔ the measures usable under the site's conditions (U4, 2026-11-23, 5.15).
 
-    Only the rooftop PV line has a value (this calculation's own PV); every other measure is an indicator with its
+    Only the rooftop PV line has a reduction value (this calculation's own PV); greenery carries a separate offset
+    (kgCO2, value_status OFFSET) only when the plan gives a green area (2026-11-25); every other measure is an indicator with its
     evidence (measures list + evidence table summary), never multiplied into the plan. Existing-building measures go
     to the whole-area target only; district heating control only where the region has district-heated households;
     operation (after move-in behaviour) is folded as outside the planning stage."""
     from .measure_catalog import measure_level
     from .reference_tables import evidence_summary
     ev = evidence_summary()["by_measure"]
+    green = greenery_offset(green_area_m2)
     out: list[dict[str, Any]] = []
     for t in targets:
         rec = t.get("recommended") or {}
@@ -376,4 +622,18 @@ def applicable_measures(targets: list[dict[str, Any]], added_m2: float, district
                         "group_kind": GROUP_KIND.get(top or "", "계획 수단"), "condition_text": condition,
                         # 2026-11-25(계획 v3 A): 이 줄의 수준(값 / 지표)과 근거 묶음(근거표 수단_ID). 계산 · 순서는 그대로
                         "level": measure_level(m["key"], quantified), "evidence_groups": _groups_of(m["key"])})
+            if m["key"] == "rooftop_pv" and pv_levels is not None:
+                out[-1]["pv_levels"] = {k: (dict(v) if isinstance(v, dict) else v) for k, v in pv_levels.items()}   # 2026-11-25(계획 v3 E): 인증 · 사례 수준(추정, 합계 밖), 줄마다 복사
+            if estimates and t["key"] == "plan_added" and m["key"] in ("envelope", "elevator_regeneration") and m["key"] in estimates:
+                # 2026-11-25(계획 v3 F): 추정 범위(합계 밖). 개발 증가분 기준 줄에만(근거가 신축 비교)
+                est = dict(estimates[m["key"]])
+                out[-1]["estimate"] = est
+                if est.get("kgco2eq_range") or est.get("kgco2_range"):
+                    out[-1]["level"] = "RANGE"
+                    out[-1]["no_value_reason"] = "값(감축 값 · 목표 · 추천 방안)에는 곱하지 않고, 원문 대조된 구간으로 낸 추정 범위만 따로 적습니다(estimate)"
+            if m["key"] == "greenery" and green:
+                # 2026-11-25(계획 v3 D): 계획 녹지 면적이 있으면 상쇄 값. 감축(kgCO2eq) 칸이 아니라 따로 둔 흡수(kgCO2) 칸에만 —
+                # value_status "OFFSET"이라 감축 값 줄(QUANTIFIED)과 섞이지 않고, 어떤 합계에도 넣지 않음(독립 검토 반영)
+                out[-1].update({"value_status": "OFFSET", "offset_kgco2": green["kgco2"], "offset_range_kgco2": green["range_kgco2"],
+                                "offset_text": green["text"], "no_value_reason": green["text"], "level": measure_level(m["key"], True)})
     return out

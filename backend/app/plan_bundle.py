@@ -76,6 +76,10 @@ def normalize_plan(body: BundleIn) -> dict[str, Any]:
     for key, lines in (("uses_new", body.uses_new), ("uses_removed", body.uses_removed)):
         if lines:
             plan[key] = [{"use": i.use, "floor_area_m2": float(i.floor_area_m2)} for i in lines]
+    # 2026-11-25(계획 v3 E): 주거 줄의 세대 수 합 — 태양광 인증 · 사례 수준(세대당 kW)에 씀. 세대 수가 없으면 키 없음
+    dwellings = [i.dwellings for i in body.uses_new if i.use == "residential" and i.dwellings]
+    if dwellings and round(sum(dwellings)) > 0:
+        plan["households"] = int(round(sum(dwellings)))
     return plan
 
 
@@ -110,7 +114,7 @@ def plan_emission_block(effort: dict[str, Any] | None, facts: list[dict[str, Any
 def reduction_block(effort: dict[str, Any] | None) -> dict[str, Any]:
     if not effort or not effort.get("available"):
         return _blank("NO_BASIS", (effort or {}).get("reason"), data_class="SCENARIO")
-    keys = ("target_pct", "targets", "measure_links", "measure_links_note", "recommended", "mix", "pv_yield", "region_context")
+    keys = ("target_pct", "targets", "measure_links", "measure_links_note", "recommended", "mix", "pv_yield", "region_context", "measure_estimates", "combinations", "combinations_reason")
     return {"status": "OK", "reason": None, "data_class": "SCENARIO", "scope": "electricity", **{k: effort.get(k) for k in keys}}
 
 
@@ -334,5 +338,7 @@ def evaluate(body: BundleIn, request: Request) -> dict[str, Any]:
                      "floors": plan.get("floors"), "building_count": plan.get("building_count"), "footprint_per_building": plan.get("footprint_per_building"),
                      "footprint_sum_m2": footprint, "footprint_basis": (effort or {}).get("plan_roof_basis"), "grid_ids": grid_ids, "grid_count": len(grid_ids),
                      "site": body.site.model_dump() if body.site else None,
+                     # 2026-11-25(계획 v3 D): 녹지 면적은 넣은 때만 되돌려 적음(안 넣으면 응답이 전과 같음)
+                     **({"green_area_m2": plan["green_area_m2"]} if plan.get("green_area_m2") else {}),
                      "not_used_by": {"change_model": ["floors", "building_count", "footprint_per_building"], "intensity": ["use", "dwellings"]}},
             "analysis": analysis, "blocks": blocks, "scopes": SCOPES, "facts": facts, "timing_s": timing}

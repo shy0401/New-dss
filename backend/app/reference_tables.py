@@ -161,7 +161,7 @@ def evidence_summary() -> dict[str, Any]:
     groups.sort(key=lambda g: (order.get(g["exclusion"][0]["value"], 9), -g["rows"]))
     return {"rows": len(rows), "by_measure": {k: _summary(v) for k, v in by_tool.items()}, "unlinked_groups": groups,
             "grade_labels": GRADE_LABEL,
-            "note": "행 수는 독립된 근거 수가 아닙니다(같은 출처가 여러 행). 출처 수는 출처 주소가 다른 것만 셉니다. 근거표는 감축 수단을 고르는 판단 근거이고, 행의 값을 계획안에 곱하지 않습니다."}
+            "note": "행 수는 독립된 근거 수가 아닙니다(같은 출처가 여러 행). 출처 수는 출처 주소가 다른 것만 셉니다. 근거표는 감축 수단을 고르는 판단 근거이고, 행의 값을 계획안의 값(감축 값 · 목표 · 추천 방안)에 곱하지 않습니다. 원문 대조된 구간 일부만 추정 범위로 따로 냅니다(2026-11-25)."}
 
 
 # ---- (나) 지역 기후 · 계획 가이드 ------------------------------------------------------------
