@@ -76,6 +76,10 @@ def normalize_plan(body: BundleIn) -> dict[str, Any]:
     for key, lines in (("uses_new", body.uses_new), ("uses_removed", body.uses_removed)):
         if lines:
             plan[key] = [{"use": i.use, "floor_area_m2": float(i.floor_area_m2)} for i in lines]
+    # 2026-11-25(계획 v3 E): 주거 줄의 세대 수 합 — 태양광 인증 · 사례 수준(세대당 kW)에 씀. 세대 수가 없으면 키 없음
+    dwellings = [i.dwellings for i in body.uses_new if i.use == "residential" and i.dwellings]
+    if dwellings and round(sum(dwellings)) > 0:
+        plan["households"] = int(round(sum(dwellings)))
     return plan
 
 
