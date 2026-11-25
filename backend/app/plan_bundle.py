@@ -96,6 +96,23 @@ def baseline_block(effort: dict[str, Any] | None) -> dict[str, Any]:
             "scope_label": effort.get("scope"), **{k: effort.get(k) for k in keys}}
 
 
+def _intensity_note(effort: dict[str, Any]) -> str:
+    """Which intensity the plan load used (2026-11-25: the note said "one intensity, no per-use" even when the plan
+    lines were computed per use since 2026-11-23). Numbers come from the engine's load lines."""
+    lines = (effort.get("new_load_lines") or []) + (effort.get("removed_load_lines") or [])
+    area = f"{effort.get('basis_label')} {effort.get('intensity_kwh_per_m2'):,.2f} kWh/m²·년"
+    if not lines:
+        return f"한 원단위({area})를 모든 용도의 계획 연면적에 적용했습니다. 용도별 원단위는 쓰지 않았습니다"
+    seen, parts = set(), []
+    for line in lines:
+        key = (line.get("use_label"), line.get("kwh_per_m2"))
+        if key not in seen:
+            seen.add(key)
+            parts.append(f"{line.get('use_label')} {line.get('kwh_per_m2'):,.2f}")
+    return (f"용도별 원단위로 계산했습니다(kWh/m²·년): {' · '.join(parts)}. 상업 · 업무 · 판매 · 교육 · 의료·복지는 건축HUB 계측 지번의 "
+            f"용도별 값, 주거 등은 구역 원단위({area})")
+
+
 def plan_emission_block(effort: dict[str, Any] | None, facts: list[dict[str, Any]]) -> dict[str, Any]:
     if not effort or not effort.get("available") or not effort.get("targets"):
         return _blank("NO_BASIS", (effort or {}).get("reason"), data_class="SCENARIO", net_added_kgco2eq=None)
@@ -107,7 +124,7 @@ def plan_emission_block(effort: dict[str, Any] | None, facts: list[dict[str, Any
             "new_load_kwh": effort.get("new_load_kwh"), "removed_load_kwh": effort.get("removed_load_kwh"),
             "net_added_kwh": added["net_added_kwh"], "net_added_kgco2eq": added["net_added_kgco2eq"], "bau_kgco2eq": effort.get("bau_kgco2eq"),
             "baseline_year": effort.get("baseline_year"),
-            "intensity_note": f"한 원단위({effort.get('basis_label')} {effort.get('intensity_kwh_per_m2'):,.2f} kWh/m²·년)를 모든 용도의 계획 연면적에 적용했습니다. 용도별 원단위는 쓰지 않았습니다",
+            "intensity_note": _intensity_note(effort),
             "text": _effort_text(facts, "effort_added") or _effort_text(facts, "effort_added_none")}
 
 
