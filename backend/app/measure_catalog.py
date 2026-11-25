@@ -43,7 +43,7 @@ GROUP_LEVELS: dict[str, tuple[str, str, str, str]] = {
     "operation": ("INDICATOR", "INDICATOR", "B", "입주 뒤 행동이라 계획 단계 밖(2026-11-20)"),
     "layout_form": ("TABLE_ONLY", "INDICATOR", "G", "2026-11-25 G: 우리 자료(K-apt 1,314단지)로 형태 · 향 · 녹지율 차이를 같은 조건 안에서 확인 못 함(관문 G4 통과 없음) → 지표"),
     "cool_roof": ("TABLE_ONLY", "INDICATOR", "F", "2026-11-25 F: 국내 공동주택 % 행 1개뿐(분모 · 비교 방식 확인 필요)이라 범위로 올리지 않음"),
-    "building_greening": ("RANGE", "RANGE", "F", "2026-11-25 F: 옥상녹화 최상층 냉방 2.35~3.97% · 난방 6.81~9.42%(서울 기상 계산 1편) — 중부2만, 층수가 있을 때"),
+    "building_greening": ("RANGE", "RANGE", "F", "2026-11-25 F: 옥상녹화 최상층 냉방 2.35~3.97% · 난방 6.81~9.42%(서울 단지 · 인천 기상 자료 계산 1편) — 중부2만, 층수가 있을 때"),
     "facade_pv": ("TABLE_ONLY", "RANGE", "F", "3D 입면 면적 × 입면 1 m²당 연 발전량"),
     "heat_source_district": ("TABLE_ONLY", "INDICATOR", "B", "원문 대조(C) 필요"),
     "heat_source_choice": ("TABLE_ONLY", "INDICATOR", "B", ""),
