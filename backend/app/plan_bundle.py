@@ -114,7 +114,7 @@ def plan_emission_block(effort: dict[str, Any] | None, facts: list[dict[str, Any
 def reduction_block(effort: dict[str, Any] | None) -> dict[str, Any]:
     if not effort or not effort.get("available"):
         return _blank("NO_BASIS", (effort or {}).get("reason"), data_class="SCENARIO")
-    keys = ("target_pct", "targets", "measure_links", "measure_links_note", "recommended", "mix", "pv_yield", "region_context", "measure_estimates")
+    keys = ("target_pct", "targets", "measure_links", "measure_links_note", "recommended", "mix", "pv_yield", "region_context", "measure_estimates", "combinations", "combinations_reason")
     return {"status": "OK", "reason": None, "data_class": "SCENARIO", "scope": "electricity", **{k: effort.get(k) for k in keys}}
 
 
